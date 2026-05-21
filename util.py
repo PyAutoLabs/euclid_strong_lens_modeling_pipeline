@@ -13,6 +13,7 @@ from autoconf.dictable import output_to_json
 import autofit as af
 import autolens as al
 import autolens.plot as aplt
+from autogalaxy.operate.lens_calc import LensCalc
 
 
 def subplot_rgb(
@@ -311,7 +312,7 @@ class AnalysisImaging(al.AnalysisImaging):
         "latent.total_lensed_source_flux",
         "latent.total_source_flux",
         "latent.magnification",
-        #    "latent_effective_einstein_radius"
+        "latent.effective_einstein_radius",
     ]
 
     def to_ndarray_2d(self, image, xp):
@@ -487,12 +488,34 @@ class AnalysisImaging(al.AnalysisImaging):
 
         # EFFECTIVE EINSTEIN RADIUS
 
-        # try:
-        #     effective_einstein_radius = tracer.einstein_radius_from(
-        #         grid=self.dataset.grids.lp
-        #     )
-        # except Exception:
-        #     effective_einstein_radius = xp.nan
+        try:
+            lens_calc = LensCalc.from_mass_obj(tracer)
+            if self._use_jax:
+                # JIT-friendly path. `AnalysisDataset.LATENT_BATCH_MODE = "jit"`
+                # in PyAutoGalaxy means `Analysis.compute_latent_samples` wraps
+                # this with per-sample `jax.jit`, not `jax.vmap` — the inner
+                # ZeroSolver is vmap-incompatible upstream. A fixed fan of
+                # seeds at ~1 arcsec from the (preprocessed) lens centre
+                # covers the typical Euclid range of Einstein radii.
+                import jax.numpy as jnp
+
+                init_guess = jnp.array(
+                    [
+                        [1.0, 0.0],
+                        [0.0, 1.0],
+                        [-1.0, 0.0],
+                        [0.0, -1.0],
+                    ]
+                )
+                effective_einstein_radius = lens_calc.einstein_radius_jit_from(
+                    init_guess=init_guess,
+                )
+            else:
+                effective_einstein_radius = lens_calc.einstein_radius_from(
+                    grid=self.dataset.grids.lp,
+                )
+        except ValueError:
+            effective_einstein_radius = xp.nan
 
         return (
             total_lens_flux_muJy,
@@ -503,7 +526,7 @@ class AnalysisImaging(al.AnalysisImaging):
             total_lensed_source_flux_muJy,
             total_source_flux_muJy,
             magnification,
-            #    effective_einstein_radius
+            effective_einstein_radius,
         )
 
     def save_results(self, paths: af.DirectoryPaths, result):
