@@ -13,7 +13,6 @@ from autoconf.dictable import output_to_json
 import autofit as af
 import autolens as al
 import autolens.plot as aplt
-from autogalaxy.operate.lens_calc import LensCalc
 
 
 def subplot_rgb(
@@ -299,21 +298,41 @@ class VisualizerImaging(al.VisualizerImaging):
 class AnalysisImaging(al.AnalysisImaging):
     """
     Sets the custom RGB visualizer above ensuring the RGB subplot is output.
+
+    Composes the library latent catalogue (PyAutoLens
+    ``autolens.analysis.latent.LATENT_FUNCTIONS`` — enabled via this
+    workspace's ``config/latent.yaml``) with four Euclid-only FWHM
+    aperture-flux latents. Aperture latents stay here because they need
+    pipeline-specific kwargs (``psf_lowest_resolution`` /
+    ``psf_lowest_resolution_fwhm``) that don't belong in PyAutoLens.
     """
 
     Visualizer = VisualizerImaging
 
-    LATENT_KEYS = [
-        "latent.total_lens_flux",
-        "latent.total_lens_flux_1_fwhm",
-        "latent.total_lens_flux_2_fwhm",
-        "latent.total_lens_flux_3_fwhm",
-        "latent.total_lens_flux_4_fwhm",
-        "latent.total_lensed_source_flux",
-        "latent.total_source_flux",
-        "latent.magnification",
-        "latent.effective_einstein_radius",
+    APERTURE_LATENT_KEYS = [
+        "total_lens_flux_1_fwhm_mujy",
+        "total_lens_flux_2_fwhm_mujy",
+        "total_lens_flux_3_fwhm_mujy",
+        "total_lens_flux_4_fwhm_mujy",
     ]
+
+    @property
+    def LATENT_KEYS(self):
+        """
+        Composes the config-driven library latent keys (from
+        ``autolens.analysis.latent.latent_keys_enabled()``, which reads
+        ``conf.instance["latent"]``) with the four pipeline-only FWHM
+        aperture-flux keys.
+
+        Cannot delegate to ``super().LATENT_KEYS`` because the library's
+        ``compute_latent_variables`` reads ``self.LATENT_KEYS`` via MRO
+        and would then try to look up aperture keys in the library's
+        ``LATENT_FUNCTIONS`` registry (which only knows about the 5
+        library latents). We dispatch library + aperture values
+        explicitly in ``compute_latent_variables`` below.
+        """
+        from autolens.analysis.latent import latent_keys_enabled
+        return list(latent_keys_enabled()) + self.APERTURE_LATENT_KEYS
 
     def to_ndarray_2d(self, image, xp):
 
@@ -331,71 +350,43 @@ class AnalysisImaging(al.AnalysisImaging):
 
     def compute_latent_variables(self, parameters, model):
         """
-        A latent variable is not a model parameter but can be derived from the model. Its value and errors may be
-        of interest and aid in the interpretation of a model-fit.
+        Compute the full Euclid latent-variable tuple for a single parameter
+        vector.
 
-        This code implements a simple example of a latent variable, the magn
+        Composition:
 
-        By overwriting this method we can manually specify latent variables that are calculated and output to
-        a `latent.csv` file, which mirrors the `samples.csv` file.
+        - Dispatches the config-enabled subset of library latents directly
+          via ``autolens.analysis.latent.LATENT_FUNCTIONS`` (matching the
+          order in ``latent_keys_enabled()``). Equivalent to what the
+          library's ``compute_latent_variables`` does — but inlined so
+          we can build the ``FitImaging`` exactly once and reuse it for
+          the aperture block below.
+        - Appends four pipeline-only FWHM aperture-flux µJy values
+          (``total_lens_flux_{1,2,3,4}_fwhm_mujy``) computed on the lens-
+          galaxy image convolved with ``psf_lowest_resolution``, centred at
+          the brightest pixel. These stay here because they require the
+          Euclid-pipeline kwargs ``psf_lowest_resolution`` and
+          ``psf_lowest_resolution_fwhm``.
 
-        In the example below, the `latent.csv` file will contain at least two columns with the shear magnitude and
-        angle sampled by the non-linear search.
-
-        This function is called at the end of search, following one of two schemes depending on the settings in
-        `output.yaml`:
-
-        1) Call for every search sample, which produces a complete `latent/samples.csv` which mirrors the normal
-        `samples.csv` file but takes a long time to compute.
-
-        2) Call only for N random draws from the posterior inferred at the end of the search, which only produces a
-        `latent/latent_summary.json` file with the median and 1 and 3 sigma errors of the latent variables but is
-        fast to compute.
-
-        You can add your own custom latent variables here, if you have particular quantities that you
-        would like to output to the `latent.csv` file.
-
-        Parameters
-        ----------
-        parameters : array-like
-            The parameter vector of the model sample. This will typically come from the non-linear search.
-            Inside this method it is mapped back to a model instance via `model.instance_from_vector`.
-        model : Model
-            The model object defining how the parameter vector is mapped to an instance. Passed explicitly
-            so that this function can be used inside JAX transforms (`vmap`, `jit`) with `functools.partial`.
-
-        Returns
-        -------
-        A dictionary mapping every latent variable name to its value.
-
+        Returns a tuple positionally aligned with :attr:`LATENT_KEYS`
+        (library keys + ``APERTURE_LATENT_KEYS``). PyAutoFit zips
+        positionally at ``autofit/non_linear/analysis/analysis.py:285``.
         """
+        from autolens.analysis.latent import LATENT_FUNCTIONS, latent_keys_enabled
 
         xp = self._xp
-
-        instance = model.instance_from_vector(vector=parameters)
-
-        fit = self.fit_from(instance=instance)
-        tracer = fit.tracer_linear_light_profiles_to_light_profiles
-
         magzero = self.kwargs.get("magzero", None)
 
-        if magzero is None:
-            raise ValueError(
-                "MAGZERO must be provided in analysis kwargs to compute latent variables."
-            )
+        instance = model.instance_from_vector(vector=parameters)
+        fit = self.fit_from(instance=instance)
+        context = {"fit": fit, "magzero": magzero, "xp": xp}
 
-        # LENS LIGHT FLUX IN MICROJANSKY, INCLUDING APERTURE FLUXES
+        library_keys = latent_keys_enabled()
+        library_values = tuple(LATENT_FUNCTIONS[k](**context) for k in library_keys)
 
         try:
-
             image = fit.galaxy_image_dict[fit.tracer.galaxies[0]]
             image_native = self.to_ndarray_2d(image=image, xp=xp)
-
-            total_lens_flux = xp.sum(image_native)
-            lens_ab_mag = ab_mag_via_flux_from(
-                flux=total_lens_flux, magzero=magzero, xp=xp
-            )
-            total_lens_flux_muJy = flux_mujy_via_ab_mag_from(ab_mag=lens_ab_mag, xp=xp)
 
             flat_index = xp.argmax(image_native)
             y, x = xp.unravel_index(flat_index, image.shape_native)
@@ -406,128 +397,31 @@ class AnalysisImaging(al.AnalysisImaging):
             image_convolved_to_lowest = psf_lowest_resolution.convolved_image_from(
                 image=image, blurring_image=None, xp=xp
             )
-
-            aperture_multipliers = np.array([1.0, 2.0, 3.0, 4.0])
-
-            radius = psf_lowest_resolution_fwhm / (0.1 * 2.0)
-            aperture_radii = [
-                radius * multiplier for multiplier in aperture_multipliers
-            ]
-
             image_convolved_to_lowest_native = self.to_ndarray_2d(
                 image=image_convolved_to_lowest, xp=xp
             )
 
-            total_lens_flux_aperture_list = [
-                aperture_flux_from(
-                    image_2d=image_convolved_to_lowest_native,
-                    centre=(y, x),
-                    radius_pixels=radius_pixels,
+            radius = psf_lowest_resolution_fwhm / (0.1 * 2.0)
+            aperture_values = tuple(
+                flux_mujy_via_ab_mag_from(
+                    ab_mag=ab_mag_via_flux_from(
+                        flux=aperture_flux_from(
+                            image_2d=image_convolved_to_lowest_native,
+                            centre=(y, x),
+                            radius_pixels=radius * multiplier,
+                            xp=xp,
+                        ),
+                        magzero=magzero,
+                        xp=xp,
+                    ),
                     xp=xp,
                 )
-                for radius_pixels in aperture_radii
-            ]
-
-            # convert each aperture flux to magnitude and µJy
-            total_lens_mag_aperture_list = [
-                ab_mag_via_flux_from(
-                    flux=total_lens_flux_aperture, magzero=magzero, xp=xp
-                )
-                for total_lens_flux_aperture in total_lens_flux_aperture_list
-            ]
-            total_lens_flux_muJy_aperture_list = [
-                flux_mujy_via_ab_mag_from(ab_mag=m, xp=xp)
-                for m in total_lens_mag_aperture_list
-            ]
-
-        except AttributeError:
-
-            total_lens_flux_muJy = xp.nan
-            total_lens_flux_muJy_aperture_list = [xp.nan, xp.nan, xp.nan, xp.nan]
-
-        # LENSED SOURCE FLUX IN MICROJANSKY
-
-        try:
-
-            lensed_source_image = fit.galaxy_image_dict[fit.tracer.galaxies[-1]]
-
-            total_lensed_source_flux = xp.sum(lensed_source_image.array)
-            lensed_source_ab_mag = ab_mag_via_flux_from(
-                flux=total_lensed_source_flux, magzero=magzero, xp=xp
+                for multiplier in (1.0, 2.0, 3.0, 4.0)
             )
-            total_lensed_source_flux_muJy = flux_mujy_via_ab_mag_from(
-                ab_mag=lensed_source_ab_mag, xp=xp
-            )
+        except (AttributeError, KeyError):
+            aperture_values = (xp.nan, xp.nan, xp.nan, xp.nan)
 
-        except AttributeError:
-            total_lensed_source_flux_muJy = xp.nan
-
-        # SOURCE FLUX IN MICROJANSKY
-
-        try:
-            source_image = tracer.galaxies[-1].image_2d_from(
-                grid=self.dataset.grids.lp, xp=xp
-            )
-            total_source_flux = xp.sum(source_image.array)
-            source_ab_mag = ab_mag_via_flux_from(
-                flux=total_source_flux, magzero=magzero, xp=xp
-            )
-            total_source_flux_muJy = flux_mujy_via_ab_mag_from(
-                ab_mag=source_ab_mag, xp=xp
-            )
-
-        except AttributeError:
-            total_source_flux_muJy = xp.nan
-
-        # MAGNIFICATION
-
-        try:
-            magnification = total_lensed_source_flux / total_source_flux
-        except AttributeError:
-            magnification = xp.nan
-
-        # EFFECTIVE EINSTEIN RADIUS
-
-        try:
-            lens_calc = LensCalc.from_mass_obj(tracer)
-            if self._use_jax:
-                # JIT-friendly path. `AnalysisDataset.LATENT_BATCH_MODE = "jit"`
-                # in PyAutoGalaxy means `Analysis.compute_latent_samples` wraps
-                # this with per-sample `jax.jit`, not `jax.vmap` — the inner
-                # ZeroSolver is vmap-incompatible upstream. A fixed fan of
-                # seeds at ~1 arcsec from the (preprocessed) lens centre
-                # covers the typical Euclid range of Einstein radii.
-                import jax.numpy as jnp
-
-                init_guess = jnp.array(
-                    [
-                        [1.0, 0.0],
-                        [0.0, 1.0],
-                        [-1.0, 0.0],
-                        [0.0, -1.0],
-                    ]
-                )
-                effective_einstein_radius = lens_calc.einstein_radius_jit_from(
-                    init_guess=init_guess,
-                )
-            else:
-                effective_einstein_radius = lens_calc.einstein_radius_from(
-                    grid=self.dataset.grids.lp,
-                )
-        except ValueError:
-            effective_einstein_radius = xp.nan
-
-        return (
-            total_lens_flux_muJy,
-            total_lens_flux_muJy_aperture_list[0],
-            total_lens_flux_muJy_aperture_list[1],
-            total_lens_flux_muJy_aperture_list[2],
-            total_lens_flux_muJy_aperture_list[3],
-            total_lensed_source_flux_muJy,
-            total_source_flux_muJy,
-            magnification,
-            effective_einstein_radius,
-        )
+        return library_values + aperture_values
 
     def save_results(self, paths: af.DirectoryPaths, result):
         """
