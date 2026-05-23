@@ -1,0 +1,15 @@
+# Workspace overrides for the library latent toggles. The PyAutoLens
+# library defaults all five keys to `false` (so existing fits stay
+# unchanged on upgrade). Enabling them here means a Euclid fit gets
+# the full library latent catalogue plus the four pipeline-specific
+# FWHM aperture-flux latents (hardcoded in
+# `util.py::AnalysisImaging.APERTURE_LATENT_KEYS`).
+#
+# All four flux-derived latents (everything except `magnification` and
+# `effective_einstein_radius`) require `magzero` in the AnalysisImaging
+# kwargs — euclid's pipeline already passes it from the FITS header.
+total_lens_flux_mujy: true
+total_lensed_source_flux_mujy: true
+total_source_flux_mujy: true
+magnification: true
+effective_einstein_radius: true

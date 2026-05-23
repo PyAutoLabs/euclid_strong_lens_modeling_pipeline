@@ -111,40 +111,34 @@ agg_csv.add_label_column(
 )
 
 """
-__Lens Magnitude__
+__Lens / Source Fluxes__
+
+Library latent keys (shipped in PyAutoLens) use bare, snake-case-lowercase
+names with a ``_mujy`` suffix where applicable — no ``latent.`` prefix.
+The aggregator reads them via single-string keys, not the old
+``("latent", "X")`` tuple form.
 """
 agg_csv.add_variable(
-    argument="latent.total_lens_flux",
+    argument="total_lens_flux_mujy",
 )
 
 agg_csv.add_variable(
-    argument="latent.total_lensed_source_flux",
+    argument="total_lensed_source_flux_mujy",
 )
 
 agg_csv.add_variable(
-    argument="latent.total_source_flux",
+    argument="total_source_flux_mujy",
 )
 
 """
 __Magnification__
+
+``magnification`` is now a first-class library latent (shipped in
+PyAutoLens), so we read it directly rather than computing it from the
+two source fluxes by hand.
 """
-
-
-def magnification_from(result):
-
-    latent_summary = result.latent_summary
-
-    kwargs = latent_summary.median_pdf_sample.kwargs
-
-    return (
-        kwargs[("latent", "total_lensed_source_flux")]
-        / kwargs[("latent", "total_source_flux")]
-    )
-
-
-agg_csv.add_computed_column(
-    name="magnification",
-    compute=magnification_from,
+agg_csv.add_variable(
+    argument="magnification",
 )
 
 
