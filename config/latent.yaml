@@ -13,3 +13,9 @@ total_lensed_source_flux_mujy: true
 total_source_flux_mujy: true
 magnification: true
 effective_einstein_radius: true
+
+# autogalaxy library default (loaded by autoconf into the same `latent`
+# conf node) — explicitly disabled to silence the cross-library
+# "unknown latent" warning that would otherwise fire on every fit. The
+# Euclid pipeline's µJy latents above remain the canonical output.
+total_galaxy_0_flux: false
