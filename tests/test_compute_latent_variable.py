@@ -10,8 +10,9 @@ import autolens as al
 __Dataset__
 """
 dataset_name = "102018665_NEG570040238507752998"
+sample_name = "q1_walsmley"
 
-dataset_main_path = Path("dataset") / dataset_name
+dataset_main_path = Path("dataset") / sample_name / dataset_name
 dataset_fits_name = f"{dataset_name}.fits"
 
 """
@@ -213,7 +214,11 @@ param_vector = np.array(model.physical_values_from_prior_medians)
 parameters = np.zeros(model.total_free_parameters)
 parameters[:] = param_vector
 
-analysis.compute_latent_variables(
+latent_variables = analysis.compute_latent_variables(
     parameters=parameters,
     model=model,
 )
+
+
+def test_compute_latent_variables_smoke():
+    assert len(latent_variables) == len(analysis.LATENT_KEYS)

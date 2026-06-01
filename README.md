@@ -35,7 +35,7 @@ pip install autolens
 Clone the pipeline repository:
 
 ```bash
-git clone https://github.com/Jammy2211/euclid_strong_lens_modeling_pipeline
+git clone https://github.com/PyAutoLabs/euclid_strong_lens_modeling_pipeline
 cd euclid_strong_lens_modeling_pipeline
 ```
 
@@ -66,7 +66,7 @@ This script can be run as a black-box, with key output being generated, includin
 Here is an example of the output, which shows the lens and source galaxies debelended and a source reconstruction
 in the source-plane:
 
-<img src="https://github.com/Jammy2211/euclid_strong_lens_modeling_pipeline/blob/main/sie_fit.png?raw=true" width="900" />
+<img src="https://github.com/PyAutoLabs/euclid_strong_lens_modeling_pipeline/blob/main/sie_fit.png?raw=true" width="900" />
 
 If key output for your science case is not generated, please contact James Nightingale on the Euclid consortium
 SLACK so it can be added to the pipeline and become a standard output of the Euclid strong lens modeling pipeline
@@ -84,7 +84,7 @@ in the `output` folder for fast inspection.
 
 ## Additional Pipelines
 
-The following additional pipelines are available in the repository in the `pipelines` folder:
+The following additional pipelines are available in the repository in the `scripts` folder:
 
 - `full_model.py`: A full pipeline which models the Source, Light and Mass using advanced featues like a pixelized source reconstruction and mass model more complex than SIE + shear.
 - `lens_model_waveband.py`: After modeling the high resolution VIS imaging, model lower resolution NIR / EXT imaging using a fixed lens model.
@@ -94,7 +94,7 @@ The following additional pipelines are available in the repository in the `pipel
 All pipelines are run with the same API as the `start_here.py` script, for example:
 
 ```bash
-python pipelines/full_model.py --dataset=EUCLJ174517.55+655612.5 --mask_radius=3.0 --iterations_per_quick_update=50000
+python scripts/full_model.py --dataset=EUCLJ174517.55+655612.5 --iterations_per_quick_update=50000
 ```
 
 **PyAutoLens** has automated pipelines for modeling group-scale strong lenses, lensed point sources (e.g. lensed quasars)

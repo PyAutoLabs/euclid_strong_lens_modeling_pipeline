@@ -332,6 +332,7 @@ class AnalysisImaging(al.AnalysisImaging):
         explicitly in ``compute_latent_variables`` below.
         """
         from autolens.analysis.latent import latent_keys_enabled
+
         return list(latent_keys_enabled()) + self.APERTURE_LATENT_KEYS
 
     def to_ndarray_2d(self, image, xp):

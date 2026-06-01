@@ -1,4 +1,4 @@
-The `pipelines` folder contains example pipelines which perform lens modeling to fit different types of Euclid data and assuming different lens and source models.
+The `scripts` folder contains example pipelines which perform lens modeling to fit different types of Euclid data and assuming different lens and source models.
 
 # Files
 

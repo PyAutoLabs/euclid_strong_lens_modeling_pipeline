@@ -3,9 +3,9 @@ Euclid Pipeline: Start Here
 ===========================
 
 This script fits an initial lens model to a Euclid strong lens dataset. It is the
-recommended entry point — run this first before any of the pipelines in ``pipelines/``.
+recommended entry point — run this first before any of the pipelines in ``scripts/``.
 
-**Installation:** see https://github.com/Jammy2211/euclid_strong_lens_modeling_pipeline
+**Installation:** see https://github.com/PyAutoLabs/euclid_strong_lens_modeling_pipeline
 
 **Running as a black box:** pass it the dataset name and it fits automatically. Results
 and visualisations are written to ``output/``. For small samples, browsing ``output/``
@@ -24,7 +24,7 @@ makes the fit fast and highly likely to reach the global maximum, especially on 
 
 __SLaM Overview__
 
-``pipelines/full_model.py`` extends this fit using the Source, Light and Mass (SLaM)
+``scripts/full_model.py`` extends this fit using the Source, Light and Mass (SLaM)
 pipeline: a sequence of chained searches that progressively build up a complex lens model.
 Each stage is seeded from the previous result, ensuring robust convergence.
 """
