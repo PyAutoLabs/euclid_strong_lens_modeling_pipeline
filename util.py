@@ -295,19 +295,20 @@ class VisualizerImaging(al.VisualizerImaging):
         )
 
 
-class AnalysisImaging(al.AnalysisImaging):
+class LatentEuclid(al.LatentLens):
     """
-    Sets the custom RGB visualizer above ensuring the RGB subplot is output.
+    Euclid latent catalogue: the PyAutoLens library latents (config-enabled via
+    this pipeline's ``config/latent.yaml``, dispatched through
+    ``autolens.analysis.latent.LATENT_FUNCTIONS``) plus four Euclid-only FWHM
+    aperture-flux µJy latents. Declared on the pipeline ``AnalysisImaging`` as
+    ``Latent = LatentEuclid`` (mirrors ``Visualizer``).
 
-    Composes the library latent catalogue (PyAutoLens
-    ``autolens.analysis.latent.LATENT_FUNCTIONS`` — enabled via this
-    workspace's ``config/latent.yaml``) with four Euclid-only FWHM
-    aperture-flux latents. Aperture latents stay here because they need
-    pipeline-specific kwargs (``psf_lowest_resolution`` /
-    ``psf_lowest_resolution_fwhm``) that don't belong in PyAutoLens.
+    The aperture latents stay here because they need pipeline-specific kwargs
+    (``psf_lowest_resolution`` / ``psf_lowest_resolution_fwhm``) that don't
+    belong in PyAutoLens. With the static ``Latent`` API the composition is
+    explicit (no MRO gymnastics), and the ``FitImaging`` is still built once
+    and reused for both the library and aperture blocks.
     """
-
-    Visualizer = VisualizerImaging
 
     APERTURE_LATENT_KEYS = [
         "total_lens_flux_1_fwhm_mujy",
@@ -316,70 +317,29 @@ class AnalysisImaging(al.AnalysisImaging):
         "total_lens_flux_4_fwhm_mujy",
     ]
 
-    @property
-    def LATENT_KEYS(self):
-        """
-        Composes the config-driven library latent keys (from
-        ``autolens.analysis.latent.latent_keys_enabled()``, which reads
-        ``conf.instance["latent"]``) with the four pipeline-only FWHM
-        aperture-flux keys.
-
-        Cannot delegate to ``super().LATENT_KEYS`` because the library's
-        ``compute_latent_variables`` reads ``self.LATENT_KEYS`` via MRO
-        and would then try to look up aperture keys in the library's
-        ``LATENT_FUNCTIONS`` registry (which only knows about the 5
-        library latents). We dispatch library + aperture values
-        explicitly in ``compute_latent_variables`` below.
-        """
+    @staticmethod
+    def keys(analysis):
         from autolens.analysis.latent import latent_keys_enabled
 
-        return list(latent_keys_enabled()) + self.APERTURE_LATENT_KEYS
+        return list(latent_keys_enabled()) + LatentEuclid.APERTURE_LATENT_KEYS
 
-    def to_ndarray_2d(self, image, xp):
-
-        array_2d = xp.zeros(image.mask.shape, dtype=image.dtype)
-
-        if xp is np:
-
-            array_2d[image.mask.slim_to_native_tuple] = image.array
-
-        else:
-
-            array_2d = array_2d.at[image.mask.slim_to_native_tuple].set(image.array)
-
-        return array_2d
-
-    def compute_latent_variables(self, parameters, model):
+    @staticmethod
+    def variables(analysis, parameters, model):
         """
-        Compute the full Euclid latent-variable tuple for a single parameter
-        vector.
-
-        Composition:
-
-        - Dispatches the config-enabled subset of library latents directly
-          via ``autolens.analysis.latent.LATENT_FUNCTIONS`` (matching the
-          order in ``latent_keys_enabled()``). Equivalent to what the
-          library's ``compute_latent_variables`` does — but inlined so
-          we can build the ``FitImaging`` exactly once and reuse it for
-          the aperture block below.
-        - Appends four pipeline-only FWHM aperture-flux µJy values
-          (``total_lens_flux_{1,2,3,4}_fwhm_mujy``) computed on the lens-
-          galaxy image convolved with ``psf_lowest_resolution``, centred at
-          the brightest pixel. These stay here because they require the
-          Euclid-pipeline kwargs ``psf_lowest_resolution`` and
-          ``psf_lowest_resolution_fwhm``.
-
-        Returns a tuple positionally aligned with :attr:`LATENT_KEYS`
-        (library keys + ``APERTURE_LATENT_KEYS``). PyAutoFit zips
-        positionally at ``autofit/non_linear/analysis/analysis.py:285``.
+        Library latent values (config-enabled subset of ``LATENT_FUNCTIONS``,
+        in ``latent_keys_enabled()`` order) followed by the four FWHM
+        aperture-flux µJy values, computed on the lens-galaxy image convolved
+        with ``psf_lowest_resolution`` and centred at its brightest pixel. The
+        ``FitImaging`` is built once and shared. Returns a tuple positionally
+        aligned with :meth:`keys`.
         """
         from autolens.analysis.latent import LATENT_FUNCTIONS, latent_keys_enabled
 
-        xp = self._xp
-        magzero = self.kwargs.get("magzero", None)
+        xp = analysis._xp
+        magzero = analysis.kwargs.get("magzero", None)
 
         instance = model.instance_from_vector(vector=parameters)
-        fit = self.fit_from(instance=instance)
+        fit = analysis.fit_from(instance=instance)
         context = {"fit": fit, "magzero": magzero, "xp": xp}
 
         library_keys = latent_keys_enabled()
@@ -387,18 +347,18 @@ class AnalysisImaging(al.AnalysisImaging):
 
         try:
             image = fit.galaxy_image_dict[fit.tracer.galaxies[0]]
-            image_native = self.to_ndarray_2d(image=image, xp=xp)
+            image_native = analysis.to_ndarray_2d(image=image, xp=xp)
 
             flat_index = xp.argmax(image_native)
             y, x = xp.unravel_index(flat_index, image.shape_native)
 
-            psf_lowest_resolution = self.kwargs["psf_lowest_resolution"]
-            psf_lowest_resolution_fwhm = self.kwargs["psf_lowest_resolution_fwhm"]
+            psf_lowest_resolution = analysis.kwargs["psf_lowest_resolution"]
+            psf_lowest_resolution_fwhm = analysis.kwargs["psf_lowest_resolution_fwhm"]
 
             image_convolved_to_lowest = psf_lowest_resolution.convolved_image_from(
                 image=image, blurring_image=None, xp=xp
             )
-            image_convolved_to_lowest_native = self.to_ndarray_2d(
+            image_convolved_to_lowest_native = analysis.to_ndarray_2d(
                 image=image_convolved_to_lowest, xp=xp
             )
 
@@ -423,6 +383,31 @@ class AnalysisImaging(al.AnalysisImaging):
             aperture_values = (xp.nan, xp.nan, xp.nan, xp.nan)
 
         return library_values + aperture_values
+
+
+class AnalysisImaging(al.AnalysisImaging):
+    """
+    Sets the custom RGB visualizer ensuring the RGB subplot is output, and
+    declares the Euclid latent catalogue (``LatentEuclid`` — library latents
+    plus four FWHM aperture-flux latents).
+    """
+
+    Visualizer = VisualizerImaging
+    Latent = LatentEuclid
+
+    def to_ndarray_2d(self, image, xp):
+
+        array_2d = xp.zeros(image.mask.shape, dtype=image.dtype)
+
+        if xp is np:
+
+            array_2d[image.mask.slim_to_native_tuple] = image.array
+
+        else:
+
+            array_2d = array_2d.at[image.mask.slim_to_native_tuple].set(image.array)
+
+        return array_2d
 
     def save_results(self, paths: af.DirectoryPaths, result):
         """
