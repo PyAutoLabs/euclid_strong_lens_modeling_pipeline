@@ -214,11 +214,12 @@ param_vector = np.array(model.physical_values_from_prior_medians)
 parameters = np.zeros(model.total_free_parameters)
 parameters[:] = param_vector
 
-latent_variables = analysis.compute_latent_variables(
+latent_variables = util.LatentEuclid.variables(
+    analysis,
     parameters=parameters,
     model=model,
 )
 
 
 def test_compute_latent_variables_smoke():
-    assert len(latent_variables) == len(analysis.LATENT_KEYS)
+    assert len(latent_variables) == len(util.LatentEuclid.keys(analysis))
