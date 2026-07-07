@@ -8,8 +8,8 @@ For the science behind this pipeline — what Euclid is finding, why SIE
 + shear is a reasonable default mass model, what MGE buys, how
 multipoles and external shear affect substructure / cosmography
 downstream — see the lensing sub-wiki at
-[`PyAutoLabs/PyAutoPaper`](https://github.com/PyAutoLabs/PyAutoPaper),
-locally at `../PyAutoPaper/lensing_wiki/`. Most directly relevant:
+[`PyAutoLabs/PyAutoMemory`](https://github.com/PyAutoLabs/PyAutoMemory),
+locally at `../PyAutoMemory/lensing_wiki/`. Most directly relevant:
 `entities/euclid-q1.md`, `concepts/mass-models.md`,
 `concepts/multipoles.md`, `concepts/external-convergence-shear.md`,
 `concepts/lens-finding.md`, `entities/slam-pipeline.md`.
