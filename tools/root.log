@@ -1,9 +1,0 @@
-2025-09-25 14:07:45,713 - autoarray.numba_util - WARNING - 
-******************************************************************************
-Numba is not being used, either because it is disabled in `config/general.yaml` or because it is not installed.
-
-. This will lead to slow performance.
-
-. Install numba as described at the following webpage for improved performance. 
-https://pyautolens.readthedocs.io/en/latest/installation/numba.html 
-********************************************************************************
