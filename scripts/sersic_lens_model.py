@@ -29,7 +29,7 @@ def fit_sersic(
     mask_radius: float = None,
     iterations_per_quick_update: int = 5000,
 ):
-    from autoconf import conf
+    from autolens import conf
 
     project_root = Path(__file__).parent.parent
     conf.instance.push(

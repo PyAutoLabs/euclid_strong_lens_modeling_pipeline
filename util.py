@@ -7,8 +7,8 @@ from PIL import Image
 from typing import List, Optional
 
 import matplotlib.pyplot as plt
-from autoconf import conf as _conf
-from autoconf.dictable import output_to_json
+from autolens import conf as _conf
+from autolens import output_to_json
 
 import autofit as af
 import autolens as al
