@@ -34,7 +34,7 @@ def fit_waveband(
     import autofit as af
     import autolens as al
     from astropy.wcs import WCS
-    from autoconf import conf
+    from autolens import conf
 
     project_root = Path(__file__).parent.parent
     conf.instance.push(

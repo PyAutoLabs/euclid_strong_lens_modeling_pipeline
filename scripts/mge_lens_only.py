@@ -23,7 +23,7 @@ def fit(
     sample_name: str = None,
     iterations_per_quick_update: int = 50000,
 ):
-    from autoconf import conf
+    from autolens import conf
 
     project_root = Path(__file__).parent.parent
     conf.instance.push(
@@ -95,7 +95,7 @@ def fit_waveband(
     """
     import autofit as af
     import autolens as al
-    from autoconf import conf
+    from autolens import conf
     from pathlib import Path
 
     project_root = Path(__file__).parent.parent
