@@ -106,5 +106,5 @@ in using these pipelines sooner please contact James Nightingale on the Euclid c
 The following links are useful for anyone more interested in the **PyAutoLens** software:
 
 - [The PyAutoLens readthedocs](https://pyautolens.readthedocs.io/en/latest): which includes [an overview of PyAutoLens's core features](https://pyautolens.readthedocs.io/en/latest/overview/overview_1_start_here.html), [a new user starting guide](https://pyautolens.readthedocs.io/en/latest/overview/overview_2_new_user_guide.html) and [an installation guide](https://pyautolens.readthedocs.io/en/latest/installation/overview.html).
-- [The introduction Jupyter Notebook on Colab](https://colab.research.google.com/github/PyAutoLabs/autolens_workspace/blob/2026.7.9.1/notebooks/imaging/start_here.ipynb): try **PyAutoLens** in a web browser (without installation).
+- [The introduction Jupyter Notebook on Colab](https://colab.research.google.com/github/PyAutoLabs/autolens_workspace/blob/2026.7.9.1/start_here.ipynb): try **PyAutoLens** in a web browser (without installation).
 - [The autolens_workspace GitHub repository](https://github.com/PyAutoLabs/autolens_workspace): example scripts and the HowToLens Jupyter notebook lectures.
