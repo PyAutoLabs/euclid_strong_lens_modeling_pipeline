@@ -104,7 +104,3 @@ agg_image.output_to_folder(
     name=[search.path_prefix.parts[-1] for search in agg.values("search")],
     subplots=subplots,
 )
-
-"""
-Finished.
-"""

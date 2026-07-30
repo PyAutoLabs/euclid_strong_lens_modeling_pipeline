@@ -340,7 +340,3 @@ __Saving the CSV__
 We can now output the results of all our model-fits to the .csv file, using the `save` method.
 """
 agg_csv.save(path=workflow_path / "result_lens_mge__mge_lens_only.csv")
-
-"""
-Finished.
-"""

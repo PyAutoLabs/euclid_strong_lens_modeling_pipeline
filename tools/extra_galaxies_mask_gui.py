@@ -125,7 +125,3 @@ Output the extra galaxies mask, which will be load and used before a model fit.
 mask.output_to_fits(
     file_path=dataset_main_path / "mask_extra_galaxies.fits", overwrite=True
 )
-
-"""
-Finish.
-"""
