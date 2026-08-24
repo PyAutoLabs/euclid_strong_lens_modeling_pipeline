@@ -54,24 +54,18 @@ psf.output_to_fits(file_path=Path(dataset_path) / "psf.fits", overwrite=True)
 """
 __Png output__
 """
-mat_plot_2d = aplt.MatPlot2D(
-    output=aplt.Output(path=dataset_path, filename="psf_full", format="png"),
+aplt.plot_array(
+    array=psf_full,
+    output_path=dataset_path,
+    output_filename="psf_full",
+    output_format="png",
     use_log10=True,
 )
 
-plotter = aplt.Array2DPlotter(
-    array=psf_full,
-    mat_plot_2d=mat_plot_2d,
-)
-plotter.figure_2d()
-
-
-mat_plot_2d = aplt.MatPlot2D(
-    output=aplt.Output(path=dataset_path, filename="psf", format="png"), use_log10=True
-)
-
-plotter = aplt.Array2DPlotter(
+aplt.plot_array(
     array=psf.kernel,
-    mat_plot_2d=mat_plot_2d,
+    output_path=dataset_path,
+    output_filename="psf",
+    output_format="png",
+    use_log10=True,
 )
-plotter.figure_2d()
