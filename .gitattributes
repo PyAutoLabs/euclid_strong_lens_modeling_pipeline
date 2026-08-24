@@ -1,0 +1,16 @@
+# Line endings: LF everywhere, enforced on checkout and check-in.
+*       text=auto eol=lf
+
+# Binary payloads, opted out of text normalisation.
+#
+# These MUST come after the `*` rule above: in .gitattributes the LAST matching
+# pattern wins, so a binary declaration placed first is silently overridden.
+#
+# The guard is not cosmetic. Git's `text=auto` heuristic calls a file text when
+# it finds no NUL byte in the sampled prefix, and FITS headers are plain ASCII —
+# two of the tracked .fits payloads sample clean and are seen as text, so
+# `text=auto` alone would strip CR bytes out of binary image data and corrupt
+# them. `binary` is shorthand for `-text -diff`.
+
+*.fits  binary
+*.png   binary
