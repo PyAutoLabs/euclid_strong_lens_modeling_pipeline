@@ -47,7 +47,6 @@ import argparse
 import numpy as np
 from pathlib import Path
 import autolens as al
-import autolens.plot as aplt
 
 """
 __Dataset__
@@ -84,8 +83,6 @@ data = al.Array2D(
     values=np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0), mask=data.mask
 )
 
-cmap = aplt.Cmap(cmap="jet", norm="log", vmin=1.0e-3, vmax=np.max(data) / 3.0)
-
 """
 __Mask__
 
@@ -105,7 +102,13 @@ Load the Scribbler GUI for spray painting the scaled regions of the dataset.
 Push Esc when you are finished spray painting.
 """
 scribbler = al.Scribbler(
-    image=data.native, cmap=cmap, brush_width=0.05, mask_overlay=mask
+    image=data.native,
+    cmap="jet",
+    norm="log",
+    vmin=1.0e-3,
+    vmax=np.max(data) / 3.0,
+    brush_width=0.05,
+    mask_overlay=mask,
 )
 mask = scribbler.show_mask()
 mask = al.Mask2D(mask=mask, pixel_scales=pixel_scales)

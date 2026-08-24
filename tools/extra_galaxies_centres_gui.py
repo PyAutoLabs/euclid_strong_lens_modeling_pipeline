@@ -26,6 +26,7 @@ import numpy as np
 import os
 from pathlib import Path
 from matplotlib import pyplot as plt
+from matplotlib.colors import LogNorm
 
 import autolens as al
 import autolens.plot as aplt
@@ -123,8 +124,7 @@ n_y, n_x = data.shape_native
 hw = int(n_x / 2) * pixel_scales
 ext = [-hw, hw, -hw, hw]
 fig = plt.figure(figsize=(14, 14))
-cmap = aplt.Cmap(cmap="jet", norm="log", vmin=1.0e-3, vmax=np.max(data) / 3.0)
-norm = cmap.norm_from(array=data, use_log10=True)
+norm = LogNorm(vmin=1.0e-3, vmax=np.max(data) / 3.0)
 plt.imshow(data.native, cmap="jet", norm=norm, extent=ext)
 plt.scatter(y=grid[:, 0], x=grid[:, 1], c="k", marker="x", s=10)
 plt.colorbar()
@@ -193,20 +193,15 @@ mask = al.Mask2D.circular(
     shape_native=data.shape_native, pixel_scales=data.pixel_scales, radius=mask_radius
 )
 
-visuals = aplt.Visuals2D(mask=mask, mass_profile_centres=extra_galaxies_centres)
-
-array_2d_plotter = aplt.Array2DPlotter(
+aplt.plot_array(
     array=data,
-    visuals_2d=visuals,
-    mat_plot_2d=aplt.MatPlot2D(
-        mass_profile_centres_scatter=aplt.MassProfileCentresScatter(c="cy"),
-        output=aplt.Output(
-            path=dataset_main_path, filename="extra_galaxies_centres", format="png"
-        ),
-        use_log10=True,
-    ),
+    mask=mask,
+    positions=extra_galaxies_centres,
+    output_path=dataset_main_path,
+    output_filename="extra_galaxies_centres",
+    output_format="png",
+    use_log10=True,
 )
-array_2d_plotter.figure_2d()
 
 """
 Output the extra galaxy centres to the dataset folder of the lens, so that we can load them from a .json file 
