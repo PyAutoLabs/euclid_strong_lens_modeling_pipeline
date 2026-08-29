@@ -101,6 +101,20 @@ python scripts/full_model.py --dataset=EUCLJ174517.55+655612.5 --iterations_per_
 and double source plane lenses. These will be added to this repository in future releases, but if you are interested
 in using these pipelines sooner please contact James Nightingale on the Euclid consortium SLACK.
 
+## Visualization
+
+Every 2D figure the pipeline produces uses the **magma** colormap by default.
+To change it, edit the `colormap` key of `config/visualize/general.yaml`:
+
+```yaml
+colormap: magma   # any matplotlib colormap name, or `autoarray` for the bundled PyAuto colormap
+```
+
+That one key covers imaging data, fits, residual maps and inversion
+reconstructions. A single figure can be overridden without touching config by
+passing `colormap=` to the plot function. See
+[`config/visualize/README.md`](config/visualize/README.md) for the details.
+
 ## Documentation
 
 The following links are useful for anyone more interested in the **PyAutoLens** software:
