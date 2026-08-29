@@ -40,8 +40,16 @@ SIMULATOR = PROJECT_ROOT / "scripts" / "simulator.py"
 AUTO_SIMULATE_TOKENS = ("SimulatorImaging", "should_simulate", "auto_simulate")
 
 # The trees the release mega-run walks (the runner is pointed at "." for this
-# repository) plus the repository root itself.
-EXECUTABLE_TREES = ("scripts", "catalogue/scripts", "preprocess", "tools", "workflow")
+# repository, and `find_scripts_in_folder` rglobs — dotted directories
+# included) plus the repository root itself.
+EXECUTABLE_TREES = (
+    "scripts",
+    "catalogue/scripts",
+    "preprocess",
+    "tools",
+    "workflow",
+    ".github/scripts",
+)
 
 # Package markers, never executed by the runner: ``build_util.py`` hard-codes
 # ``infra_skip = ["__init__", "README"]``.

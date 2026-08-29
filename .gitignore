@@ -13,6 +13,10 @@ dist/
 output/
 output_*/
 
+# Smoke/CI report dir written by .github/scripts/run_smoke.py (the house name
+# PyAutoHeart's reusable workflow uploads as the smoke-timings artifact).
+test-results/
+
 # Catalogue inspection bundles (built by scripts/build_inspection_bundle.sh)
 inspect/
 inspect_*.tar.gz

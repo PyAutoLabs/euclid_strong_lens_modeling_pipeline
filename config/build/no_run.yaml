@@ -55,3 +55,12 @@
 - workflow/example/csv/lens_mass.py  # Aggregator workflow example: scrapes lens mass parameters from converged `vis` fits in `output/`.
 - workflow/example/csv/magnitudes.py  # Aggregator workflow example: scrapes latent magnitudes from converged multi-band fits in `output/`; skip_latents() is True in every test mode, so no latents are written.
 - workflow/example/png/mge_inspect.py  # Aggregator workflow example: builds MGE inspection PNGs from converged fits; PYAUTO_FAST_PLOTS=1 in the smoke profile suppresses all PNG output.
+
+# --- CI runners -----------------------------------------------------------
+# The PR gate reaches these through PyAutoHeart's reusable workflow. A
+# DISCOVERY run points run_python.py at "." and rglobs, dotted directories
+# included, so without these entries the mega-run would execute the smoke
+# runner (recursively re-running the whole suite) and the pytest runner.
+
+- .github/scripts/run_smoke.py  # The smoke runner itself; executing it from inside a run would recursively re-run the whole suite.
+- .github/scripts/run_tests.py  # The pytest runner, invoked by .github/workflows/tests.yml; it is not a pipeline example.
