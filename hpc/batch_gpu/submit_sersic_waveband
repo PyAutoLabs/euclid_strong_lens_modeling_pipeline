@@ -1,0 +1,63 @@
+#!/bin/bash -l
+
+#SBATCH -J euclid_sersic_waveband
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=64gb
+#SBATCH --time=08:00:00
+#SBATCH --array=0-0
+#SBATCH -o output/output.%A_%a.out
+#SBATCH -e error/error.%A_%a.err
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=your.email@institution.ac.uk
+
+source $PROJECT_PATH/activate.sh
+
+# -------------------------------
+# Output directory
+#
+# The SED chain fits every waveband, so it produces many more result folders
+# than a VIS-only run. `PYAUTO_OUTPUT_DIR` sends them to their own tree, keeping
+# `output/` (the initial lens model results) readable. The catalogue's stages 6
+# and 7 - `catalogue/scripts/multi_wavelength.py` and
+# `catalogue/scripts/magnitudes.py` - read this tree by name.
+#
+# Both upstream stages cache-short-circuit if their result zips already exist
+# at $PYAUTO_OUTPUT_DIR/<sample>/<dataset>/initial_lens_model/vis_lp/<hash>.zip
+# and .../sersic_lens_model/vis/<hash>.zip, so copying existing results into
+# this tree before submitting skips straight to the wavebands.
+# -------------------------------
+export PYAUTO_OUTPUT_DIR=output_sed
+
+# -------------------------------
+# Sample
+# -------------------------------
+sample=q1_walsmley
+
+# -------------------------------
+# Dataset list
+# -------------------------------
+datasets=(
+102018665_NEG570040238507752998
+)
+
+INDEX=$SLURM_ARRAY_TASK_ID
+dataset="${datasets[$INDEX]}"
+
+echo "=========================================="
+echo "Array job index: $INDEX"
+echo "Sample: $sample"
+echo "Dataset: $dataset"
+echo "Output dir: $PYAUTO_OUTPUT_DIR"
+date
+nvidia-smi
+
+# -------------------------------
+# Run the SED chain: vis_lp (skip_pix) -> Sersic VIS -> every other waveband.
+# -------------------------------
+python3 $PROJECT_PATH/scripts/sersic_lens_model_waveband.py --sample=$sample --dataset=$dataset
+
+echo "Finished: $dataset"
+date

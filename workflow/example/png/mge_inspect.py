@@ -52,7 +52,7 @@ You also need to decide which waveband you want to inspect, with VIS the default
 
 You should choose the strings below corresponding to the results you want to load and analyse.
 """
-# Example for start_here.py pipeline
+# Example for the scripts/initial_lens_model.py pipeline
 
 pipeline_name = "initial_lens_model"
 dataset_waveband = "vis"

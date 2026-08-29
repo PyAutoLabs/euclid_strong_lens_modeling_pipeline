@@ -20,7 +20,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import util
 from scripts.initial_lens_model import fit
-from scripts.lens_model_waveband import fit_waveband
 
 
 def fit_sersic(

@@ -1,6 +1,12 @@
+# Scripts run by the PyAutoHeart smoke runner, in this order, in one output
+# directory that is wiped once before the first entry. Order is load-bearing:
+# scripts/diagnose_latent.py replays the latents of a finished result, so every
+# fit it reads must already have run above it.
 start_here.py
 scripts/initial_lens_model.py
 scripts/full_model.py
 scripts/lens_model_waveband.py
 scripts/mge_lens_only.py
 scripts/sersic_lens_model.py
+scripts/sersic_lens_model_waveband.py
+scripts/diagnose_latent.py

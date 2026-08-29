@@ -51,6 +51,7 @@ def source_lp(
     redshift_lens: float = 0.5,
     redshift_source: float = 1.0,
     n_batch: int = 50,
+    iterations_per_quick_update: int = 5000,
 ):
     import autofit as af
     import autolens as al
@@ -79,6 +80,7 @@ def source_lp(
         n_live=200,
         n_batch=n_batch,
         n_like_max=200000,
+        iterations_per_quick_update=iterations_per_quick_update,
     )
 
     return search.fit(model=model, analysis=analysis, **settings_search.fit_dict)
@@ -113,6 +115,7 @@ def source_pix_1(
     mesh_init,
     regularization_init,
     n_batch: int = 20,
+    iterations_per_quick_update: int = 5000,
 ):
     import autofit as af
     import autolens as al
@@ -151,6 +154,7 @@ def source_pix_1(
         **settings_search.search_dict,
         n_live=150,
         n_batch=n_batch,
+        iterations_per_quick_update=iterations_per_quick_update,
     )
 
     return search.fit(model=model, analysis=analysis, **settings_search.fit_dict)
@@ -175,6 +179,7 @@ def source_pix_2(
     mesh,
     regularization,
     n_batch: int = 20,
+    iterations_per_quick_update: int = 5000,
 ):
     import autofit as af
     import autolens as al
@@ -206,6 +211,7 @@ def source_pix_2(
         **settings_search.search_dict,
         n_live=75,
         n_batch=n_batch,
+        iterations_per_quick_update=iterations_per_quick_update,
     )
 
     return search.fit(model=model, analysis=analysis, **settings_search.fit_dict)
@@ -230,6 +236,7 @@ def light_lp(
     lens_bulge,
     lens_disk=None,
     n_batch: int = 30,
+    iterations_per_quick_update: int = 5000,
 ):
     import autofit as af
     import autolens as al
@@ -257,6 +264,7 @@ def light_lp(
         **settings_search.search_dict,
         n_live=300,
         n_batch=n_batch,
+        iterations_per_quick_update=iterations_per_quick_update,
     )
 
     return search.fit(model=model, analysis=analysis, **settings_search.fit_dict)
@@ -282,6 +290,7 @@ def mass_total(
     mass,
     reset_shear_prior: bool = False,
     n_batch: int = 30,
+    iterations_per_quick_update: int = 5000,
 ):
     import autofit as af
     import autolens as al
@@ -321,6 +330,7 @@ def mass_total(
         **settings_search.search_dict,
         n_live=150,
         n_batch=n_batch,
+        iterations_per_quick_update=iterations_per_quick_update,
     )
 
     return search.fit(model=model, analysis=analysis, **settings_search.fit_dict)
@@ -407,6 +417,7 @@ def fit(
         ),
         redshift_lens=redshift_lens,
         redshift_source=redshift_source,
+        iterations_per_quick_update=iterations_per_quick_update,
     )
 
     """
@@ -490,6 +501,7 @@ def fit(
             zeroed_pixels=edge_pixels_total,
         ),
         regularization_init=al.reg.AdaptSplit,
+        iterations_per_quick_update=iterations_per_quick_update,
     )
 
     """
@@ -557,6 +569,7 @@ def fit(
             zeroed_pixels=edge_pixels_total,
         ),
         regularization=al.reg.AdaptSplit,
+        iterations_per_quick_update=iterations_per_quick_update,
     )
 
     """
@@ -589,6 +602,7 @@ def fit(
             centre=d.dataset_centre,
         ),
         lens_disk=None,
+        iterations_per_quick_update=iterations_per_quick_update,
     )
 
     """
@@ -621,6 +635,7 @@ def fit(
         light_result=light_result,
         mass=af.Model(al.mp.PowerLaw),
         reset_shear_prior=True,
+        iterations_per_quick_update=iterations_per_quick_update,
     )
 
     return source_lp_result, mass_result

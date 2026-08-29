@@ -36,7 +36,7 @@ export NPROC=$THREADS
 # Sample and Dataset
 #
 # Set sample to the subdirectory inside dataset/ and dataset to the specific lens.
-# For one-off single runs; use submit_start_here for array jobs.
+# For one-off single runs; use submit_initial_lens_model for array jobs.
 # -------------------------------
 sample=q1_walsmley
 dataset=102018665_NEG570040238507752998
@@ -46,7 +46,8 @@ echo "Sample: $sample"
 echo "Dataset: $dataset"
 date
 
-python3 $PROJECT_PATH/start_here.py --sample=$sample --dataset=$dataset
+python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \
+    --use_cpu --number_of_cores=$THREADS
 
 echo "Finished: $dataset"
 date

@@ -1,6 +1,6 @@
 #!/bin/bash -l
 
-#SBATCH -J euclid_start_here_cpu
+#SBATCH -J euclid_initial_lens_model_cpu
 #SBATCH -n 1
 #SBATCH --cpus-per-task=8
 #SBATCH -o output/output.%A_%a.out
@@ -62,7 +62,11 @@ echo "Sample: $sample"
 echo "Dataset: $dataset"
 date
 
-python3 $PROJECT_PATH/start_here.py --sample=$sample --dataset=$dataset
+# `--use_cpu` disables JAX and swaps in the CPU sparse operator for the
+# pixelized stage; `--number_of_cores` parallelises the Nautilus sampler
+# across the CPUs allocated above.
+python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \
+    --use_cpu --number_of_cores=$THREADS
 
 echo "Finished: $dataset"
 date

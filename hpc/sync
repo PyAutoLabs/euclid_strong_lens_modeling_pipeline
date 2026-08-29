@@ -34,9 +34,18 @@ REMOTE="${HPC_HOST}:${HPC_BASE}/${PROJECT_NAME}"
 # ---------------------------------------------------------------------------
 
 # Code and config — synced normally. Changed files are updated, new files added.
-CODE_DIRS=(config hpc pipelines tests tools workflow)
+#
+# `scripts/` holds the pipelines the submit scripts run; `catalogue/` holds the
+# producers that turn finished fits into the inspection bundle, which is built
+# on the cluster beside the results rather than after a pull; `preprocess/`
+# holds the segmentation tools that write the `segmentation/` inputs
+# `util.load_vis_dataset` prefers.
+CODE_DIRS=(catalogue config hpc preprocess scripts tests tools workflow)
 
 # Top-level source files that live at the project root (not in a subdirectory).
+# `start_here.py` is the thin shim over `scripts/initial_lens_model.py`; it is
+# pushed so an interactive session on the cluster has the same entry point a
+# reader of the README does.
 ROOT_FILES=(activate.sh start_here.py util.py __init__.py README.md LICENSE)
 
 # Raw data — pushed with --ignore-existing.
@@ -46,7 +55,15 @@ ROOT_FILES=(activate.sh start_here.py util.py __init__.py README.md LICENSE)
 DATA_DIRS=(dataset)
 
 # Pulled from the HPC after jobs finish.
-PULL_DIRS=(output)
+#
+# `output/`      the main VIS results tree.
+# `output_sed/`  the multi-band SED tree written by
+#                hpc/batch_gpu/submit_sersic_waveband (PYAUTO_OUTPUT_DIR), which
+#                the catalogue's stages 6-7 read.
+# `inspect/`     the per-lens inspection bundles built by
+#                scripts/build_inspection_bundle.sh.
+# A directory that does not exist on the HPC is skipped rather than failing.
+PULL_DIRS=(output output_sed inspect)
 
 # ---------------------------------------------------------------------------
 # rsync options
@@ -111,6 +128,7 @@ pull() {
     echo "<== [pull] results  ←  ${REMOTE}"
     for dir in "${PULL_DIRS[@]}"; do
         echo "    ${dir}/"
+        mkdir -p "${PROJECT_ROOT}/${dir}"
         # --update          skip local files that are newer than the remote copy
         # --exclude         omit search_internal (large sampler state, not needed locally)
         "${RSYNC[@]}" "${EXCLUDES[@]}" \
@@ -118,7 +136,8 @@ pull() {
             --exclude='search_internal' \
             ${dryrun} \
             "${REMOTE}/${dir}/" \
-            "${PROJECT_ROOT}/${dir}/"
+            "${PROJECT_ROOT}/${dir}/" \
+            || echo "    skip: ${dir}/ not present on the HPC"
     done
 }
 

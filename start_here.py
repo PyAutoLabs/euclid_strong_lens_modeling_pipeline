@@ -2,15 +2,14 @@
 Euclid Pipeline: Start Here
 ===========================
 
-This script is the recommended entry point for fitting a Euclid strong lens
-dataset. It is a **thin shim**: the fit itself lives in
-``scripts/initial_lens_model.py``, which is the file to read (and edit) if you
-want to understand or change the model.
+This is a **thin shim**. The entry point for fitting a Euclid strong lens
+dataset is ``scripts/initial_lens_model.py`` — that is the file to run, read
+and edit; the README, ``AGENTS.md`` and the HPC submit scripts all name it.
 
-``start_here.py`` exists so that the README, the HPC submit scripts and the
-smoke tests have one stable, obvious command to run. It was previously a
+``start_here.py`` is kept only so that older commands, bookmarks and scripts
+that call ``python start_here.py`` keep working unchanged. It was previously a
 diverged copy of ``scripts/initial_lens_model.py`` that had fallen behind it
-(no pixelized-source stage); collapsing it into a shim removes that drift.
+(no pixelized-source stage); collapsing it into a shim removed that drift.
 
 **Installation:** see https://github.com/PyAutoLabs/euclid_strong_lens_modeling_pipeline
 

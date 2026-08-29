@@ -15,4 +15,11 @@
 #   are broken and parked as a to-do list. Investigate the failure, fix
 #   the underlying bug, and remove the NEEDS_FIX marker.
 
-[]
+- scripts/diagnose_latent_vis_pix.py  # Population sweep over every vis_pix result in a sample; it takes no --dataset argument, so the runner's global args_default (--dataset=... --sample=...) is rejected by argparse. Its single-result sibling scripts/diagnose_latent.py is smoked instead.
+- scripts/build_inspect.py  # Collects the six inspection-bundle PNGs out of finished result zips. PYAUTO_FAST_PLOTS=1 in the smoke profile suppresses all PNG output, so there is nothing for it to collect.
+- catalogue/scripts/deblending.py  # Catalogue producer: needs a finished sersic_lens_model fit in every waveband to extract the deblended pre_psf.fits / model.fits.
+- catalogue/scripts/lens_mass.py  # Catalogue producer: aggregates converged initial_lens_model/vis_pix samples; test-mode samples carry no meaningful posterior.
+- catalogue/scripts/lens_sersic.py  # Catalogue producer: aggregates converged sersic_lens_model/vis samples.
+- catalogue/scripts/source_sersic.py  # Catalogue producer: aggregates converged sersic_lens_model/vis samples.
+- catalogue/scripts/multi_wavelength.py  # Catalogue producer: needs the multi-band SED tree (output_sed/<sample>) produced by a full sersic_lens_model_waveband run, not a test-mode one.
+- catalogue/scripts/magnitudes.py  # Catalogue producer: reads latent values from the multi-band SED tree; skip_latents() is True in every test mode, so no latents are written.

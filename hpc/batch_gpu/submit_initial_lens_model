@@ -1,6 +1,6 @@
 #!/bin/bash -l
 
-#SBATCH -J euclid_start_here
+#SBATCH -J euclid_initial_lens_model
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
@@ -45,10 +45,12 @@ nvidia-smi
 # -------------------------------
 # Run the initial lens model.
 #
-# All path management is handled inside start_here.py via Path(__file__).
-# The only HPC-specific value here is the absolute path to the script.
+# All path management is handled inside the script via Path(__file__); the only
+# HPC-specific value here is the absolute path to it. The repository root's
+# `start_here.py` is a thin shim over this same `fit()` and would work too, but
+# the submit scripts name the real pipeline so a reader knows what to open.
 # -------------------------------
-python3 $PROJECT_PATH/start_here.py --sample=$sample --dataset=$dataset
+python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset
 
 echo "Finished: $dataset"
 date

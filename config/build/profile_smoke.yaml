@@ -28,4 +28,14 @@ defaults:
 
 args_default: "--dataset=102018665_NEG570040238507752998 --sample=q1_walsmley"
 
-overrides: []
+overrides:
+  # The latent diagnostics read a *finished* result off disk rather than
+  # running a search. Under `PYAUTO_TEST_MODE` the library writes results to
+  # `<output>/test_mode/...`, so point the diagnostic's own output root at that
+  # sub-tree; it never writes, it only resolves the result directory.
+  # `smoke_tests.txt` entries run sequentially in one un-wiped output dir, so
+  # `start_here.py` (entry 1) has already produced the `vis_lp` result this
+  # reads.
+  - pattern: scripts/diagnose_latent.py
+    set:
+      PYAUTO_OUTPUT_DIR: "output/test_mode"
