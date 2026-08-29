@@ -23,3 +23,35 @@
 - catalogue/scripts/source_sersic.py  # Catalogue producer: aggregates converged sersic_lens_model/vis samples.
 - catalogue/scripts/multi_wavelength.py  # Catalogue producer: needs the multi-band SED tree (output_sed/<sample>) produced by a full sersic_lens_model_waveband run, not a test-mode one.
 - catalogue/scripts/magnitudes.py  # Catalogue producer: reads latent values from the multi-band SED tree; skip_latents() is True in every test mode, so no latents are written.
+
+# --- Shared helper modules ------------------------------------------------
+# Imported by the scripts above; they define no top-level work and have no
+# `__main__` block, so "running" them does nothing.
+
+- util  # Shared pipeline helpers (dataset loading, the latent catalogue, plotting) imported by every script. A module, not a runnable script. Stem-matched, not path-matched, so it cannot also swallow catalogue_util.py.
+- catalogue/scripts/catalogue_util.py  # Shared helpers for the catalogue producers (path resolution, per-tile CSV splitting). A module, not a runnable script.
+
+# --- Interactive GUI tools ------------------------------------------------
+# Each opens a matplotlib window and blocks until a human clicks or types.
+
+- preprocess/adjust_binary.py  # Interactive GUI for hand-tuning a segmentation binary mask; blocks on mouse/keyboard input and cannot run unattended.
+- preprocess/validation_GUI.py  # Interactive GUI for annotating each lens's segmentation.png; blocks on keyboard input and cannot run unattended.
+- tools/extra_galaxies_centres_gui.py  # Interactive GUI for clicking the centres of extra galaxies; ends in plt.show() and blocks until the window is closed.
+- tools/extra_galaxies_mask_gui.py  # Interactive GUI (al.Scribbler) for spray-painting the extra-galaxies noise mask; blocks until the window is closed.
+
+# --- Offline preprocessing over upstream Euclid products -------------------
+
+- preprocess/segmentation.py  # Builds the five-panel segmentation diagnostic PNG for every lens in a sample from the OU-MER segmentation FITS. Needs a whole sample tree of upstream products, and PYAUTO_FAST_PLOTS=1 in the smoke profile suppresses the PNG it exists to write.
+- preprocess/move_segmentation_fits.py  # One-off migration utility that moves segmentation FITS out of an uncommitted `Q1-Output/` staging tree into the dataset folders; a clean checkout has nothing to move.
+- tools/psf_size.py  # PSF trimming utility hard-coded to the dataset `102019586_NEG564463213499964061`, which is not committed, and it takes no --dataset argument.
+
+# --- Results-workflow examples --------------------------------------------
+# All scrape a populated `output/` tree of *converged* fits through the
+# aggregator; test-mode samples carry no meaningful posterior.
+
+- workflow/csv_make.py  # Aggregator workflow example: summarises converged fits in `output/` into a .csv.
+- workflow/fits_make.py  # Aggregator workflow example: extracts HDUs from the .fits files of converged fits in `output/`.
+- workflow/png_make.py  # Aggregator workflow example: assembles subplots from the .png files of converged fits; PYAUTO_FAST_PLOTS=1 in the smoke profile suppresses all PNG output.
+- workflow/example/csv/lens_mass.py  # Aggregator workflow example: scrapes lens mass parameters from converged `vis` fits in `output/`.
+- workflow/example/csv/magnitudes.py  # Aggregator workflow example: scrapes latent magnitudes from converged multi-band fits in `output/`; skip_latents() is True in every test mode, so no latents are written.
+- workflow/example/png/mge_inspect.py  # Aggregator workflow example: builds MGE inspection PNGs from converged fits; PYAUTO_FAST_PLOTS=1 in the smoke profile suppresses all PNG output.
