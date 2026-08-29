@@ -116,6 +116,38 @@ python scripts/full_model.py --sample=q1_walsmley --dataset=EUCLJ174517.55+65561
 | `scripts/build_inspection_bundle.sh` | Runs all seven catalogue stages in order for a sample. |
 | `catalogue/` | The producers that turn finished fits into the per-lens inspection bundle and the master CSVs — see [`catalogue/README.md`](catalogue/README.md) for the 13-file to producer table and the run order. |
 
+### Simulating a lens
+
+`scripts/simulator.py` is this repository's **only** producer of simulated data — no
+fitting script auto-simulates a missing dataset, because most users fit real Euclid
+imaging and a silent auto-simulate would hide a broken data path. It writes an
+ordinary dataset of this pipeline, so every fitting script reads it unchanged, plus a
+`truth.json` recording every parameter, per-band flux, aperture flux, magnification
+and Einstein radius that went in.
+
+```bash
+# --from-params: an analytic lens (Isothermal + shear mass, Sersic lens light,
+# Sersic source) from the truth values at the top of the script
+python scripts/simulator.py --from-params --output-dataset=my_lens
+
+# --from-result: resimulate a fit you have already run. The tracer is rebuilt from
+# that result's model.json + maximum-log-likelihood sample; the bands, PSFs,
+# zero-points, WCS and noise come from the dataset it was fitted to.
+python scripts/simulator.py --from-result \
+    --sample=q1_walsmley --dataset=102018665_NEG570040238507752998 \
+    --unique_tag=sersic_lens_model --search=vis \
+    --output-dataset=102018665_resimulated
+```
+
+`python scripts/simulator.py --help` lists the rest (bands, image shape, pixel scale,
+mask radius, seed). Under `PYAUTO_TEST_MODE` the output goes to
+`$PYAUTO_OUTPUT_DIR/simulator/` instead of `dataset/`, so a smoke run can never
+overwrite a committed dataset; `--force-dataset-dir` writes to `dataset/` anyway.
+
+The mock this repository ships is `dataset/simulated/euclid_dr1_like/`. See
+[`dataset/README.md`](dataset/README.md) for every dataset here, what it is, what
+reads it and how to regenerate it.
+
 Some scripts used for the DR1 science runs were deliberately left out of this
 repository — see
 [`AGENTS.md`](AGENTS.md#not-ported--available-in-scienceeuclid) for the list and a
@@ -156,7 +188,9 @@ Two environment variables change where results go:
 
 A dataset directory is `dataset/<sample>/<name>/` and holds `<name>.fits` (the
 multi-HDU cut-out) and `info.json` (`pixel_scale`, `mask_radius`, optionally
-`mask_centre`). Everything else is optional and degrades gracefully.
+`mask_centre`). Everything else is optional and degrades gracefully. Every
+dataset this repository ships is listed in [`dataset/README.md`](dataset/README.md),
+with what reads it and how to regenerate it.
 
 ### The `WORST_BAND` / `WORST_PSF_*` header contract
 
@@ -182,6 +216,35 @@ What happens when they are absent:
 - **`WORST_BAND` present but all three FWHM keys missing or `-99`** — the load
   **raises**. This is deliberate: the aperture radii are multiples of this FWHM,
   so a guessed value would silently corrupt the photometry rather than fail.
+
+## Testing and Continuous Integration
+
+```bash
+python -m pytest -q -m "not slow"      # 58 tests, ~4 s, JAX-free, no fit — the local default
+python -m pytest -q -m slow            # 3 tests, 10-20 s, one real (non-test-mode) fit
+python -m pytest -q                    # both
+python3 .github/scripts/run_smoke.py   # every script in smoke_tests.txt, under PYAUTO_TEST_MODE
+```
+
+Every pull request runs three CI jobs across two workflows, each on the
+ubuntu x Python 3.12/3.13 matrix:
+
+| Workflow | Job | What it runs | A red X means |
+|---|---|---|---|
+| `.github/workflows/smoke_tests.yml` | `smoke` | Every entry of `smoke_tests.txt`, under `PYAUTO_TEST_MODE` | A script broke. |
+| `.github/workflows/tests.yml` | `unit` | `pytest -m "not slow"` | A latent value is wrong, a catalogue column drifted from the DR1 reference, or a repository invariant broke. |
+| `.github/workflows/tests.yml` | `slow` | `pytest -m slow` | The pipeline stopped writing latents at all. |
+
+Both workflows are thin callers into PyAutoHeart's reusable `smoke-tests.yml`,
+which checks out and source-installs the five-library dependency chain. The smoke
+job reports **every** failing script rather than stopping at the first, and uploads
+its timings as the `smoke-timings-<python-version>` artifact.
+
+A new script is not automatically covered: `tests/test_repo_invariants.py` fails
+unless every `*.py` under `scripts/`, `catalogue/scripts/`, `preprocess/`, `tools/`,
+`workflow/`, `.github/scripts/` and the repository root is either listed in
+`smoke_tests.txt` or excluded in `config/build/no_run.yaml` with a written reason.
+[`AGENTS.md`](AGENTS.md#continuous-integration) has the full CI section.
 
 ## Visualization
 

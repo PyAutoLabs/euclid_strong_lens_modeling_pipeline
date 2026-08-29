@@ -8,6 +8,10 @@ preceded the port. The three commits that carried it out are the authoritative
 record of what actually landed; this document explains what was ported, what
 was deliberately left behind, and why the non-obvious decisions were made.
 
+Sections 9 and 11 have since been updated by **phase 2** (TEST-mode CI on
+committed simulated data, plus the latent tests), which discharged both of the
+hand-offs phase 1 left open.
+
 ## 1. What was ported
 
 ### `util.py`
@@ -269,19 +273,29 @@ in `priors/mesh/README.md`, and the `DelaunayNN:` line `priors/mesh/delaunay.yam
 omits — inert, since both entries are null-bodied and the packaged file is the
 fallback.
 
-## 9. Coverage: 11 of 13
+## 9. Coverage: 13 of 13 on the simulated dataset
 
 The inspection bundle's 13 per-lens files, and which script produces each,
 are catalogued in `catalogue/README.md` — see that file's producer table
 rather than a duplicate here. Every one of the 13 now has a named producer in
 this repository.
 
-On the shipped example dataset, 11 of the 13 can be produced end to end. The
-two gaps are `segmentation.png` and `vis_lp_image_with_positions.png`, both
-of which need inputs the example dataset does not ship — a `segmentation/`
-directory and a `positions.json` respectively. This is a dataset-provenance
-gap, not a missing script: both files have a real producer, they simply have
-nothing to read on this particular dataset.
+On the shipped **real** example dataset,
+`dataset/q1_walsmley/102018665_NEG570040238507752998/`, 11 of the 13 can be
+produced end to end. The two gaps are `segmentation.png` and
+`vis_lp_image_with_positions.png`, both of which need inputs that dataset does
+not ship — a `segmentation/` directory and a `positions.json` respectively.
+This is a dataset-provenance gap, not a missing script: both files have a real
+producer, they simply have nothing to read on that particular dataset.
+
+Phase 2 closed the gap by *synthesising* the inputs rather than sourcing them.
+`dataset/simulated/euclid_dr1_like/`, written by `scripts/simulator.py`, ships a
+`segmentation/` directory and a `positions.json` (the true multiple-image
+positions, solved with `al.PointSolver`), and
+`scripts/build_inspection_bundle.sh` produces **13 of 13** on it — the first
+dataset in this repository to do so. The 11-of-13 statement above still stands
+for the real dataset and is expected to: it is a property of the upstream
+cut-out, not of this pipeline.
 
 ## 10. Not ported — available in `Science/euclid`
 
@@ -307,15 +321,41 @@ excluded:
   `segmentation/lens_flux.fits` mask-centre path, which the fallback chain in
   §5 does not require.
 
-## 11. What phase 2 picks up
+## 11. What phase 2 picked up — discharged
 
-`tests/test_util.py` covers the *structure* of the latent catalogue — that
-`LatentEuclid.keys()` returns exactly the 12 keys `config/latent.yaml`
-enables, in order — but not the values. It cannot: `skip_latents()` is true in
-every `PYAUTO_TEST_MODE`, so a smoke run never computes a latent value, and
-only a real fit does. Latent *values* under CI are therefore phase 2's, and
-the two diagnostic scripts in §1 remain the human route until then.
+Phase 1 left two things to phase 2, and both are now done.
 
-Phase 2 also picks up the two coverage gaps in §9: sourcing or synthesising a
-`segmentation/` directory and a `positions.json` for the example dataset so
-all 13 bundle files can be produced end to end without a private dataset.
+**Latent values under CI.** `tests/test_util.py` covered the *structure* of the
+latent catalogue — that `LatentEuclid.keys()` returns exactly the 12 keys
+`config/latent.yaml` enables, in order — but not the values, because
+`skip_latents()` is true in every `PYAUTO_TEST_MODE` and only a real fit
+computes one. `tests/test_compute_latent_variable.py` now asserts all 12
+*values* against `dataset/simulated/euclid_dr1_like/truth.json`, and
+`tests/test_latent_run_level.py` asserts a real fit still *writes* them. Both
+run on every pull request. The two diagnostic scripts in §1 remain the human
+route for inspecting one real result; they are no longer the only route.
+
+**The two §9 coverage gaps.** Synthesised rather than sourced — see §9.
+
+### Phase 2 (CI)
+
+Two facts from building the run-level check that are not obvious from the code
+and are worth carrying forward:
+
+- **A NaN latent is dropped from `files/latent/latent_summary.json` entirely.**
+  It is not written as a NaN value. So the run-level test's assertion that the
+  summary holds exactly the 12 keys *is* the NaN check: a latent that failed to
+  compute shows up as a missing key. (The file is `latent_summary.json` rather
+  than `files/latent.csv` because `config/output.yaml` sets
+  `latent_draw_via_pdf: true`, on which branch the updater calls only
+  `save_samples_summary`.)
+- **`af.Drawer` is the run-level fit, and it needs a truth-anchored model.**
+  It draws uniformly from the priors and does no parameter search — the cheapest
+  real search in PyAutoFit, while still running the full post-fit updater path,
+  so `skip_latents()` and `latent_after_fit` behave exactly as in production.
+  Over a *fully free* model it draws junk: the source's linear intensity solves
+  to exactly zero and `magnification` becomes `0 / 0`, which then vanishes from
+  the summary by the rule above. The test therefore anchors the model on the
+  truth with one free parameter. `latent_draw_via_pdf_size` is inert for
+  `af.Drawer` — it falls back to all samples — so it is not a knob for making
+  that fit cheaper; `total_draws` is.
