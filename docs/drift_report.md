@@ -185,6 +185,90 @@ it `output.samples`; it sets it `false` to save disk at 20,000-tile scale),
 They are documented for cluster operators in `AGENTS.md`'s HPC section rather
 than baked into the shipped config; there is no override mechanism.
 
+### Config drift sweep
+
+A follow-up read-only sweep of `config/` against `autolens_workspace/config/`
+and the packaged library defaults confirmed the reversal above and found nine
+euclid-local items, all fixed here. Two lookup rules drive every verdict: the
+layered `conf` merges key by key, so an omitted key silently falls back to the
+packaged default; and prior resolution is *path-sensitive* — a prior yaml only
+fires when its directory path is a suffix of the class's real module path, so a
+file at the wrong path is not an error, it is silently dead.
+
+Deleted (the classes no longer exist in the installed stack, and nothing in the
+repository referenced them):
+
+- `priors/mesh/voronoi.yaml` — `Voronoi` removed from the library; the file was
+  null-bodied and had zero references repo-wide.
+- `priors/hyper_data.yaml` — `HyperBackgroundNoise` and `HyperImageSky` both
+  removed; it declared real priors nothing could ever read.
+- `priors/image_mesh/kmeans.yaml` — `KMeans` exists but is never used by this
+  repository; `image_mesh/README.md` lost its `KMeans` example with it.
+
+Split (the one finding with teeth):
+
+- `priors/regularization/adaptive_brightness.yaml` → `adapt.yaml` +
+  `adapt_split.yaml`, values byte-for-byte unchanged. The old path resolved to
+  `regularization.adaptive_brightness.*`, but the classes live at
+  `autoarray.inversion.regularization.adapt.Adapt` and
+  `…regularization.adapt_split.AdaptSplit`, so the suffix match never fired and
+  the whole file was dead — the packaged defaults were supplying the values
+  instead. No number changes today, because the euclid blocks were identical to
+  those defaults. It matters because `al.reg.AdaptSplit` *is* used by this
+  pipeline (`scripts/full_model.py:503,571`, `scripts/initial_lens_model.py:343`),
+  so any future repo-local tuning of those priors would have been silently
+  discarded.
+
+Stale keys and comments:
+
+- `visualize/plots_search.yaml` — dropped the `pyswarms:` and `ultranest:`
+  blocks; both searches have been removed from autofit.
+- `visualize/plots.yaml` — dropped the `fit_quantity:` block; no reader in
+  autolens or autogalaxy.
+- `output.yaml` — added `model_graph: false`. It is the one omitted key with no
+  packaged default beneath it (`should_output` on a wholly absent key).
+- `latent.yaml` — the header claimed the library defaults all five keys to
+  `false`. It does not: the three raw-flux keys default `true`, so the emitted
+  catalogue was a superset of what the file described. Header corrected and the
+  three raw-flux keys pinned explicitly, so the file now states its full output
+  rather than half-inheriting it. No behaviour change.
+- `config/README.md`, `config/non_linear/README.md` and `config/priors/README.md`
+  refreshed from `autolens_workspace/config/` — all three listed folders and
+  files that do not exist here. `config/visualize/README.md` was fixed in place
+  instead, because its "Changing the colormap" section is euclid-specific and is
+  linked from `README.md`.
+
+#### Left alone on purpose
+
+Eight further findings reproduce identically in `autolens_workspace/config/`
+*and* in the packaged library config, so they are upstream state this
+repository has faithfully inherited. Fixing them here would fork files that are
+currently in parity; they belong in a PyAutoGalaxy issue instead:
+
+1. `priors/light/operated/sersic.yaml` — key is `ersic`, missing its leading
+   `S`, so the operated `Sersic` priors are dead.
+2. `priors/mass/stellar/sersic_core.yaml` — `SersicCoreSph.mass_to_light_ratio`
+   is not in the class `__init__`.
+3. `priors/light/linear_operated/gaussian.yaml` — `Gaussian.intensity`, but
+   linear profiles have no `intensity`.
+4. `priors/light/linear/chameleon.yaml` — path mismatch, so `Chameleon` and
+   `ChameleonSph` never resolve.
+5. `priors/light/linear/eff.yaml` — path mismatch for `ElsonFreeFall` /
+   `ElsonFreeFallSph`.
+6. `priors/mass/dark/nfw_truncated_mcr.yaml` — path mismatch for
+   `NFWTruncatedMCRScatterLudlowSph`.
+7. `priors/point_sources.yaml` — `PointSourceChi` no longer exists.
+8. `priors/cosmology.yaml` — dotted key `model.FlatLambdaCDM` matches no class
+   path.
+
+Also left as-is for the same parity reason, though not upstream *bugs*: the
+per-search `dynesty:` / `emcee:` / `nautilus:` / `zeus:` sections of
+`plots_search.yaml` (autofit now reads only the three family-level sections),
+the readerless `fits.flip_for_ds9` key in `general.yaml`, the Voronoi sentence
+in `priors/mesh/README.md`, and the `DelaunayNN:` line `priors/mesh/delaunay.yaml`
+omits — inert, since both entries are null-bodied and the packaged file is the
+fallback.
+
 ## 9. Coverage: 11 of 13
 
 The inspection bundle's 13 per-lens files, and which script produces each,

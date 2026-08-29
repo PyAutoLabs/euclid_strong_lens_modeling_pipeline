@@ -1,13 +1,25 @@
-# Workspace overrides for the library latent toggles. The PyAutoLens
-# library defaults all five keys to `false` (so existing fits stay
-# unchanged on upgrade). Enabling them here means a Euclid fit gets
-# the full library latent catalogue plus the four pipeline-specific
-# FWHM aperture-flux latents (hardcoded in
-# `util.py::LatentEuclid.APERTURE_LATENT_KEYS`).
+# Workspace overrides for the library latent toggles. The PyAutoLens library
+# defaults the three raw-flux keys (`total_lens_flux`,
+# `total_lensed_source_flux`, `total_source_flux`) to `true`, and the three
+# µJy variants plus `magnification` and `effective_einstein_radius` to
+# `false`. This file pins all six explicitly, so the emitted catalogue is
+# stated here in full rather than half-inherited: a Euclid fit gets the whole
+# library latent catalogue plus the four pipeline-specific FWHM aperture-flux
+# latents (hardcoded in `util.py::LatentEuclid.APERTURE_LATENT_KEYS`).
 #
-# All four flux-derived latents (everything except `magnification` and
-# `effective_einstein_radius`) require `magzero` in the AnalysisImaging
-# kwargs — euclid's pipeline already passes it from the FITS header.
+# All flux-derived µJy latents (everything except the raw-flux keys,
+# `magnification` and `effective_einstein_radius`) require `magzero` in the
+# AnalysisImaging kwargs — euclid's pipeline already passes it from the FITS
+# header.
+
+# Raw-flux latents, in the image units the fit was performed in. These are the
+# library defaults (`true`); pinned here so this file states its full output.
+total_lens_flux: true
+total_lensed_source_flux: true
+total_source_flux: true
+
+# µJy variants and the derived latents — library defaults are `false`, enabled
+# here because the pipeline supplies `magzero`.
 total_lens_flux_mujy: true
 total_lensed_source_flux_mujy: true
 total_source_flux_mujy: true
