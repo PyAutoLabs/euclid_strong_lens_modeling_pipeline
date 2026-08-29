@@ -15,6 +15,127 @@ import autolens as al
 import autolens.plot as aplt
 
 
+def _find_local_maxima(flux: np.ndarray) -> List[tuple]:
+    """
+    Return ``(value, row, col)`` for every interior local maximum, sorted descending.
+
+    A pixel is a local maximum if it is strictly brighter than its four
+    orthogonal neighbours. Border pixels are skipped.
+    """
+    ny, nx = flux.shape
+    maxima = []
+    for r in range(1, ny - 1):
+        for c in range(1, nx - 1):
+            v = flux[r, c]
+            if (
+                v > flux[r - 1, c]
+                and v > flux[r + 1, c]
+                and v > flux[r, c - 1]
+                and v > flux[r, c + 1]
+            ):
+                maxima.append((float(v), r, c))
+    maxima.sort(reverse=True)
+    return maxima
+
+
+def _pixel_to_arcsec(
+    row: int, col: int, ny: int, nx: int, pixel_scale: float
+) -> List[float]:
+    """
+    Convert ``(row, col)`` to **PyAutoLens** ``[y, x]`` arcsec using the half-pixel
+    offset convention.
+    """
+    y = (ny / 2 - 0.5 - row) * pixel_scale
+    x = (col - nx / 2 + 0.5) * pixel_scale
+    return [y, x]
+
+
+def _compute_positions_from_source_flux(
+    source_flux: np.ndarray,
+    noise_map: Optional[np.ndarray],
+    pixel_scale: float,
+    n_positions: int = 4,
+) -> List[List[float]]:
+    """
+    Compute up to *n_positions* multiple-image positions from a source flux map.
+
+    Mirrors the logic in ``preprocess/segmentation.py``, which is the canonical
+    writer of ``positions.json``. This function is the fallback used by
+    `load_vis_dataset` when no ``positions.json`` is present but the dataset
+    ships a ``segmentation/source_flux.fits`` map.
+
+    Local maxima above a signal-to-noise threshold of 3.0 are taken as candidate
+    multiple images. If none of the selected positions lies on the opposite side
+    of the lens from the brightest one (i.e. there is no counter-image), the
+    threshold is walked down in steps of 0.1 until a counter-image is found,
+    which then replaces the weakest position.
+
+    Parameters
+    ----------
+    source_flux
+        2D source flux map (native shape).
+    noise_map
+        2D noise map of the same shape, or ``None`` to skip signal-to-noise
+        filtering.
+    pixel_scale
+        Pixel scale in arcsec used to convert pixel indices to arcsec.
+    n_positions
+        Maximum number of positions returned.
+
+    Returns
+    -------
+    list[list[float]]
+        List of ``[y, x]`` arcsec positions, brightest first.
+    """
+    SNR_THRESHOLD = 3.0
+    SNR_STEP = 0.1
+    ny, nx = source_flux.shape
+
+    if noise_map is not None:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            snr_map = np.where(noise_map > 0, source_flux / noise_map, 0.0)
+    else:
+        snr_map = None
+
+    all_maxima = _find_local_maxima(source_flux)
+    maxima = [
+        (v, r, c)
+        for v, r, c in all_maxima
+        if snr_map is None or snr_map[r, c] > SNR_THRESHOLD
+    ]
+
+    if not maxima:
+        return []
+
+    selected = maxima[:n_positions]
+    positions = [_pixel_to_arcsec(r, c, ny, nx, pixel_scale) for _, r, c in selected]
+
+    has_counter = any(
+        p[0] * positions[0][0] < 0 or p[1] * positions[0][1] < 0 for p in positions[1:]
+    )
+    if not has_counter and snr_map is not None:
+        threshold = SNR_THRESHOLD - SNR_STEP
+        while threshold >= 0:
+            lower_maxima = sorted(
+                [(v, r, c) for v, r, c in all_maxima if snr_map[r, c] > threshold],
+                reverse=True,
+            )
+            for v, r, c in lower_maxima:
+                candidate = _pixel_to_arcsec(r, c, ny, nx, pixel_scale)
+                if candidate not in positions and (
+                    candidate[0] * positions[0][0] < 0
+                    or candidate[1] * positions[0][1] < 0
+                ):
+                    positions[-1] = candidate
+                    break
+            else:
+                threshold -= SNR_STEP
+                continue
+            break
+
+    return positions
+
+
 def subplot_rgb(
     arrays: List[al.Array2DRGB],
     titles: Optional[List[str]] = None,
@@ -166,6 +287,39 @@ def aperture_flux_from(image_2d, centre, radius_pixels, xp=np):
     return xp.sum(image_2d * mask)
 
 
+def psf_fwhm_arcsec_from_primary_header(header, dataset_name: str) -> float:
+    """
+    Read the worst-band PSF FWHM, in arcsec, from a primary FITS header.
+
+    The Euclid cut-out generator stamps the worst-seeing band's PSF FWHM under
+    one of three keys, in order of preference: ``WORST_PSF_MER`` (the OU-MER
+    measured value), ``WORST_PSF_HDR`` (the cut-out pipeline's value) and
+    ``WORST_PSF``. A value of ``-99`` is the Euclid "not measured" sentinel and
+    is skipped.
+
+    Raises
+    ------
+    ValueError
+        If all three keys are missing or hold the sentinel. This deliberately
+        refuses to silently fall back: the aperture-flux latent variables are
+        computed at multiples of this FWHM, so a wrong value silently corrupts
+        the matched-aperture photometry used for SED fitting.
+    """
+    for key in ("WORST_PSF_MER", "WORST_PSF_HDR", "WORST_PSF"):
+        value = header.get(key, None)
+        if value is None:
+            continue
+        value = float(value)
+        if value >= -98:
+            return value
+
+    raise ValueError(
+        f"{dataset_name}: WORST_PSF_MER / WORST_PSF_HDR / WORST_PSF all missing "
+        "in primary header — refusing to silently fall back; aperture-flux "
+        "latent variables would be wrong. (Test-run setting.)"
+    )
+
+
 def dataset_instrument_hdu_dict_via_fits_from(
     dataset_path, dataset_fits_name, image_tag: str = "_FLUX"
 ):
@@ -260,11 +414,18 @@ class VisualizerImaging(al.VisualizerImaging):
             model=model,
         )
 
-        # Load the images
-        try:
-            img0 = np.array(Image.open(dataset_main_path / "rgb_0.png"))
-            img1 = np.array(Image.open(dataset_main_path / "rgb_1.png"))
-        except FileNotFoundError:
+        # Load the images. DR1 tile dumps ship `.jpg` thumbnails, earlier
+        # datasets `.png`, so try each extension in turn.
+        def _open_rgb(stem):
+            for ext in (".png", ".jpg", ".jpeg"):
+                path = dataset_main_path / f"{stem}{ext}"
+                if path.exists():
+                    return np.array(Image.open(path))
+            return None
+
+        img0 = _open_rgb("rgb_0")
+        img1 = _open_rgb("rgb_1")
+        if img0 is None or img1 is None:
             return
 
         mask = al.Mask2D.all_false(
@@ -489,7 +650,7 @@ class EuclidDataset:
     magzero: Optional[float]  # photometric zero-point from header
     pixel_wcs: object  # astropy WCS for sky coordinate conversion
     psf_lowest_resolution: object  # al.Convolver at the worst-seeing band
-    psf_lowest_resolution_fwhm: float  # FWHM of that PSF in pixels
+    psf_lowest_resolution_fwhm: Optional[float]  # FWHM of that PSF in arcsec
     mask_radius: float  # circular mask radius used (arcsec)
     positions_likelihood_list: object  # list[al.PositionsLH] or None
 
@@ -543,6 +704,19 @@ def load_vis_dataset(
         image_tag=image_tag,
     )
 
+    # Some datasets stamp the image HDUs with the other tag; retry before giving up.
+    if "vis" not in dataset_index_dict:
+        for fallback_tag in ("_FLUX", "_BGSUB"):
+            if fallback_tag == image_tag:
+                continue
+            dataset_index_dict = dataset_instrument_hdu_dict_via_fits_from(
+                dataset_path=dataset_main_path,
+                dataset_fits_name=dataset_fits_name,
+                image_tag=fallback_tag,
+            )
+            if "vis" in dataset_index_dict:
+                break
+
     vis_index = dataset_index_dict["vis"]
 
     with open(dataset_main_path / "info.json") as f:
@@ -561,8 +735,32 @@ def load_vis_dataset(
         check_noise_map=False,
     )
 
+    # The mask centre is the lens centre. If the dataset ships a segmentation
+    # lens flux map its peak is the most reliable estimate; otherwise fall back
+    # to `info.json` and finally to the frame centre.
+    lens_flux_path = dataset_main_path / "segmentation" / "lens_flux.fits"
+    if lens_flux_path.exists():
+        lens_flux = fits.getdata(lens_flux_path).astype(np.float32)
+        if lens_flux.shape == dataset.shape_native:
+            peak_row, peak_col = np.unravel_index(
+                int(np.nanargmax(lens_flux)), lens_flux.shape
+            )
+            ny, nx = lens_flux.shape
+            mask_centre = (
+                (ny / 2 - 0.5 - peak_row) * pixel_scale,
+                (peak_col - nx / 2 + 0.5) * pixel_scale,
+            )
+        else:
+            mask_centre = info.get("mask_centre") or (0.0, 0.0)
+    else:
+        mask_centre = info.get("mask_centre") or (0.0, 0.0)
+
+    cy, cx = mask_centre
+
+    # Search for the brightest pixel around the lens centre, not the frame
+    # centre, so offset lenses are handled correctly.
     dataset_centre = dataset.data.brightest_sub_pixel_coordinate_in_region_from(
-        region=(-0.3, 0.3, -0.3, 0.3), box_size=2
+        region=(cy - 0.3, cy + 0.3, cx - 0.3, cx + 0.3), box_size=2
     )
 
     try:
@@ -570,25 +768,43 @@ def load_vis_dataset(
             file_path=dataset_main_path / dataset_fits_name,
             hdu=vis_index * 3 + 1,
         )
-        magzero = header["MAGZERO"]
+        magzero = header.get("MAGZERO", None)
     except FileNotFoundError:
         header = None
         magzero = None
 
     pixel_wcs = WCS(header).celestial if header is not None else None
 
-    try:
-        mask_extra_galaxies = al.Mask2D.from_fits(
-            file_path=dataset_main_path / "mask_extra_galaxies.fits",
-            pixel_scales=pixel_scale,
-            invert=True,
-        )
-        dataset = dataset.apply_noise_scaling(mask=mask_extra_galaxies)
-    except FileNotFoundError:
-        pass
+    # Noise-scaling mask. The DR1 preprocessing writes
+    # `segmentation/artefact_binary.fits`; older datasets (including the shipped
+    # example) ship `mask_extra_galaxies.fits`. Try both, in that order.
+    for noise_mask_path in (
+        dataset_main_path / "segmentation" / "artefact_binary.fits",
+        dataset_main_path / "mask_extra_galaxies.fits",
+    ):
+        try:
+            mask_extra_galaxies = al.Mask2D.from_fits(
+                file_path=noise_mask_path,
+                pixel_scales=pixel_scale,
+                invert=True,
+            )
+        except FileNotFoundError:
+            continue
+        # A mask cut out at a different size cannot be applied to this dataset.
+        if mask_extra_galaxies.shape_native == dataset.shape_native:
+            dataset = dataset.apply_noise_scaling(mask=mask_extra_galaxies)
+        break
 
     mask_radius = info["mask_radius"]
-    mask_centre = info.get("mask_centre") or (0.0, 0.0)
+
+    # Clamp the mask radius to the frame: for an offset lens an `info.json`
+    # radius can run the circular mask off the edge of the cut-out.
+    ny, nx = dataset.shape_native
+    half_y = ny / 2 * pixel_scale
+    half_x = nx / 2 * pixel_scale
+    max_radius = min(half_x - abs(cx), half_y - abs(cy))
+    if mask_radius > max_radius:
+        mask_radius = round(max_radius, 6)
 
     mask = al.Mask2D.circular(
         shape_native=dataset.shape_native,
@@ -612,30 +828,81 @@ def load_vis_dataset(
         hdu=0,
     )
 
-    lowest_resolution_waveband = header_primary.get("WORST_BAND", None).lower()
-    lowest_resolution_waveband_index = dataset_index_dict.get(
-        lowest_resolution_waveband, None
-    )
-
-    psf_lowest_resolution = al.Convolver.from_fits(
-        file_path=dataset_main_path / dataset_fits_name,
-        hdu=lowest_resolution_waveband_index * 3 + 2,
-        pixel_scales=pixel_scale,
-        normalize=True,
-    )
-
-    # Use OU-MER FWHM if valid; fall back to cutout-pipeline value if -99.
-    psf_lowest_resolution_fwhm = float(header_primary.get("WORST_PSF_MER", None))
-    if psf_lowest_resolution_fwhm is None or psf_lowest_resolution_fwhm < -98:
-        psf_lowest_resolution_fwhm = float(header_primary.get("WORST_PSF_HDR", None))
+    # `WORST_BAND` / `WORST_PSF_*` are stamped by the upstream Euclid cut-out
+    # generator; neither this pipeline nor PyAutoReduce writes them. When they
+    # are absent the aperture-flux latents degrade to NaN rather than crashing.
+    worst_band = header_primary.get("WORST_BAND", None)
+    if worst_band is not None:
+        lowest_resolution_waveband = worst_band.lower()
+        lowest_resolution_waveband_index = dataset_index_dict.get(
+            lowest_resolution_waveband, None
+        )
+        if lowest_resolution_waveband_index is None:
+            print(
+                f"[WARN] {dataset_name}: WORST_BAND={worst_band} not present in dataset "
+                "HDU list — skipping aperture-flux latent variables.",
+                flush=True,
+            )
+            psf_lowest_resolution = None
+            psf_lowest_resolution_fwhm = None
+        else:
+            psf_lowest_resolution = al.Convolver.from_fits(
+                file_path=dataset_main_path / dataset_fits_name,
+                hdu=lowest_resolution_waveband_index * 3 + 2,
+                pixel_scales=pixel_scale,
+                normalize=True,
+            )
+            psf_lowest_resolution_fwhm = psf_fwhm_arcsec_from_primary_header(
+                header=header_primary,
+                dataset_name=dataset_name,
+            )
+    else:
+        print(
+            f"[WARN] {dataset_name}: WORST_BAND missing in primary header — "
+            "skipping aperture-flux latent variables.",
+            flush=True,
+        )
+        psf_lowest_resolution = None
+        psf_lowest_resolution_fwhm = None
 
     try:
         positions = al.Grid2DIrregular(
             values=al.from_json(file_path=dataset_main_path / "positions.json")
         )
-        positions_likelihood_list = [al.PositionsLH(threshold=0.3, positions=positions)]
+        # A single position is not a multiple-image constraint; treat as absent.
+        if len(positions) == 1:
+            raise FileNotFoundError
+        positions_likelihood_list = [al.PositionsLH(threshold=0.2, positions=positions)]
     except FileNotFoundError:
-        positions_likelihood_list = None
+        # No `positions.json`: derive positions from the segmentation source
+        # flux map and the VIS noise map, mirroring `preprocess/segmentation.py`.
+        source_flux_path = dataset_main_path / "segmentation" / "source_flux.fits"
+        if (
+            source_flux_path.exists()
+            and fits.getdata(source_flux_path).shape == dataset.shape_native
+        ):
+            source_flux = fits.getdata(source_flux_path).astype(np.float32)
+            try:
+                noise_map = fits.getdata(
+                    dataset_main_path / dataset_fits_name,
+                    ext=vis_index * 3 + 3,
+                ).astype(np.float32)
+            except Exception:
+                noise_map = None
+            pos_list = _compute_positions_from_source_flux(
+                source_flux=source_flux,
+                noise_map=noise_map,
+                pixel_scale=pixel_scale,
+            )
+            if len(pos_list) >= 2:
+                positions = al.Grid2DIrregular(values=pos_list)
+                positions_likelihood_list = [
+                    al.PositionsLH(threshold=0.2, positions=positions)
+                ]
+            else:
+                positions_likelihood_list = None
+        else:
+            positions_likelihood_list = None
 
     return EuclidDataset(
         dataset=dataset,
@@ -665,7 +932,8 @@ def parse_fit_args():
 
     Returns
     -------
-    (sample_name, dataset_name, iterations_per_quick_update)
+    (sample_name, dataset_name, iterations_per_quick_update, number_of_cores,
+     use_cpu, skip_pix)
         ``mask_radius`` is always read from the dataset's ``info.json``.
     """
     import argparse
@@ -691,9 +959,31 @@ def parse_fit_args():
         default=5000,
         help="Number of sampler iterations between on-the-fly visualisation updates.",
     )
+    parser.add_argument(
+        "--number_of_cores",
+        metavar="int",
+        required=False,
+        default=1,
+        help="Number of CPU cores for non-JAX Nautilus searches (e.g. vis_pix).",
+    )
+    parser.add_argument(
+        "--use_cpu",
+        action="store_true",
+        default=False,
+        help="CPU mode: disables JAX and applies the sparse operator for vis_pix.",
+    )
+    parser.add_argument(
+        "--skip_pix",
+        action="store_true",
+        default=False,
+        help="Skip the pixelization stage and return after the MGE light-profile fit.",
+    )
     args = parser.parse_args()
     return (
         args.sample,
         args.dataset,
         int(args.iterations_per_quick_update),
+        int(args.number_of_cores),
+        args.use_cpu,
+        args.skip_pix,
     )

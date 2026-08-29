@@ -7,7 +7,7 @@ and whose mass may contribute to the ray-tracing and lens model.
 
 This script uses a GUI to mark the (y,x) arcsecond locations of these extra galaxies, each of which is then included
 in the lens model as light profiles (a Multi Gasusian Expansion) and mass profiles (singular isothermal spheres) if
-the `groups.py` pipeline is used (the `start_here.py` pipeline does not include extra galaxies for simplicity).
+the `groups.py` pipeline is used (the `scripts/initial_lens_model.py` pipeline does not include extra galaxies for simplicity).
 
 Extra galaxies require that the mask is expanded to include their light, which is done by computing the radial
 distance of the furthest extra galaxy from the origin and adding a buffer. This mask is used in the `groups.py`

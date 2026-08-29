@@ -8,8 +8,14 @@ __pycache__/
 dist/
 /build/
 
-# PyAutoLens / PyAutoFit outputs
+# PyAutoLens / PyAutoFit outputs — the main tree, the multi-band SED tree the
+# catalogue's stages 6-7 read, and any other PYAUTO_OUTPUT_DIR the user picks.
 output/
+output_*/
+
+# Catalogue inspection bundles (built by scripts/build_inspection_bundle.sh)
+inspect/
+inspect_*.tar.gz
 
 # Profiling: simulated dataset + generated results
 profiling/dataset/

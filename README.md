@@ -42,8 +42,11 @@ cd euclid_strong_lens_modeling_pipeline
 Run the pipeline with the example dataset:
 
 ```bash
-python start_here.py --sample=q1_walsmley --dataset=102018665_NEG570040238507752998 --iterations_per_quick_update=10000
+python scripts/initial_lens_model.py --sample=q1_walsmley --dataset=102018665_NEG570040238507752998 --iterations_per_quick_update=10000
 ```
+
+(`start_here.py` in the repository root is a thin shim over this same script and
+accepts the same arguments, so older commands and bookmarks keep working.)
 
 The pipeline will run on the example dataset, outputting results to the `output` folder and in the `dataset` folder,
 and it can be easily modified to run on your own data.
@@ -54,7 +57,7 @@ the lens model improve over time!
 
 ## Overview
 
-The starting point for Euclid strong lens modeling is found in the `start_here.py` script. It performs
+The starting point for Euclid strong lens modeling is `scripts/initial_lens_model.py`. It performs
 automated lens modeling in around 10 minutes per lens on a GPU, around 20 minutes on an 8 core CPU.
 
 This script can be run as a black-box, with key output being generated, including:
@@ -74,7 +77,7 @@ and therefore data release.
 
 ## Workflow
 
-After running the `start_here.py` script on many lenses, you will begin to build up a large number of results
+After running `scripts/initial_lens_model.py` on many lenses, you will begin to build up a large number of results
 in the `output` folder. Eventually, manually inspecting these results will become tedious, and you will require an
 efficient workflow to inspect the results and perform scientific analysis.
 
@@ -82,24 +85,103 @@ The `workflow` folder contains example scripts for creating workflows which enab
 large lens modeling results. Workflows are designed by creating .png, .csv and .fits files from the results
 in the `output` folder for fast inspection.
 
-## Additional Pipelines
+## The Scripts
 
-The following additional pipelines are available in the repository in the `scripts` folder:
-
-- `full_model.py`: A full pipeline which models the Source, Light and Mass using advanced featues like a pixelized source reconstruction and mass model more complex than SIE + shear.
-- `lens_model_waveband.py`: After modeling the high resolution VIS imaging, model lower resolution NIR / EXT imaging using a fixed lens model.
-- `sersic_lens_model.py`: After getting an initial lens model from VIS imaging, perform fits using Sersic lens and source models which give more accurate photometry for SED fitting.
-- `mge_lens_only.py`: Multi-Gaussian Expansion (MGE) subtraction of the lens light only, which better reveals the lensed source.
-
-All pipelines are run with the same API as the `start_here.py` script, for example:
+Every script below is run from the repository root and takes the same command-line
+arguments (see [Command-Line Arguments](#command-line-arguments)):
 
 ```bash
-python scripts/full_model.py --dataset=EUCLJ174517.55+655612.5 --iterations_per_quick_update=50000
+python scripts/full_model.py --sample=q1_walsmley --dataset=EUCLJ174517.55+655612.5 --iterations_per_quick_update=50000
 ```
+
+### Fitting pipelines
+
+| Script | What it fits | Chains off |
+|---|---|---|
+| `start_here.py` | Thin shim over `scripts/initial_lens_model.py` — kept so older commands keep working. | — |
+| `scripts/initial_lens_model.py` | **The entry point.** SIE + shear mass, MGE lens light, MGE source (`vis_lp`), then a pixelized Delaunay source (`vis_pix`). `--skip_pix` stops after `vis_lp`. | — |
+| `scripts/sersic_lens_model.py` | Sersic lens and source with the mass model fixed, for accurate SED photometry. | `initial_lens_model` `vis_lp` |
+| `scripts/lens_model_waveband.py` | Every non-VIS band (NIR / EXT) with the VIS lens model held fixed. | `initial_lens_model` or `sersic_lens_model` |
+| `scripts/sersic_lens_model_waveband.py` | The **SED chain** driver: runs `initial_lens_model --skip_pix`, then `sersic_lens_model`, then `lens_model_waveband` over every band. Run it under its own `PYAUTO_OUTPUT_DIR`. | — (drives the three above) |
+| `scripts/mge_lens_only.py` | MGE subtraction of the lens light only, revealing the lensed source quickly. | — |
+| `scripts/full_model.py` | The full SLaM chain: MGE source, two Delaunay pixelized-source stages, refined lens light, then a PowerLaw + shear mass model. Uses `al.mesh.Delaunay` with `al.reg.AdaptSplit` (`reg.Adapt` cannot JIT on the Delaunay family) and `pixels=500` in its second stage — the `autolens_workspace` `delaunay.py` example uses 1000, but Euclid VIS cut-outs are small. | — |
+
+### Diagnostics and catalogue
+
+| Script | What it does |
+|---|---|
+| `scripts/diagnose_latent.py` | Replays the Euclid latent catalogue on one converged result and prints every latent value, flagging NaN and zero sentinels. Runs no search. |
+| `scripts/diagnose_latent_vis_pix.py` | The population version: the same replay over every `vis_pix` result in a sample, reporting per-dataset OK/ERR. |
+| `scripts/build_inspect.py` | Collects the inspection bundle's PNGs out of finished result zips. |
+| `scripts/build_inspection_bundle.sh` | Runs all seven catalogue stages in order for a sample. |
+| `catalogue/` | The producers that turn finished fits into the per-lens inspection bundle and the master CSVs — see [`catalogue/README.md`](catalogue/README.md) for the 13-file to producer table and the run order. |
+
+Some scripts used for the DR1 science runs were deliberately left out of this
+repository — see
+[`AGENTS.md`](AGENTS.md#not-ported--available-in-scienceeuclid) for the list and a
+reason for each, and [`docs/drift_report.md`](docs/drift_report.md) for the full
+record of what this pipeline inherited from the DR1 runs and why.
 
 **PyAutoLens** has automated pipelines for modeling group-scale strong lenses, lensed point sources (e.g. lensed quasars)
 and double source plane lenses. These will be added to this repository in future releases, but if you are interested
 in using these pipelines sooner please contact James Nightingale on the Euclid consortium SLACK.
+
+## Command-Line Arguments
+
+All fitting pipelines share one argument parser (`util.parse_fit_args`):
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `--dataset` | *required* | Dataset subdirectory inside `dataset/<sample>/`. |
+| `--sample` | none | Sample subdirectory inside `dataset/`. Omit for a flat `dataset/<name>/` layout. |
+| `--iterations_per_quick_update` | `5000` | Sampler iterations between on-the-fly visualisation updates. |
+| `--number_of_cores` | `1` | CPU cores for the non-JAX Nautilus searches. |
+| `--use_cpu` | off | CPU mode: disables JAX and applies the CPU sparse operator to the pixelized stage. |
+| `--skip_pix` | off | Return after the MGE light-profile fit, skipping the pixelized source stage. Used by the Sersic chain, whose source prior cannot be seeded from a pixelization. |
+
+`mask_radius` is **not** an argument — it is always read from the dataset's `info.json`.
+
+Two environment variables change where results go:
+
+- `PYAUTO_OUTPUT_DIR` — the results directory, relative to the repository root
+  (default `output`). The SED chain uses this to keep its many per-band results
+  out of the main tree; `catalogue/scripts/multi_wavelength.py` and
+  `catalogue/scripts/magnitudes.py` read that separate tree by name.
+- `PYAUTO_TEST_MODE` — `1` makes every search finish almost instantly with
+  trivial samples, `2` additionally skips the sampler. Results land under
+  `<output>/test_mode/`. Use it to check a script runs before submitting a real
+  fit.
+
+## Dataset Requirements
+
+A dataset directory is `dataset/<sample>/<name>/` and holds `<name>.fits` (the
+multi-HDU cut-out) and `info.json` (`pixel_scale`, `mask_radius`, optionally
+`mask_centre`). Everything else is optional and degrades gracefully.
+
+### The `WORST_BAND` / `WORST_PSF_*` header contract
+
+The four aperture-flux latent variables (`total_lens_flux_{1,2,3,4}_fwhm_mujy`)
+are matched-aperture photometry: the lens image is convolved to the resolution of
+the **worst-seeing** band across all MER bands, and fluxes are measured at 1, 2, 3
+and 4 times that band's PSF FWHM. Two things in the FITS **primary** header make
+that possible, and both are stamped by the upstream Euclid cut-out generator —
+neither this pipeline nor PyAutoReduce writes them, so they are an input contract
+on the dataset:
+
+- **`WORST_BAND`** names the worst-seeing band (e.g. `DES_G`). Lower-cased it
+  indexes the HDU list to find that band's PSF.
+- **`WORST_PSF_MER`**, **`WORST_PSF_HDR`**, **`WORST_PSF`** hold that PSF's FWHM
+  in arcsec. They are read in that order — the OU-MER measured value first, then
+  the cut-out pipeline's own — skipping Euclid's `-99` "not measured" sentinel.
+
+What happens when they are absent:
+
+- **`WORST_BAND` missing, or naming a band not in the cut-out** — a warning is
+  printed and the four aperture latents are skipped for that dataset. The fit
+  itself is unaffected.
+- **`WORST_BAND` present but all three FWHM keys missing or `-99`** — the load
+  **raises**. This is deliberate: the aperture radii are multiples of this FWHM,
+  so a guessed value would silently corrupt the photometry rather than fail.
 
 ## Visualization
 

@@ -11,13 +11,14 @@ Called by ``sersic_lens_model.py`` and ``mge_lens_only.py`` after their
 respective VIS fits.
 """
 
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import util
-from start_here import fit
+from scripts.initial_lens_model import fit
 
 
 def fit_waveband(
@@ -26,7 +27,6 @@ def fit_waveband(
     vis_result,
     use_sersic_over_sampling: bool = False,
     sample_name: str = None,
-    mask_radius: float = None,
     iterations_per_quick_update: int = 5000,
 ):
     import numpy as np
@@ -38,7 +38,8 @@ def fit_waveband(
 
     project_root = Path(__file__).parent.parent
     conf.instance.push(
-        new_path=project_root / "config", output_path=project_root / "output"
+        new_path=project_root / "config",
+        output_path=project_root / os.environ.get("PYAUTO_OUTPUT_DIR", "output"),
     )
 
     conf.instance["visualize"]["general"]["units"][
@@ -63,27 +64,49 @@ def fit_waveband(
     except FileNotFoundError:
         info = {}
 
-    if mask_radius is None:
-        mask_radius = info.get("mask_radius") or 3.0
+    mask_radius = info.get("mask_radius") or 3.0
     mask_centre = info.get("mask_centre") or (0.0, 0.0)
 
     # Lowest-resolution PSF is the same for all bands — load once.
     header_primary = al.header_obj_from(
         file_path=dataset_main_path / dataset_fits_name, hdu=0
     )
-    lowest_resolution_waveband = header_primary.get("WORST_BAND", None).lower()
-    lowest_resolution_waveband_index = dataset_index_dict.get(
-        lowest_resolution_waveband, None
-    )
-    psf_lowest_resolution = al.Convolver.from_fits(
-        file_path=dataset_main_path / dataset_fits_name,
-        hdu=lowest_resolution_waveband_index * 3 + 2,
-        pixel_scales=0.1,
-        normalize=True,
-    )
-    psf_lowest_resolution_fwhm = float(header_primary.get("WORST_PSF_MER", None))
-    if psf_lowest_resolution_fwhm is None or psf_lowest_resolution_fwhm < -98:
-        psf_lowest_resolution_fwhm = float(header_primary.get("WORST_PSF_HDR", None))
+    # `WORST_BAND` / `WORST_PSF_*` are stamped by the upstream Euclid cut-out
+    # generator. When they are absent the aperture-flux latents degrade to NaN
+    # rather than crashing the whole multi-band run.
+    worst_band_attr = header_primary.get("WORST_BAND", None)
+    if worst_band_attr is None:
+        print(
+            f"[WARN] {dataset_name}: WORST_BAND missing in primary header — "
+            "skipping aperture-flux latent variables.",
+            flush=True,
+        )
+        psf_lowest_resolution = None
+        psf_lowest_resolution_fwhm = None
+    else:
+        lowest_resolution_waveband = worst_band_attr.lower()
+        lowest_resolution_waveband_index = dataset_index_dict.get(
+            lowest_resolution_waveband, None
+        )
+        if lowest_resolution_waveband_index is None:
+            print(
+                f"[WARN] {dataset_name}: WORST_BAND={worst_band_attr} not present in "
+                "dataset HDU list — skipping aperture-flux latent variables.",
+                flush=True,
+            )
+            psf_lowest_resolution = None
+            psf_lowest_resolution_fwhm = None
+        else:
+            psf_lowest_resolution = al.Convolver.from_fits(
+                file_path=dataset_main_path / dataset_fits_name,
+                hdu=lowest_resolution_waveband_index * 3 + 2,
+                pixel_scales=0.1,
+                normalize=True,
+            )
+            psf_lowest_resolution_fwhm = util.psf_fwhm_arcsec_from_primary_header(
+                header=header_primary,
+                dataset_name=dataset_name,
+            )
 
     for dataset_waveband, dataset_index in dataset_index_dict.items():
         if dataset_waveband == "vis":
@@ -100,8 +123,11 @@ def fit_waveband(
             check_noise_map=False,
         )
 
+        # Search around the lens centre, not the frame centre, so offset
+        # lenses anchor their priors on the right pixel.
+        cy, cx = mask_centre
         dataset_centre = dataset.data.brightest_sub_pixel_coordinate_in_region_from(
-            region=(-0.3, 0.3, -0.3, 0.3), box_size=2
+            region=(cy - 0.3, cy + 0.3, cx - 0.3, cx + 0.3), box_size=2
         )
 
         try:
@@ -116,15 +142,25 @@ def fit_waveband(
 
         pixel_wcs = WCS(header).celestial if header is not None else None
 
-        try:
-            mask_extra_galaxies = al.Mask2D.from_fits(
-                file_path=dataset_main_path / "mask_extra_galaxies.fits",
-                pixel_scales=0.1,
-                invert=True,
-            )
-            dataset = dataset.apply_noise_scaling(mask=mask_extra_galaxies)
-        except FileNotFoundError:
-            pass
+        # Noise-scaling mask: DR1 preprocessing writes
+        # `segmentation/artefact_binary.fits`; older datasets ship
+        # `mask_extra_galaxies.fits`. Try both, and only apply a mask cut out
+        # at the same size as this band's image.
+        for noise_mask_path in (
+            dataset_main_path / "segmentation" / "artefact_binary.fits",
+            dataset_main_path / "mask_extra_galaxies.fits",
+        ):
+            try:
+                mask_extra_galaxies = al.Mask2D.from_fits(
+                    file_path=noise_mask_path,
+                    pixel_scales=0.1,
+                    invert=True,
+                )
+            except FileNotFoundError:
+                continue
+            if mask_extra_galaxies.shape_native == dataset.shape_native:
+                dataset = dataset.apply_noise_scaling(mask=mask_extra_galaxies)
+            break
 
         mask = al.Mask2D.circular(
             shape_native=dataset.shape_native,
@@ -228,24 +264,39 @@ def fit_waveband(
             n_live=75,
             batch_size=50,
             iterations_per_quick_update=iterations_per_quick_update,
+            n_like_max=50000,
         )
 
         search.fit(model=model, analysis=analysis, **settings_search.fit_dict)
 
 
 if __name__ == "__main__":
-    sample_name, dataset_name, iterations_per_quick_update = util.parse_fit_args()
+    (
+        sample_name,
+        dataset_name,
+        iterations_per_quick_update,
+        number_of_cores,
+        use_cpu,
+        skip_pix,
+    ) = util.parse_fit_args()
 
-    vis_result = fit(
+    # `skip_pix=True` is forced (the `--skip_pix` flag is not consulted here):
+    # the multi-band model takes `vis_result.instance.galaxies.source.bulge`,
+    # which only exists on the `vis_lp` result — `vis_pix` replaces the source
+    # bulge with a pixelization.
+    vis_lp_result = fit(
         dataset_name=dataset_name,
         sample_name=sample_name,
         iterations_per_quick_update=iterations_per_quick_update,
+        number_of_cores=number_of_cores,
+        use_cpu=use_cpu,
+        skip_pix=True,
     )
 
     fit_waveband(
         dataset_name=dataset_name,
         unique_tag="initial_lens_model",
-        vis_result=vis_result,
+        vis_result=vis_lp_result,
         sample_name=sample_name,
         iterations_per_quick_update=iterations_per_quick_update,
     )
