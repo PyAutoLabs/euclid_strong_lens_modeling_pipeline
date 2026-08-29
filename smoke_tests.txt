@@ -2,6 +2,11 @@
 # directory that is wiped once before the first entry. Order is load-bearing:
 # scripts/diagnose_latent.py replays the latents of a finished result, so every
 # fit it reads must already have run above it.
+# `scripts/simulator.py` first: it is the dataset producer, and under
+# PYAUTO_TEST_MODE it writes to $PYAUTO_OUTPUT_DIR/simulator/ rather than
+# dataset/, so it never overwrites the committed simulated dataset. It
+# accepts and ignores the profile's global --dataset/--sample args.
+scripts/simulator.py
 start_here.py
 scripts/initial_lens_model.py
 scripts/full_model.py

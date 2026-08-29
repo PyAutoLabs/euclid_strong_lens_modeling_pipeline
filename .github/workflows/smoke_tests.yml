@@ -1,0 +1,25 @@
+name: Smoke Tests
+
+# Thin caller for PyAutoHeart's reusable smoke-test workflow. The ceremony
+# (chain checkout, branch matching, runner, Slack) lives centrally; this
+# workspace declares its dependency chain and owns its install epilogue
+# (.github/scripts/smoke_install.sh) and runner (.github/scripts/run_smoke.py).
+
+# One run per commit: PR events carry the CI; pushes only build main
+# (Heart's ws_ci gate reads main-HEAD conclusions). Superseded runs are
+# cancelled on PR refs only — a cancelled main run would read as red CI
+# (cancelled is in Heart's FAILURE_CONCLUSIONS).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: smoke_tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+jobs:
+  smoke:
+    uses: PyAutoLabs/PyAutoHeart/.github/workflows/smoke-tests.yml@main
+    with:
+      chain: "PyAutoNerves PyAutoFit PyAutoArray PyAutoGalaxy PyAutoLens"
+    secrets: inherit

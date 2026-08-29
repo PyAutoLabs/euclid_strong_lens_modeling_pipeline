@@ -1,7 +1,7 @@
-The `scripts` folder contains the pipelines that fit Euclid data, plus the
-diagnostics and the two orchestrators that build the catalogue's inspection
-bundle. Everything here is run from the **repository root**, not from this
-folder:
+The `scripts` folder contains the pipelines that fit Euclid data, the simulator
+that makes data to fit, plus the diagnostics and the two orchestrators that
+build the catalogue's inspection bundle. Everything here is run from the
+**repository root**, not from this folder:
 
 ```bash
 python scripts/initial_lens_model.py --sample=q1_walsmley --dataset=<name>
@@ -39,6 +39,42 @@ All fitting pipelines share one argument parser (`util.parse_fit_args`) —
   uses `Hilbert(pixels=500)`, matching `initial_lens_model.py` rather than the
   `autolens_workspace` `delaunay.py` example's 1000 — Euclid VIS cut-outs are
   small.
+
+# Simulating data
+
+- `simulator.py`: The **only** producer of simulated data in this repository — no
+  fitting script auto-simulates a missing dataset, and
+  `tests/test_repo_invariants.py` keeps it that way. It writes an ordinary dataset
+  of this pipeline (the multi-extension FITS contract `util.load_vis_dataset`
+  reads, `info.json`, `positions.json`, `segmentation/`,
+  `mask_extra_galaxies.fits`, RGB thumbnails) plus `truth.json`, which records
+  every model parameter, the per-band lens / lensed-source / source fluxes in
+  counts and microJansky, the four aperture lens fluxes, the true magnification
+  and the true Einstein radius. Two modes:
+  - `--from-params` (the default) builds an analytic lens — `Isothermal` +
+    `ExternalShear` mass, `Sersic` lens light, `Sersic` source — from the truth
+    values at the top of the script. This is what
+    `dataset/simulated/euclid_dr1_like/` was made with
+    (`--from-params --seed 1`), and `truth.json` is the known-answer source for
+    `tests/test_compute_latent_variable.py`.
+  - `--from-result` resimulates a fit you have already run: the tracer is rebuilt
+    from that result's `model.json` + maximum-log-likelihood sample (resolved with
+    `diagnose_latent.py::resolve_files_path`, so the arguments are the same
+    `--sample` / `--dataset` / `--unique_tag` / `--search` / `--result_hash`) and
+    the bands, PSF stamps, zero-points, WCS and noise levels come from the dataset
+    it was fitted to. A single-band fit written to multiple bands applies the
+    fitted intensities to every band — a *flat* SED, recorded as `sed: "flat"` in
+    `truth.json`. A lens-light `sersic_index` at or above
+    `--sersic-index-prior-edge` (5.0) is replaced by `--sersic-index-replacement`
+    (3.0), with both values recorded.
+
+  Under `PYAUTO_TEST_MODE` the dataset is written to
+  `$PYAUTO_OUTPUT_DIR/simulator/` rather than `dataset/` unless
+  `--force-dataset-dir` is passed, so the smoke run that executes this script
+  cannot overwrite the committed dataset; `--dataset` / `--sample` are accepted and
+  ignored in `--from-params` mode so it can carry the smoke runner's global
+  `args_default`. See [`../dataset/README.md`](../dataset/README.md) for the
+  datasets it has produced.
 
 # Diagnostics
 

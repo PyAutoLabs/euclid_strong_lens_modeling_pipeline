@@ -1,0 +1,250 @@
+{
+    "simulator_version": "1.0",
+    "mode": "from-params",
+    "source_result": null,
+    "seed": 1,
+    "sed": "per-band AB magnitudes (see truth.json bands block)",
+    "dataset": {
+        "sample": "simulated",
+        "name": "euclid_dr1_like",
+        "shape_native": [
+            100,
+            100
+        ],
+        "pixel_scale": 0.1,
+        "mask_radius": 3.0,
+        "mask_centre_info_json": [
+            0.0,
+            0.0
+        ],
+        "mask_centre_used": [
+            0.050000000000000044,
+            0.050000000000000044
+        ],
+        "over_sample_size": 4
+    },
+    "conventions": {
+        "bands.*_flux_counts": "Integrated over the whole simulation frame, before PSF convolution, in the band's own image units.",
+        "bands.*_flux_mujy": "The counts above converted with util.ab_mag_via_flux_from + util.flux_mujy_via_ab_mag_from at that band's MAGZERO.",
+        "latents": "util.LatentEuclid evaluated on the truth model after loading the written dataset back through util.load_vis_dataset. These are integrated over the *masked* grid (mask_radius), so they are a few per cent below the full-frame band fluxes above; they are the values a perfect fit recovers.",
+        "aperture_lens_flux_mujy.values": "Independent full-frame counterpart of the four total_lens_flux_k_fwhm_mujy latents: the VIS lens light convolved with the worst band's PSF, summed in circular apertures of fwhm/(0.1*2)*k pixels, at the VIS zero-point.",
+        "magnification.area": "Ratio of the image-plane to source-plane integrated source flux over the whole frame; the latent 'magnification' is the same ratio on the masked grid.",
+        "magnification.point": "Sum of |mu| at the multiple images in 'positions', via LensCalc.magnification_2d_via_hessian_from. A different quantity from 'area' \u2014 they are expected to disagree.",
+        "einstein_radius.effective": "LensCalc.einstein_radius_from on the simulation grid \u2014 the tangential critical curve's area-equivalent radius, which differs from the Isothermal 'model_parameter' by the mass model's ellipticity convention."
+    },
+    "bands": {
+        "VIS": {
+            "magzero": 24.6,
+            "psf_fwhm": 0.2143,
+            "psf_shape": [
+                21,
+                21
+            ],
+            "noise_sigma": 0.004,
+            "lens_intensity_scale": 0.11953689308619059,
+            "source_intensity_scale": 0.03240097038327698,
+            "lens_flux_counts": 144.54397707459307,
+            "lensed_source_flux_counts": 13.182567385564083,
+            "source_flux_counts": 0.8709670044476694,
+            "lens_flux_mujy": 75.86234251131022,
+            "lensed_source_flux_mujy": 6.918727866924541,
+            "source_flux_mujy": 0.45711760908143007
+        },
+        "NIR_Y": {
+            "magzero": 29.8,
+            "psf_fwhm": 0.5037,
+            "psf_shape": [
+                33,
+                33
+            ],
+            "noise_sigma": 2.356,
+            "lens_intensity_scale": 18.94532081002555,
+            "source_intensity_scale": 3.552695755914436,
+            "lens_flux_counts": 22908.676527677795,
+            "lensed_source_flux_counts": 1445.4397707459307,
+            "source_flux_counts": 95.49963299370154,
+            "lens_flux_mujy": 100.00604421820891,
+            "lensed_source_flux_mujy": 6.309954809188985,
+            "source_flux_mujy": 0.4168962143427225
+        },
+        "NIR_J": {
+            "magzero": 30.0,
+            "psf_fwhm": 0.4614,
+            "psf_shape": [
+                33,
+                33
+            ],
+            "noise_sigma": 2.389,
+            "lens_intensity_scale": 27.384320168351334,
+            "source_intensity_scale": 3.8954534338906024,
+            "lens_flux_counts": 33113.11214825915,
+            "lensed_source_flux_counts": 1584.8931924611143,
+            "source_flux_counts": 104.71326531726989,
+            "lens_flux_mujy": 120.23371021032871,
+            "lensed_source_flux_mujy": 5.754747181826294,
+            "source_flux_mujy": 0.38021386636700677
+        },
+        "NIR_H": {
+            "magzero": 29.9,
+            "psf_fwhm": 0.5875,
+            "psf_shape": [
+                33,
+                33
+            ],
+            "noise_sigma": 2.228,
+            "lens_intensity_scale": 27.38432016835122,
+            "source_intensity_scale": 3.24009703832769,
+            "lens_flux_counts": 33113.11214825901,
+            "lensed_source_flux_counts": 1318.2567385564048,
+            "source_flux_counts": 87.09670044476673,
+            "lens_flux_mujy": 131.83364168702343,
+            "lensed_source_flux_mujy": 5.248391807578443,
+            "source_flux_mujy": 0.3467591674001288
+        }
+    },
+    "worst_band": "NIR_H",
+    "worst_psf_fwhm": 0.5875,
+    "model": {
+        "galaxy_0": {
+            "redshift": 0.5,
+            "profiles": {
+                "bulge": {
+                    "type": "Sersic",
+                    "parameters": {
+                        "centre": [
+                            0.0,
+                            0.0
+                        ],
+                        "ell_comps": [
+                            0.08108108108108109,
+                            4.964784320867649e-18
+                        ],
+                        "intensity": 0.11953689308619059,
+                        "effective_radius": 0.8,
+                        "sersic_index": 3.0
+                    }
+                },
+                "mass": {
+                    "type": "Isothermal",
+                    "parameters": {
+                        "centre": [
+                            0.0,
+                            0.0
+                        ],
+                        "ell_comps": [
+                            0.14068682185888684,
+                            0.0248068825238472
+                        ],
+                        "einstein_radius": 1.2,
+                        "slope": 2.0
+                    }
+                },
+                "shear": {
+                    "type": "ExternalShear",
+                    "parameters": {
+                        "centre": [
+                            0.0,
+                            0.0
+                        ],
+                        "ell_comps": [
+                            0.0,
+                            0.0
+                        ],
+                        "gamma_1": 0.03,
+                        "gamma_2": -0.02
+                    }
+                }
+            }
+        },
+        "galaxy_1": {
+            "redshift": 1.0,
+            "profiles": {
+                "bulge": {
+                    "type": "Sersic",
+                    "parameters": {
+                        "centre": [
+                            0.08,
+                            0.12
+                        ],
+                        "ell_comps": [
+                            -0.060356495881000366,
+                            -0.16582810955045446
+                        ],
+                        "intensity": 0.03240097038327698,
+                        "effective_radius": 0.15,
+                        "sersic_index": 1.0
+                    }
+                }
+            }
+        }
+    },
+    "sersic_index_inferred": null,
+    "sersic_index_simulated": 3.0,
+    "aperture_lens_flux_mujy": {
+        "band": "VIS",
+        "psf_band": "NIR_H",
+        "radii_pixels": [
+            2.9375,
+            5.875,
+            8.8125,
+            11.75
+        ],
+        "radii_fwhm_multiples": [
+            1.0,
+            2.0,
+            3.0,
+            4.0
+        ],
+        "centre_pixels": [
+            49,
+            50
+        ],
+        "values": [
+            9.51348544206382,
+            27.337493063479215,
+            39.40610859098304,
+            47.97514418673181
+        ]
+    },
+    "magnification": {
+        "area": 15.135553147531587,
+        "point": 28.14700505667669
+    },
+    "einstein_radius": {
+        "model_parameter": 1.2,
+        "effective": 1.192117526130301
+    },
+    "positions": [
+        [
+            -0.3375000000000001,
+            1.3026465448590931
+        ],
+        [
+            1.2250000000000003,
+            -0.19124727666906352
+        ],
+        [
+            -0.6468750000000001,
+            -0.7162751777133795
+        ],
+        [
+            1.090625,
+            0.5611122928686675
+        ]
+    ],
+    "latents": {
+        "total_lens_flux": 131.13938459709908,
+        "total_lensed_source_flux": 13.146772686937368,
+        "total_source_flux": 0.8679858287428486,
+        "total_lens_flux_mujy": 68.82292736912149,
+        "total_lensed_source_flux_mujy": 6.899524384312648,
+        "total_source_flux_mujy": 0.4555254383153279,
+        "magnification": 15.146298766165936,
+        "effective_einstein_radius": 1.192117526130301,
+        "total_lens_flux_1_fwhm_mujy": 9.488140233241635,
+        "total_lens_flux_2_fwhm_mujy": 27.260853652022096,
+        "total_lens_flux_3_fwhm_mujy": 39.29798733383888,
+        "total_lens_flux_4_fwhm_mujy": 47.8520495870593
+    },
+    "latents_skipped_reason": null
+}

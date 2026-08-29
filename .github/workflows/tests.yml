@@ -1,0 +1,49 @@
+name: Tests
+
+# Thin caller for PyAutoHeart's reusable smoke-test workflow, pointed at this
+# repository's pytest runner instead of its smoke runner. The reusable
+# workflow's `runner` input is the sanctioned escape hatch for a second entry
+# point (cf. autolens_workspace_test/.github/workflows/retime.yml): the
+# ceremony — dependency-chain checkout at the matching branch, the install
+# epilogue, the cache dirs, the env-profile validation — is identical for the
+# unit tests and duplicating it here is what that input exists to prevent.
+#
+# Two jobs, not one, and deliberately (epic phase 2, decision 2):
+#
+#   unit — `pytest -m "not slow"`. Seconds, JAX-free, no fit. A failure means a
+#          latent VALUE is wrong, a catalogue column drifted from DR1, or a
+#          repository invariant broke.
+#   slow — `pytest -m slow`. A real-mode `af.Drawer` fit (~15 s) that proves the
+#          pipeline still WRITES files/latent/latent_summary.json. Latent
+#          writing is gated by `skip_latents()`, which no environment variable
+#          can force on under test mode, so this is the only check that can see
+#          it — and a failure here means something quite different from a unit
+#          failure, which is why it is not a matrix leg of the same job.
+#
+# Both run the full matrix (ubuntu x py3.12/3.13, fail-fast: false) so a
+# version-specific break in either is visible.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  unit:
+    uses: PyAutoLabs/PyAutoHeart/.github/workflows/smoke-tests.yml@main
+    with:
+      chain: "PyAutoNerves PyAutoFit PyAutoArray PyAutoGalaxy PyAutoLens"
+      runner: ".github/scripts/run_tests.py"
+    secrets: inherit
+
+  slow:
+    uses: PyAutoLabs/PyAutoHeart/.github/workflows/smoke-tests.yml@main
+    with:
+      chain: "PyAutoNerves PyAutoFit PyAutoArray PyAutoGalaxy PyAutoLens"
+      runner: ".github/scripts/run_tests.py"
+      runner-args: "--slow"
+    secrets: inherit
