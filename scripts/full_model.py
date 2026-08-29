@@ -5,15 +5,18 @@ Full SLaM Pipeline
 Runs the complete Source, Light and Mass (SLaM) pipeline on a Euclid VIS dataset:
 
   SOURCE LP      — parametric MGE source + isothermal mass (fast initialisation)
-  SOURCE PIX 1   — pixelised source initialisation with rectangular mesh
-  SOURCE PIX 2   — refined pixelisation with adapt image
+  SOURCE PIX 1   — pixelised source initialisation, Delaunay mesh on an
+                   Overlay image-plane grid
+  SOURCE PIX 2   — refined Delaunay mesh on a Hilbert-weighted grid
   LIGHT LP       — lens light refinement with source/mass fixed
   MASS TOTAL     — final PowerLaw mass model
 
-For a detailed walkthrough of every step see ``start_here.py``, which fits the
-SOURCE LP stage in isolation with full inline documentation.
+For a detailed walkthrough of every step see ``scripts/initial_lens_model.py``,
+which fits the SOURCE LP and a single pixelised stage in isolation with full
+inline documentation.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -84,11 +87,18 @@ def source_lp(
 """
 __SOURCE PIX PIPELINE 1__
 
-Rectangular adaptive mesh + Adapt regularization.  Creates the adapt image
-for the refined pixelisation in SOURCE PIX 2.
+Delaunay mesh + AdaptSplit regularization.  Creates the adapt image for the
+refined pixelisation in SOURCE PIX 2.
 
-``mesh_pixels_yx`` fixes the mesh resolution; it cannot be a free parameter
-because JAX requires statically shaped arrays.
+The Delaunay source pixels are the traced positions of an image-plane grid,
+which is built here (uniform ``Overlay`` grid over the mask, plus a ring of
+edge points) and handed to the analysis via ``AdaptImages``.  The number of
+source pixels is therefore fixed by that grid, not a free parameter: JAX
+requires statically shaped arrays.
+
+``reg.AdaptSplit`` — not ``reg.Adapt`` — is mandatory for the Delaunay family:
+Delaunay neighbours come from a ``scipy.spatial.Delaunay`` call on the traced
+source-plane grid, which cannot be traced under ``jit``/``grad``.
 
 Image positions are computed automatically from the SOURCE LP result to prevent
 unphysical source reconstructions.  An adapt image is computed from the SOURCE
@@ -149,9 +159,11 @@ def source_pix_1(
 """
 __SOURCE PIX PIPELINE 2__
 
-Refined pixelisation using the adapt image from SOURCE PIX 1.  The
-``RectangularAdaptImage`` mesh and ``Adapt`` regularization adapt the source
-pixels and regularization weights to the source's morphology.
+Refined pixelisation using the adapt image from SOURCE PIX 1.  The image-plane
+grid is now drawn by a ``Hilbert`` image mesh weighted by that adapt image, so
+Delaunay source pixels concentrate where the source is bright, and
+``reg.AdaptSplit`` adapts the regularization weights to the source's
+morphology.
 """
 
 
@@ -323,9 +335,11 @@ def fit(
 
     project_root = Path(__file__).parent.parent
     conf.instance.push(
-        new_path=project_root / "config", output_path=project_root / "output"
+        new_path=project_root / "config",
+        output_path=project_root / os.environ.get("PYAUTO_OUTPUT_DIR", "output"),
     )
 
+    import numpy as np
     import autofit as af
     import autolens as al
 
@@ -398,19 +412,57 @@ def fit(
     """
     __SOURCE PIX PIPELINE 1__
 
-    Rectangular adaptive mesh + Adapt regularization.  Creates the adapt image
-    for the refined pixelisation in SOURCE PIX 2.
+    Delaunay mesh + AdaptSplit regularization.  Creates the adapt image for the
+    refined pixelisation in SOURCE PIX 2.
 
-    ``mesh_pixels_yx`` fixes the mesh resolution; it cannot be a free parameter
-    because JAX requires statically shaped arrays.
+    Delaunay source pixels are the traced positions of an image-plane grid, so
+    that grid is built here and passed to the analysis inside ``AdaptImages``.
+    A uniform ``Overlay(26, 26)`` grid clipped to the circular Euclid mask gives
+    the interior pixels; ``append_with_circle_edge_points`` adds a ring of 30
+    points just outside the mask edge, whose source pixels are zeroed
+    (``zeroed_pixels``) so the reconstruction is not distorted by the mask
+    boundary.  ``pixels`` is therefore fixed by the grid rather than a free
+    parameter: JAX requires statically shaped arrays.
     """
-    mesh_pixels_yx = 28
-    mesh_shape = (mesh_pixels_yx, mesh_pixels_yx)
+    mask = dataset.mask
+    edge_pixels_total = 30
+
+    image_mesh = al.image_mesh.Overlay(shape=(26, 26))
+
+    image_plane_mesh_grid = image_mesh.image_plane_mesh_grid_from(mask=mask)
+
+    image_plane_mesh_grid = al.image_mesh.append_with_circle_edge_points(
+        image_plane_mesh_grid=image_plane_mesh_grid,
+        centre=mask.mask_centre,
+        radius=d.mask_radius + mask.pixel_scale / 2.0,
+        n_points=edge_pixels_total,
+    )
 
     galaxy_image_name_dict = al.galaxy_name_image_dict_via_result_from(
         result=source_lp_result
     )
-    adapt_images = al.AdaptImages(galaxy_name_image_dict=galaxy_image_name_dict)
+    adapt_images = al.AdaptImages(
+        galaxy_name_image_dict=galaxy_image_name_dict,
+        galaxy_name_image_plane_mesh_grid_dict={
+            "('galaxies', 'source')": image_plane_mesh_grid
+        },
+    )
+
+    # `load_vis_dataset` only sets `over_sample_size_lp`; the pixelised stages
+    # need their own over-sampling, concentrated where the source is bright.
+    signal_to_noise_threshold = 3.0
+    over_sample_size_pixelization = np.where(
+        galaxy_image_name_dict["('galaxies', 'source')"] > signal_to_noise_threshold,
+        4,
+        2,
+    )
+    over_sample_size_pixelization = al.Array2D(
+        values=over_sample_size_pixelization, mask=mask
+    )
+    dataset = dataset.apply_over_sampling(
+        over_sample_size_lp=dataset.grids.lp.over_sample_size,
+        over_sample_size_pixelization=over_sample_size_pixelization,
+    )
 
     analysis = util.AnalysisImaging(
         dataset=dataset,
@@ -433,19 +485,55 @@ def fit(
         settings_search=settings_search,
         analysis=analysis,
         source_lp_result=source_lp_result,
-        mesh_init=af.Model(al.mesh.RectangularAdaptImage, shape=mesh_shape),
-        regularization_init=af.Model(al.reg.Adapt),
+        mesh_init=al.mesh.Delaunay(
+            pixels=image_plane_mesh_grid.shape[0],
+            zeroed_pixels=edge_pixels_total,
+        ),
+        regularization_init=al.reg.AdaptSplit,
     )
 
     """
     __SOURCE PIX PIPELINE 2__
 
-    Refined pixelisation using the adapt image from SOURCE PIX 1.
+    Refined pixelisation using the adapt image from SOURCE PIX 1.  The
+    image-plane grid is redrawn by a ``Hilbert`` image mesh weighted by that
+    adapt image, so Delaunay source pixels concentrate on the bright parts of
+    the source.
+
+    ``pixels=500`` follows the Euclid sibling ``scripts/initial_lens_model.py``
+    rather than the ``autolens_workspace`` ``delaunay.py`` example, which uses
+    1000: Euclid VIS cut-outs are small, and 1000 source pixels inflates VRAM
+    for no gain here.
     """
     galaxy_image_name_dict = al.galaxy_name_image_dict_via_result_from(
         result=source_pix_result_1
     )
-    adapt_images = al.AdaptImages(galaxy_name_image_dict=galaxy_image_name_dict)
+
+    hilbert_pixels = 500
+
+    image_mesh = al.image_mesh.Hilbert(
+        pixels=hilbert_pixels, weight_power=3.5, weight_floor=0.01
+    )
+
+    image_plane_mesh_grid = image_mesh.image_plane_mesh_grid_from(
+        mask=mask, adapt_data=galaxy_image_name_dict["('galaxies', 'source')"]
+    )
+
+    image_plane_mesh_grid = al.image_mesh.append_with_circle_edge_points(
+        image_plane_mesh_grid=image_plane_mesh_grid,
+        centre=mask.mask_centre,
+        radius=d.mask_radius + mask.pixel_scale / 2.0,
+        n_points=edge_pixels_total,
+    )
+
+    # LIGHT LP and MASS TOTAL reuse this `adapt_images`, so they inherit the
+    # same mesh grid as the source instance they chain from.
+    adapt_images = al.AdaptImages(
+        galaxy_name_image_dict=galaxy_image_name_dict,
+        galaxy_name_image_plane_mesh_grid_dict={
+            "('galaxies', 'source')": image_plane_mesh_grid
+        },
+    )
 
     analysis = util.AnalysisImaging(
         dataset=dataset,
@@ -464,8 +552,11 @@ def fit(
         analysis=analysis,
         source_lp_result=source_lp_result,
         source_pix_result_1=source_pix_result_1,
-        mesh=af.Model(al.mesh.RectangularAdaptImage, shape=mesh_shape),
-        regularization=af.Model(al.reg.Adapt),
+        mesh=al.mesh.Delaunay(
+            pixels=image_plane_mesh_grid.shape[0],
+            zeroed_pixels=edge_pixels_total,
+        ),
+        regularization=al.reg.AdaptSplit,
     )
 
     """
@@ -536,7 +627,14 @@ def fit(
 
 
 if __name__ == "__main__":
-    sample_name, dataset_name, iterations_per_quick_update = util.parse_fit_args()
+    (
+        sample_name,
+        dataset_name,
+        iterations_per_quick_update,
+        number_of_cores,
+        use_cpu,
+        skip_pix,
+    ) = util.parse_fit_args()
     fit(
         dataset_name=dataset_name,
         sample_name=sample_name,

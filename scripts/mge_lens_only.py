@@ -10,6 +10,7 @@ lensed arcs and as an input to downstream pipelines.
 ``fit_waveband()`` — all non-VIS bands, with the lens model fixed to the VIS result.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -27,7 +28,8 @@ def fit(
 
     project_root = Path(__file__).parent.parent
     conf.instance.push(
-        new_path=project_root / "config", output_path=project_root / "output"
+        new_path=project_root / "config",
+        output_path=project_root / os.environ.get("PYAUTO_OUTPUT_DIR", "output"),
     )
 
     import autofit as af
@@ -100,7 +102,8 @@ def fit_waveband(
 
     project_root = Path(__file__).parent.parent
     conf.instance.push(
-        new_path=project_root / "config", output_path=project_root / "output"
+        new_path=project_root / "config",
+        output_path=project_root / os.environ.get("PYAUTO_OUTPUT_DIR", "output"),
     )
 
     conf.instance["visualize"]["general"]["units"][
@@ -136,19 +139,42 @@ def fit_waveband(
     header_primary = al.header_obj_from(
         file_path=dataset_main_path / dataset_fits_name, hdu=0
     )
-    lowest_resolution_waveband = header_primary.get("WORST_BAND", None).lower()
-    lowest_resolution_waveband_index = dataset_index_dict.get(
-        lowest_resolution_waveband, None
-    )
-    psf_lowest_resolution = al.Convolver.from_fits(
-        file_path=dataset_main_path / dataset_fits_name,
-        hdu=lowest_resolution_waveband_index * 3 + 2,
-        pixel_scales=0.1,
-        normalize=True,
-    )
-    psf_lowest_resolution_fwhm = float(header_primary.get("WORST_PSF_MER", None))
-    if psf_lowest_resolution_fwhm is None or psf_lowest_resolution_fwhm < -98:
-        psf_lowest_resolution_fwhm = float(header_primary.get("WORST_PSF_HDR", None))
+    # `WORST_BAND` / `WORST_PSF_*` are stamped by the upstream Euclid cut-out
+    # generator. When they are absent the aperture-flux latents degrade to NaN
+    # rather than crashing the whole multi-band run.
+    worst_band_attr = header_primary.get("WORST_BAND", None)
+    if worst_band_attr is None:
+        print(
+            f"[WARN] {dataset_name}: WORST_BAND missing in primary header — "
+            "skipping aperture-flux latent variables.",
+            flush=True,
+        )
+        psf_lowest_resolution = None
+        psf_lowest_resolution_fwhm = None
+    else:
+        lowest_resolution_waveband = worst_band_attr.lower()
+        lowest_resolution_waveband_index = dataset_index_dict.get(
+            lowest_resolution_waveband, None
+        )
+        if lowest_resolution_waveband_index is None:
+            print(
+                f"[WARN] {dataset_name}: WORST_BAND={worst_band_attr} not present in "
+                "dataset HDU list — skipping aperture-flux latent variables.",
+                flush=True,
+            )
+            psf_lowest_resolution = None
+            psf_lowest_resolution_fwhm = None
+        else:
+            psf_lowest_resolution = al.Convolver.from_fits(
+                file_path=dataset_main_path / dataset_fits_name,
+                hdu=lowest_resolution_waveband_index * 3 + 2,
+                pixel_scales=0.1,
+                normalize=True,
+            )
+            psf_lowest_resolution_fwhm = util.psf_fwhm_arcsec_from_primary_header(
+                header=header_primary,
+                dataset_name=dataset_name,
+            )
 
     for dataset_waveband, dataset_index in dataset_index_dict.items():
         if dataset_waveband == "vis":
@@ -264,7 +290,14 @@ def fit_waveband(
 
 
 if __name__ == "__main__":
-    sample_name, dataset_name, iterations_per_quick_update = util.parse_fit_args()
+    (
+        sample_name,
+        dataset_name,
+        iterations_per_quick_update,
+        number_of_cores,
+        use_cpu,
+        skip_pix,
+    ) = util.parse_fit_args()
 
     vis_result = fit(
         dataset_name=dataset_name,

@@ -3,7 +3,7 @@
 # unchanged on upgrade). Enabling them here means a Euclid fit gets
 # the full library latent catalogue plus the four pipeline-specific
 # FWHM aperture-flux latents (hardcoded in
-# `util.py::AnalysisImaging.APERTURE_LATENT_KEYS`).
+# `util.py::LatentEuclid.APERTURE_LATENT_KEYS`).
 #
 # All four flux-derived latents (everything except `magnification` and
 # `effective_einstein_radius`) require `magzero` in the AnalysisImaging

@@ -29,6 +29,7 @@ pipeline: a sequence of chained searches that progressively build up a complex l
 Each stage is seeded from the previous result, ensuring robust convergence.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -41,12 +42,37 @@ def fit(
     dataset_name: str,
     sample_name: str = None,
     iterations_per_quick_update: int = 5000,
+    number_of_cores: int = 1,
+    use_cpu: bool = False,
+    skip_pix: bool = False,
 ):
+    """
+    Fit the initial Euclid lens model: an MGE light + SIE mass ``vis_lp`` search
+    followed by a pixelized-source ``vis_pix`` search.
+
+    Parameters
+    ----------
+    dataset_name
+        Name of the dataset subdirectory inside ``dataset/<sample_name>/``.
+    sample_name
+        Optional sample subdirectory inside ``dataset/``.
+    iterations_per_quick_update
+        Sampler iterations between on-the-fly visualisation updates.
+    number_of_cores
+        Number of CPU cores used by the ``vis_pix`` Nautilus search.
+    use_cpu
+        Disable JAX and use the CPU sparse operator for the pixelization.
+    skip_pix
+        Return the ``vis_lp`` result without running the ``vis_pix`` search.
+        Used by ``sersic_lens_model.py``, whose Sersic source prior is seeded
+        from ``galaxies.source.bulge`` — which the pixelized fit replaces.
+    """
     from autolens import conf
 
     project_root = Path(__file__).parent.parent
     conf.instance.push(
-        new_path=project_root / "config", output_path=project_root / "output"
+        new_path=project_root / "config",
+        output_path=project_root / os.environ.get("PYAUTO_OUTPUT_DIR", "output"),
     )
 
     import autofit as af
@@ -63,7 +89,8 @@ def fit(
     4. Finds the brightest central pixel to anchor model priors
     5. Loads ``info.json`` metadata (mask radius/centre, redshifts, …)
     6. Reads the FITS header for the photometric zero-point (MAGZERO) and WCS
-    7. Applies ``mask_extra_galaxies.fits`` noise scaling if present
+    7. Applies noise scaling from ``segmentation/artefact_binary.fits``, falling
+       back to ``mask_extra_galaxies.fits``, if either is present
     8. Applies a circular mask (radius from argument, info.json, or 3.0" default)
     9. Applies standard adaptive over-sampling (4/2/1× in radial bins)
     10. Loads the lowest-resolution band PSF + FWHM for aperture photometry
@@ -118,6 +145,27 @@ def fit(
         centre=d.dataset_centre,
     )
 
+    # Tighten the lens ell_comps TruncatedGaussianPrior bounds from the
+    # library default of [-1, 1] to [-0.5, 0.5]. Beyond that, the MGE forms
+    # a multi-blob shape that absorbs lensed-source flux into the lens light
+    # model — a known systematic. ell_comps in [-0.5, 0.5] corresponds to
+    # axis ratios q >= ~0.17 (at the diagonal corner), which is plenty wide.
+    #
+    # mge_model_from gives each of the 2 bases its own independent ell_comps
+    # prior shared across all 20 gaussians within the basis. Preserve that by
+    # creating exactly 2 fresh priors and reassigning them by basis-slice.
+    for j in range(2):
+        ell_0 = af.TruncatedGaussianPrior(
+            mean=0.0, sigma=0.3, lower_limit=-0.5, upper_limit=0.5
+        )
+        ell_1 = af.TruncatedGaussianPrior(
+            mean=0.0, sigma=0.3, lower_limit=-0.5, upper_limit=0.5
+        )
+        for i in range(20):
+            g = lens_bulge.profile_list[j * 20 + i]
+            g.ell_comps.ell_comps_0 = ell_0
+            g.ell_comps.ell_comps_1 = ell_1
+
     mass = af.Model(al.mp.Isothermal)
     mass.centre.centre_0 = d.dataset_centre[0]
     mass.centre.centre_1 = d.dataset_centre[1]
@@ -126,6 +174,7 @@ def fit(
         mask_radius=d.mask_radius,
         total_gaussians=20,
         centre_prior_is_uniform=False,
+        centre=d.dataset_centre,
     )
 
     model = af.Collection(
@@ -153,9 +202,10 @@ def fit(
     analysis = util.AnalysisImaging(
         dataset=d.dataset,
         positions_likelihood_list=d.positions_likelihood_list,
-        use_jax=True,
+        use_jax=not use_cpu,
         dataset_main_path=d.dataset_main_path,
         title_prefix="VIS",
+        plot_rgb=True,
         psf_lowest_resolution=d.psf_lowest_resolution,
         psf_lowest_resolution_fwhm=d.psf_lowest_resolution_fwhm,
         pixel_wcs=d.pixel_wcs,
@@ -165,22 +215,25 @@ def fit(
     """
     __Search__
 
-    Nautilus nested sampling.  ``n_live=100`` balances accuracy and speed for this
+    Nautilus nested sampling.  ``n_live=750`` balances accuracy and speed for this
     15-parameter model.  ``batch_size=50`` controls GPU parallelism.
-    ``n_like_max`` stops runaway fits (most complete well under 100 000 evaluations).
+    ``n_like_max`` stops runaway fits (most complete well under 200 000 evaluations).
     """
     search = af.Nautilus(
         name="vis_lp",
         **settings_search.search_dict,
-        n_live=500,
+        n_live=750,
         batch_size=50,
         iterations_per_quick_update=iterations_per_quick_update,
-        n_like_max=100000,
+        n_like_max=200000,
     )
 
     source_lp_result = search.fit(
         model=model, analysis=analysis, **settings_search.fit_dict
     )
+
+    if skip_pix:
+        return source_lp_result
 
     """
     __Source Pix__
@@ -188,7 +241,11 @@ def fit(
     dataset = d.dataset
     mask = dataset.mask
     mask_radius = d.mask_radius
-    dataset = dataset.apply_sparse_operator()
+
+    if use_cpu:
+        dataset = dataset.apply_sparse_operator_cpu()
+    else:
+        dataset = dataset.apply_sparse_operator()
 
     hilbert_pixels = 500
 
@@ -237,7 +294,7 @@ def fit(
         over_sample_size_pixelization=over_sample_size_pixelization,
     )
 
-    analysis = al.AnalysisImaging(
+    analysis = util.AnalysisImaging(
         dataset=dataset,
         adapt_images=adapt_images,
         positions_likelihood_list=[
@@ -245,6 +302,14 @@ def fit(
                 factor=3.0, minimum_threshold=0.2
             )
         ],
+        use_jax=not use_cpu,
+        dataset_main_path=d.dataset_main_path,
+        title_prefix="VIS",
+        plot_rgb=True,
+        psf_lowest_resolution=d.psf_lowest_resolution,
+        psf_lowest_resolution_fwhm=d.psf_lowest_resolution_fwhm,
+        pixel_wcs=d.pixel_wcs,
+        **settings_search.info,
     )
 
     mass = af.Model(al.mp.Isothermal)
@@ -281,20 +346,37 @@ def fit(
         ),
     )
 
+    vis_pix_search_dict = {
+        **settings_search.search_dict,
+        "number_of_cores": number_of_cores,
+    }
+
     search = af.Nautilus(
         name="vis_pix",
-        **settings_search.search_dict,
-        n_live=150,
-        n_batch=40,
+        **vis_pix_search_dict,
+        n_live=300,
+        n_batch=15,
+        iterations_per_quick_update=iterations_per_quick_update,
+        n_like_max=100000,
     )
 
     return search.fit(model=model, analysis=analysis, **settings_search.fit_dict)
 
 
 if __name__ == "__main__":
-    sample_name, dataset_name, iterations_per_quick_update = util.parse_fit_args()
+    (
+        sample_name,
+        dataset_name,
+        iterations_per_quick_update,
+        number_of_cores,
+        use_cpu,
+        skip_pix,
+    ) = util.parse_fit_args()
     fit(
         dataset_name=dataset_name,
         sample_name=sample_name,
         iterations_per_quick_update=iterations_per_quick_update,
+        number_of_cores=number_of_cores,
+        use_cpu=use_cpu,
+        skip_pix=skip_pix,
     )
