@@ -46,7 +46,7 @@ Fit it exactly like the real example dataset::
 
 __Resimulating a fit__
 
-``--from-result`` resolves a result directory the same way ``scripts/diagnose_latent.py``
+``--from-result`` resolves a result directory the same way ``scripts/tools/diagnose_latent.py``
 does (and reuses its ``resolve_files_path`` helper), so the arguments are the same::
 
     python scripts/simulator.py --from-result \
@@ -109,7 +109,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import util
-from diagnose_latent import resolve_files_path
+from scripts.tools.diagnose_latent import resolve_files_path
 
 
 SIMULATOR_VERSION = "1.0"
@@ -209,6 +209,24 @@ TRUTH = {
     },
 }
 
+"""
+__Frame__
+
+The simulation frame, shared by both modes and overridable on the command line (``--shape``,
+``--pixel-scale``, ``--mask-radius``):
+
+- ``100x100`` pixels at ``0.1"/pixel`` is a 10" cut-out — the size and sampling of the Euclid
+  MER cut-outs this pipeline fits, so a simulated dataset drops into the fitting scripts with
+  nothing else changed.
+- ``mask_radius`` masks nothing here: the simulator writes the whole frame. It is a value
+  written into ``info.json``, and it is the fitting scripts that read it back and build their
+  circular analysis mask from it. 3.0" comfortably contains the arcs of a 1.2" Einstein radius
+  lens while staying inside the 5" half-frame.
+
+The two constants below the frame are conventions the *format* demands rather than choices the
+lens depends on — the nominal VIS exposure time and the sky position the TAN WCS is anchored
+on — and each carries its own note.
+"""
 DEFAULT_SHAPE_NATIVE = (100, 100)
 DEFAULT_PIXEL_SCALE = 0.1
 DEFAULT_MASK_RADIUS = 3.0
@@ -224,6 +242,25 @@ EXPOSURE_TIME = 565.0
 # (`util.load_vis_dataset` builds `WCS(header).celestial`, and `AnalysisImaging.save_results`
 # converts the lens centre to sky coordinates for the catalogue's `crval_ra_deg` column).
 WCS_CRVAL = (57.38288, -51.0)
+
+
+"""
+__Conversions and Headers__
+
+Three small helpers, and they are all in the same business: speaking the *pipeline's* dialect
+rather than PyAutoLens's.
+
+- ``json_number`` is the guard on everything written into ``truth.json``. A truth file is only
+  useful if it can be read back by any JSON parser, and a non-finite float cannot be.
+- ``gaussian_psf_from`` is the idealised PSF of ``--from-params``: a circular Gaussian of the
+  right FWHM, unit-normalised, returned as a ``Convolver`` so the same object can both blur the
+  simulated band and, later, degrade the lens light to the worst band's seeing for the aperture
+  fluxes. ``--from-result`` never calls it — it reuses the real PSF stamps of the fitted data.
+- ``image_wcs_header_from`` writes a band's image header. Two cards on it are read downstream
+  rather than decorative: ``MAGZERO``, which every flux-to-magnitude conversion in the pipeline
+  needs, and the TAN WCS, which becomes the ``pixel_wcs`` a fit uses to write its lens centre
+  out in sky coordinates.
+"""
 
 
 def json_number(value):
@@ -286,6 +323,20 @@ def image_wcs_header_from(shape_native, pixel_scale, magzero, band):
     header["FILTER"] = (band, "Euclid filter for flux image")
 
     return header
+
+
+"""
+__Dataset Writers__
+
+The three functions that put a simulation on disk: the multi-extension FITS, the segmentation
+maps and the RGB thumbnails. Each exists because a named consumer in this repository reads what
+it writes, so their docstrings name that consumer instead of describing the format in the
+abstract — the file layout is not a matter of taste, it is the contract that
+``util.load_vis_dataset`` and the optional-inputs chain are written against.
+
+They are called together, in order, by ``__Write The Dataset__`` inside :func:`simulate`, which
+lists the complete set of files a dataset directory holds.
+"""
 
 
 def write_dataset_fits(file_path, band_data, worst_band, worst_psf_fwhm, pixel_scale):
@@ -405,7 +456,7 @@ def write_rgb_thumbnails(dataset_path, band_images):
 
     Two consumers want them, and both degrade silently without them:
     ``util.VisualizerImaging.visualize_before_fit`` needs **both** to write the fit's
-    ``image/rgb.png`` (which ``scripts/build_inspect.py`` collects into the inspection bundle as
+    ``image/rgb.png`` (which ``scripts/tools/build_inspect.py`` collects into the inspection bundle as
     ``rgb.png``), and ``preprocess/segmentation.py`` draws ``rgb_0.png`` in the top-left panel of
     its diagnostic figure.
 
@@ -437,6 +488,19 @@ def write_rgb_thumbnails(dataset_path, band_images):
         )
 
 
+"""
+__Multiple Images__
+
+Where the source's multiple images fall in the image plane. On real data they have to be marked
+by eye, or picked out of a segmentation source-flux map, because the mass model is exactly what
+is unknown. On a simulation the mass model is known, so the images can be solved for by
+ray-tracing — the one measurement in this file that a real dataset can only approximate.
+
+They matter because every fit reads them back as a constraint on the mass model; see
+``__Positions__`` inside :func:`simulate` for what happens to the file that is written.
+"""
+
+
 def positions_from_tracer(tracer, grid, source_centre, source_flux_2d, pixel_scale):
     """
     The true multiple-image positions of the source centre.
@@ -464,6 +528,28 @@ def positions_from_tracer(tracer, grid, source_centre, source_flux_2d, pixel_sca
         pixel_scale=pixel_scale,
     )
     return al.Grid2DIrregular(values=fallback)
+
+
+"""
+__Building The Tracer__
+
+A tracer is the lens: the galaxies, their light and mass profiles, and the redshifts that order
+them into planes. Four functions build or adjust one — the two modes, and the two corrections
+applied around them:
+
+- ``tracer_from_params`` assembles the analytic lens from the ``TRUTH`` block above, at unit
+  intensity. Nothing here knows about bands; the per-band scaling happens in :func:`simulate`.
+- ``tracer_from_result`` rebuilds a lens that was *fitted*, from a finished search's
+  ``model.json`` and its maximum-log-likelihood sample. Whatever that fit inferred is what gets
+  simulated — an MGE lens light resimulates as an MGE, a Sersic fit as a Sersic — which is
+  why this script needs no model of its own for the resimulation mode.
+- ``apply_sersic_index_prior_edge_rule`` runs only on a ``--from-result`` tracer, and only on
+  the lens light: an inferred value pinned against its prior edge is an artefact of the fit
+  rather than a measurement, and simulating it would bake the artefact into the mock.
+- ``scaled_tracer_from`` runs last, once the per-band intensity scalings are known, so that the
+  model recorded in ``truth.json`` describes the pixels that were actually written rather than
+  the unit-intensity profiles they were built from.
+"""
 
 
 def tracer_from_params():
@@ -589,7 +675,7 @@ def tracer_from_result(args, output_path):
     Rebuild the tracer of a finished fit from its ``model.json`` and maximum-log-likelihood
     sample.
 
-    This is the same resolution ``scripts/diagnose_latent.py`` performs — its
+    This is the same resolution ``scripts/tools/diagnose_latent.py`` performs — its
     ``resolve_files_path`` is imported rather than reimplemented, so "the newest converged
     result" means the same thing in both scripts.
     """
@@ -618,6 +704,20 @@ def tracer_from_result(args, output_path):
     galaxies = list(instance.galaxies)
 
     return al.Tracer(galaxies=galaxies), files_path
+
+
+"""
+__Bands From A Real Dataset__
+
+A tracer says nothing about instruments; the *bands* carry the zero-point, the PSF, the noise
+level and the seeing. ``--from-params`` takes those from the ``BANDS`` table at the top of this
+file, which is the idealised mock. ``--from-result`` takes them from the dataset the fit was
+made on, which is the resimulation: same tracer, but the real PSF stamps, the real zero-points,
+the real per-band noise and the real worst-seeing band of that field.
+
+Both paths hand :func:`simulate` the same shape of dictionary, so the per-band loop below only
+ever has to ask one question — was a real PSF stamp supplied, or should a Gaussian be built?
+"""
 
 
 def band_setup_from_dataset(dataset_path, dataset_name, band_names):
@@ -666,6 +766,23 @@ def band_setup_from_dataset(dataset_path, dataset_name, band_names):
         worst_band = str(worst_band).strip().upper()
 
     return setup, worst_band, worst_psf_fwhm
+
+
+"""
+__Known Answers__
+
+The last two helpers simulate nothing. They compute what a *perfect* fit of this simulation
+would report, so that ``truth.json`` holds not just the parameters that went in but the derived
+quantities a fit is judged on.
+
+``latents_via_truth_from`` gets there by loading the written dataset back off disk exactly as a
+fitting script would and evaluating the pipeline's own latent catalogue on the truth model —
+the same code path a real fit takes, on a model with every parameter fixed. That is deliberate:
+a known answer computed by a parallel implementation would only prove the two implementations
+agree. ``aperture_lens_fluxes_from`` is the considered exception, recomputing the four aperture
+fluxes independently on the full frame so the masked latents have something to be compared
+against. ``tests/test_compute_latent_variable.py`` asserts the pipeline against both.
+"""
 
 
 def latents_via_truth_from(dataset_name, output_sample, tracer, magzero, loadable):
@@ -762,6 +879,28 @@ def simulate(args):
     """
     Build the tracer, simulate every band, write the dataset and write ``truth.json``.
     """
+
+    """
+    __Configuration and Output Paths__
+
+    Everything below builds PyAutoLens objects, so the repository's own ``config/`` is pushed
+    onto the configuration stack first — the same push every fitting script performs, and for
+    the same reason: the profile, search and analysis defaults in play must be this pipeline's,
+    not whatever configuration is otherwise active. The push also names the output root
+    (``PYAUTO_OUTPUT_DIR``, ``output/`` by default), which is where ``--from-result`` then goes
+    looking for the finished fit it has been asked to resimulate.
+
+    Where the *dataset* is written is a separate, protective decision. ``smoke_tests.txt`` runs
+    this script first of all, with the smoke profile's arguments and its default output names;
+    without a redirect every smoke run would therefore rewrite
+    ``dataset/simulated/euclid_dr1_like/``, silently replacing a committed dataset the unit
+    tests assert known answers against. So ``PYAUTO_TEST_MODE`` sends the write into the
+    gitignored output tree instead, and only ``--force-dataset-dir`` overrides that.
+
+    ``--bands`` is normalised here to a list of upper-case band names, or ``None``, which the
+    two modes read as "all four bands of the ``BANDS`` table" and "every band of the input
+    dataset" respectively.
+    """
     from autolens import conf
 
     project_root = Path(__file__).parent.parent
@@ -793,6 +932,31 @@ def simulate(args):
 
     """
     __Tracer__
+
+    The lens itself, and with it every band convention the simulation needs. The two modes
+    converge on the same three things: a ``tracer`` whose first galaxy is the lens and whose
+    last is the source (the ordering every block below relies on), a ``band_setup`` mapping each
+    band to its zero-point, PSF stamp (or ``None``, meaning "build a Gaussian"), PSF FWHM and
+    noise sigma, and the worst-seeing band that the aperture photometry is defined against.
+
+    ``--from-result`` rebuilds the tracer from the finished fit, and then reads the band
+    conventions off the dataset that fit was made on (``dataset/<sample>/<dataset>``, or
+    ``dataset/<dataset>`` when no ``--sample`` is given), so the mock inherits that field's real
+    PSF stamps and noise levels. The lens light's
+    ``sersic_index`` passes through the prior-edge rule on the way in. The worst-seeing band is
+    the one that dataset's primary header names — but if the header carries no ``WORST_BAND``,
+    or names a band that is not among the ones being written, it falls back to the widest PSF
+    of the bands actually simulated: the four aperture latents need *some* FWHM to set their
+    radii, and the widest simulated PSF is the honest choice for the data on disk. The fitted
+    intensities are then used unchanged in every band, which is a flat SED, and ``truth.json``
+    records that.
+
+    ``--from-params`` builds the analytic lens from the ``TRUTH`` block instead and takes its
+    conventions from the ``BANDS`` table, where the worst-seeing band is simply the widest of
+    the FWHMs being simulated. Here each band has its own target AB magnitude, so the mock has
+    a real colour and ``sed`` says so rather than "flat". Nothing was inferred in this mode, so
+    ``sersic_index_inferred`` stays ``None`` while ``sersic_index_simulated`` is the value that
+    went in.
     """
     sersic_index_inferred = None
     sersic_index_simulated = None
@@ -1019,6 +1183,37 @@ def simulate(args):
 
     """
     __Write The Dataset__
+
+    The simulation is now a set of arrays in memory. This block turns it into a dataset
+    *directory* — one that ``util.load_vis_dataset`` opens with no special cases, because it is
+    written to the same contract the real Euclid cut-outs arrive in. What goes in it, and who
+    reads it:
+
+    - ``<output_dataset>.fits`` — the multi-extension image file. A primary HDU carrying the
+      ``EXT_n`` extension names and the ``WORST_BAND`` / ``WORST_PSF_HDR`` / ``WORST_PSF_MER``
+      cards, then ``(<BAND>_BGSUB, <BAND>_PSF, <BAND>_RMS)`` for each band, in that order. The
+      order is the contract, not a convention: the loader assigns band ``i`` an ordinal from the
+      ``_BGSUB`` extensions in file order and then indexes its image, PSF and noise map as
+      ``3i+1``, ``3i+2`` and ``3i+3``.
+    - ``info.json`` — ``pixel_scale``, ``mask_radius`` and ``mask_centre``. The first two are
+      required by the loader; ``mask_centre`` (here the lens mass centre, in arcsec) is only its
+      fallback, because the peak of ``segmentation/lens_flux.fits`` is preferred whenever that
+      map is present, as it is for a simulation.
+    - ``mask_extra_galaxies.fits`` — all-zero, because a simulation has no neighbouring
+      galaxies or artefacts whose noise needs scaling. It is the older of the two
+      noise-scaling masks the loader accepts; the preferred
+      ``segmentation/artefact_binary.fits`` is written (also all-zero) with the segmentation
+      maps. Writing both means the dataset exercises the
+      preferred branch while still being readable by the fallback one.
+    - ``rgb_0.png`` / ``rgb_1.png`` — the colour thumbnails the fit visualiser and the
+      segmentation diagnostic draw.
+    - ``segmentation/`` — the flux and binary maps of the optional-inputs chain, built from the
+      *noise-free* reference-band images (the lens light after PSF convolution, the lensed
+      source before it). Noise-free is the point: the peak-finding and local-maxima searches
+      these maps feed then give the same answer every time.
+
+    ``positions.json`` and ``truth.json`` complete the directory and are written just below.
+    ``dataset/README.md`` describes the same layout from the reading side.
     """
     write_dataset_fits(
         file_path=dataset_path / f"{args.output_dataset}.fits",
@@ -1056,6 +1251,24 @@ def simulate(args):
 
     """
     __Positions__
+
+    The multiple images: the points in the image plane whose light rays all trace back to the
+    same point in the source plane, the source centre. ``al.PointSolver`` finds them by
+    ray-tracing the simulation grid through the tracer, so for a mock they are the exact answer;
+    if the solver returns fewer than two, the source is not multiply imaged and the local-maxima
+    search on the lensed-source map is used instead, so a ``positions.json`` is always written.
+
+    They are written out because every fit of this dataset reads them back as a constraint on
+    the mass model: ``util.load_vis_dataset`` turns the file into an ``al.PositionsLH`` with a
+    0.2" threshold and hands it to the analysis, which penalises models that fail to trace those
+    images back to within that threshold of a common source-plane point. That is what stops a
+    search wandering into a mass model which is a good fit to the light but does not multiply
+    image the source at all. The same positions are reused a few lines below, where they are
+    recorded in ``truth.json`` along with the summed magnification at them.
+
+    One caveat worth knowing: ``preprocess/segmentation.py`` rewrites ``positions.json`` from
+    the local maxima of the source-flux map, discarding the exact solution. Re-running the
+    simulator restores it — it is deterministic for a given ``--seed``.
     """
     positions = positions_from_tracer(
         tracer=tracer,
@@ -1312,6 +1525,28 @@ def model_truth_from(tracer):
         }
 
     return galaxies
+
+
+"""
+__Arguments__
+
+The simulator carries its own parser rather than sharing ``util.parse_fit_args`` with the
+fitting scripts, because nothing it takes is a fitting argument — there is no search to
+configure and no cores to spread across. Four groups:
+
+- **mode** — ``--from-params`` / ``--from-result``, mutually exclusive, the former the default;
+- **which fit to resimulate** — ``--dataset``, ``--sample``, ``--unique_tag``, ``--search``,
+  ``--result_hash``: the same result locator ``scripts/tools/diagnose_latent.py`` takes, and
+  ignored entirely in ``--from-params`` mode;
+- **where the simulation is written** — ``--output-sample``, ``--output-dataset``,
+  ``--force-dataset-dir``;
+- **what is simulated** — ``--bands``, ``--shape``, ``--pixel-scale``, ``--mask-radius``,
+  ``--seed``, plus the two prior-edge knobs that govern the resimulation rule.
+
+``--seed`` is the one to remember: it seeds the Gaussian noise and nothing else, so a re-run
+with the same seed reproduces the dataset, and changing it is how you generate a second noise
+realisation of the *same* lens.
+"""
 
 
 def parse_args():

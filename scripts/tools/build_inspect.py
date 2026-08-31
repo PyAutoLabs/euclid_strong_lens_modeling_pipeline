@@ -36,9 +36,9 @@ Stage 1 of ``scripts/build_inspection_bundle.sh``.
 
 Usage
 -----
-    python scripts/build_inspect.py --sample=q1_walsmley
+    python scripts/tools/build_inspect.py --sample=q1_walsmley
 
-    python scripts/build_inspect.py \
+    python scripts/tools/build_inspect.py \
         --sample=dr1_prelim_grade_ab \
         --inspect_dir=inspect/dr1_prelim_grade_ab_run250 \
         --tar_to=/scratch/dr1_prelim_grade_ab.tar
@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Optional
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 DEFAULT_SAMPLE = "q1_walsmley"
 

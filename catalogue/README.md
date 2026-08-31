@@ -5,12 +5,31 @@ bundle**: one folder per lens holding everything a scientist needs to judge that
 lens, plus master CSVs spanning the whole sample. It is the direct ancestor of
 the exported DR1 catalogue.
 
+### Relation to `workflow/`
+
+Both trees read finished fits out of `output/` through the PyAutoFit aggregator,
+and they differ in purpose rather than in mechanism. `workflow/` holds *general
+examples* of the aggregator export API — `csv_make.py`, `png_make.py` and
+`fits_make.py` teach it step by step, and `workflow/example/` shows it applied to
+real Euclid runs. `catalogue/` holds the *production* producers: the scripts the
+bundle builder actually runs to write the 13 bundle files and the master CSVs.
+
+The clearest way in is to read the two side by side.
+`workflow/example/csv/lens_mass.py` builds the same table as
+`catalogue/scripts/lens_mass.py` — the mass model parameters of every VIS fit,
+scraped through the same `AggregateCSV` API — written as a flat top-to-bottom
+tutorial that explains each call as it makes it, and saved under its own name
+into `workflow/csv/`. The catalogue version is that same scrape wrapped in
+argument parsing, sample-wide path resolution, the extra sigma columns and the
+per-lens split, so it can be driven by `scripts/build_inspection_bundle.sh`.
+Read the tutorial for the API; read the producer for what DR1 actually ships.
+
 Producers live in `catalogue/scripts/`. The two orchestration scripts live in
 `scripts/` beside the pipelines they read from:
 
 ```
 scripts/build_inspection_bundle.sh   # runs the seven stages in order
-scripts/build_inspect.py             # stage 1 — collects the 6 bundle PNGs
+scripts/tools/build_inspect.py             # stage 1 — collects the 6 bundle PNGs
 catalogue/scripts/
   catalogue_util.py                  # shared path resolution + per-lens CSV split
   deblending.py                      # stage 2 — pre_psf.fits, model.fits
@@ -38,12 +57,12 @@ fit already wrote.
 | `pre_psf.fits` | `catalogue/scripts/deblending.py` | generates | `sersic_lens_model` (every waveband) |
 | `model.fits` | `catalogue/scripts/deblending.py` | generates | `sersic_lens_model` (every waveband) |
 | `fit_multi_wavelength.png` | `catalogue/scripts/multi_wavelength.py` | generates | multi-band `sersic_lens_model/<band>` in `output_sed/` |
-| `vis_lp_fit.png` | `scripts/build_inspect.py` | collects `image/fit.png` | `initial_lens_model/vis_lp` |
-| `vis_pix_fit.png` | `scripts/build_inspect.py` | collects `image/fit.png` | `initial_lens_model/vis_pix` |
-| `vis_lp_image_with_positions.png` | `scripts/build_inspect.py` | collects `image/image_with_positions.png` (best-effort) | `initial_lens_model/vis_lp` + the lens's `positions.json` |
-| `rgb.png` | `scripts/build_inspect.py` | collects `image/rgb.png`, else copies `dataset/<sample>/<lens>/rgb_0.jpg` | `initial_lens_model/vis_lp` |
-| `segmentation.png` | `scripts/build_inspect.py` | copies `dataset/<sample>/<lens>/segmentation.png` | `preprocess/segmentation.py` |
-| `fit_sersic.png` | `scripts/build_inspect.py` | collects `image/fit.png` | `sersic_lens_model/vis` |
+| `vis_lp_fit.png` | `scripts/tools/build_inspect.py` | collects `image/fit.png` | `initial_lens_model/vis_lp` |
+| `vis_pix_fit.png` | `scripts/tools/build_inspect.py` | collects `image/fit.png` | `initial_lens_model/vis_pix` |
+| `vis_lp_image_with_positions.png` | `scripts/tools/build_inspect.py` | collects `image/image_with_positions.png` (best-effort) | `initial_lens_model/vis_lp` + the lens's `positions.json` |
+| `rgb.png` | `scripts/tools/build_inspect.py` | collects `image/rgb.png`, else copies `dataset/<sample>/<lens>/rgb_0.jpg` | `initial_lens_model/vis_lp` |
+| `segmentation.png` | `scripts/tools/build_inspect.py` | copies `dataset/<sample>/<lens>/segmentation.png` | `preprocess/segmentation.py` |
+| `fit_sersic.png` | `scripts/tools/build_inspect.py` | collects `image/fit.png` | `sersic_lens_model/vis` |
 
 `build_inspect.py` never re-renders: it streams the image out of the result zip
 PyAutoFit writes when a search finishes, falling back to the unzipped result
@@ -81,7 +100,7 @@ bash scripts/build_inspection_bundle.sh dr1_prelim_grade_ab run250
 
 | Stage | Script | Reads | Writes |
 |---|---|---|---|
-| 1/7 | `scripts/build_inspect.py` | `output/<sample>/` | the 6 collected PNGs |
+| 1/7 | `scripts/tools/build_inspect.py` | `output/<sample>/` | the 6 collected PNGs |
 | 2/7 | `catalogue/scripts/deblending.py` | `output/<sample>/` | `pre_psf.fits`, `model.fits` |
 | 3/7 | `catalogue/scripts/lens_mass.py` | `output/<sample>/` | `lens_mass.csv` |
 | 4/7 | `catalogue/scripts/lens_sersic.py` | `output/<sample>/` | `lens_sersic.csv` |

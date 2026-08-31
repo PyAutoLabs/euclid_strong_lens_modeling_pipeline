@@ -9,3 +9,8 @@ of results. For example, .png files showing the maximum likelihood model on a si
 - `png_make`: Make custom .png files showing lens modeling results or other quantities for quick result inspection.
 - `csv_make`: Make .csv catalogues of lens modeling results for scientific interpretation.
 - `fits_make`: Make .fits files of lens modeling results for scientific interpretation, for example .fits file images debelending the lens and lensed source light.
+
+The `example` folder holds these APIs applied to real Euclid runs — `example/csv/lens_mass.py` scrapes the mass model
+parameters of every "vis" fit, `example/csv/magnitudes.py` the multi-waveband magnitudes, and `example/png/mge_inspect.py`
+builds MGE inspection images. For the production versions of the same scrapes, which write the inspection bundle and its
+master CSVs, see [`catalogue/README.md`](../catalogue/README.md).

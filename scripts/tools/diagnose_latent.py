@@ -37,11 +37,11 @@ Usage
 -----
 Defaults target the shipped example dataset::
 
-    python scripts/diagnose_latent.py
+    python scripts/tools/diagnose_latent.py
 
 Point it at a real run::
 
-    python scripts/diagnose_latent.py \
+    python scripts/tools/diagnose_latent.py \
         --sample=dr1_prelim_grade_ab \
         --dataset=Tile102007899RA0631694872236DECNEG0650584220817 \
         --search=vis_lp
@@ -49,7 +49,7 @@ Point it at a real run::
 Test-mode results are written under ``<output>/test_mode/``, so inspect a smoke
 run with::
 
-    python scripts/diagnose_latent.py --output_path=output/test_mode
+    python scripts/tools/diagnose_latent.py --output_path=output/test_mode
 """
 
 import argparse
@@ -59,7 +59,7 @@ import sys
 import traceback
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import util
 
@@ -184,7 +184,7 @@ def main():
 
     from autolens import conf
 
-    project_root = Path(__file__).parent.parent
+    project_root = Path(__file__).parent.parent.parent
     output_path = (
         Path(args.output_path)
         if args.output_path is not None

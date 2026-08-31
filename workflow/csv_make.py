@@ -21,7 +21,7 @@ __Real Examples__
 
 This example illustrates the API for outputting results to a .csv file.
 
-In the folder `workflow/examples`, we provide actual examples of how this APi is used to create .csv files
+In the folder `workflow/example`, we provide actual examples of how this APi is used to create .csv files
 that output the results of real lens modeling using the Euclid pipeline, for example a .csv with all mass
 model parameters for every lens model-fit to a "vis" dataset.
 

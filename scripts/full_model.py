@@ -2,18 +2,170 @@
 Full SLaM Pipeline
 ==================
 
-Runs the complete Source, Light and Mass (SLaM) pipeline on a Euclid VIS dataset:
+Runs the complete Source, Light and Mass (SLaM) pipeline on a Euclid VIS dataset::
 
-  SOURCE LP      — parametric MGE source + isothermal mass (fast initialisation)
-  SOURCE PIX 1   — pixelised source initialisation, Delaunay mesh on an
-                   Overlay image-plane grid
-  SOURCE PIX 2   — refined Delaunay mesh on a Hilbert-weighted grid
-  LIGHT LP       — lens light refinement with source/mass fixed
-  MASS TOTAL     — final PowerLaw mass model
+    python scripts/full_model.py --dataset=<name> --sample=<sample>
 
-For a detailed walkthrough of every step see ``scripts/initial_lens_model.py``,
-which fits the SOURCE LP and a single pixelised stage in isolation with full
-inline documentation.
+__Before You Start__
+
+If you are new to this pipeline, read ``start_here.py`` first. Installation and the
+command line, the dataset contract, masking and over-sampling, what a Multi Gaussian
+Expansion (MGE) is, the SIE + shear initial mass model, the Nautilus / JAX / GPU
+basics, the idea of a pixelized source and the layout of ``output/`` are all covered
+there, and are deliberately *not* repeated here.
+
+For a line-by-line walkthrough of every step of a fit, read
+``scripts/initial_lens_model.py``: it fits one light-profile search (``vis_lp``)
+followed by one pixelized search (``vis_pix``) with full inline documentation. This
+script is that same idea generalised into five chained searches.
+
+This script accepts the shared pipeline arguments (``util.parse_fit_args``), but its
+``fit`` function uses only ``--dataset``, ``--sample`` and
+``--iterations_per_quick_update``. Every stage here runs on JAX and every stage is
+run, so ``--use_cpu``, ``--number_of_cores`` and ``--skip_pix`` have no effect.
+
+__SLaM (Source, Light and Mass)__
+
+This script is an introduction to the Source, (lens) Light and Mass (SLaM) pipelines.
+These are advanced modeling pipelines which use many aspects of core PyAutoLens
+functionality to automate the modeling of strong lenses.
+
+The idea is simple: rather than throwing a complex model at the data in one go and
+hoping the sampler finds the global maximum, each search solves one part of the
+problem with everything else simplified or held fixed, and hands its result to the
+next search as priors or as a fixed instance.
+
+__Prerequisites__
+
+Before reading this script, it helps to be familiar with the following key concepts.
+The references are scripts in the ``autolens_workspace`` repository
+(https://github.com/PyAutoLabs/autolens_workspace):
+
+- **Non-linear search chaining** (``scripts/guides/modeling/chaining.py``): linking
+  models together in a sequence, such as transitioning from a light profile source to
+  a pixelized source. This is the mechanism the whole script is built on.
+
+- **Pixelizations** (``scripts/imaging/features/pixelization/modeling.py``, and
+  ``.../pixelization/delaunay.py`` for the mesh family used here): structures which
+  reconstruct the source galaxy on a pixel grid rather than with an analytic profile.
+
+- **Adaptive pixelizations** (``scripts/imaging/features/pixelization/adaptive.py``):
+  pixelizations whose source pixels and regularization weights adapt to the unlensed
+  morphology of the source.
+
+- **Multi Gaussian Expansions (MGE)**
+  (``scripts/imaging/features/multi_gaussian_expansion/modeling.py``): galaxy light
+  modeled as a sum of Gaussians. Used here for the lens light throughout, and for the
+  source in the first search before the pixelization takes over. ``start_here.py``
+  gives the short version.
+
+- The generic PyAutoLens introduction to these pipelines is
+  ``scripts/guides/modeling/slam_start_here.py``. Read it for the concepts, not the
+  settings: its worked example uses a different mesh family to the Delaunay meshes
+  used here.
+
+If any of these concepts are unfamiliar you can still run the script, but reviewing
+the referenced examples later will deepen your understanding of how and why SLaM
+pipelines are structured as they are.
+
+__Overview__
+
+The SLaM pipelines strategically chain together sequential searches, each designed to
+exploit the results of the last. This provides a fully automated framework for fitting
+large samples of strong lenses with complex models.
+
+Each stage targets a specific aspect of the strong lens model:
+
+- **Source**: establish a robust source model. For a pixelized source this means
+  finding accurate mesh and regularization parameters, and building the "adapt image"
+  the mesh adapts to.
+- **Light**: model the lens light, with the source and mass models fixed from the
+  source stages.
+- **Mass**: fit a detailed, higher-complexity mass model, using the source and lens
+  light models established earlier.
+
+Models set up in earlier stages guide those used in later ones. The Delaunay mesh and
+``AdaptSplit`` regularization chosen for the source stages are what the final mass
+measurement is made against.
+
+__Pipeline Structure__
+
+This script implements five searches, each as a function below with its own
+documentation block, called in order by ``fit`` at the bottom of the file. All five
+are written to the ``slam`` unique tag of the dataset's output folder:
+
+1. **SOURCE LP** (``source_lp[1]``) — MGE lens light (2 x 20 Gaussians),
+   ``Isothermal`` + ``ExternalShear`` mass and an MGE source (1 x 20 Gaussians), all
+   free. Fast, well-conditioned, and the origin of everything that follows: the mass
+   priors, the multiple-image positions and the first adapt image.
+
+2. **SOURCE PIX 1** (``source_pix[1]``) — the source becomes a ``Delaunay``
+   pixelization on a uniform ``Overlay`` image-plane grid, with the lens light fixed
+   to SOURCE LP and the mass and shear chained forward as models. Its purpose is not
+   the mass model but the reconstruction itself, which becomes the adapt image for the
+   next stage.
+
+3. **SOURCE PIX 2** (``source_pix[2]``) — the same Delaunay mesh, but the image-plane
+   grid is now drawn by a ``Hilbert`` mesh weighted by that adapt image. The lens
+   light, mass and shear are all fixed instances, so the only free parameters are
+   those of the ``AdaptSplit`` regularization. This is the source model used by every
+   later stage.
+
+4. **LIGHT LP** (``light[1]``) — the lens light is refit from scratch (2 x 20
+   Gaussians) against a source and mass that are now accurate enough for a clean
+   lens-light subtraction.
+
+5. **MASS TOTAL** (``mass_total[1]``) — the ``Isothermal`` mass is promoted to a
+   ``PowerLaw``, with priors initialized from SOURCE PIX 1, the lens light fixed from
+   LIGHT LP and the source fixed from SOURCE PIX 2.
+
+__Design Choices__
+
+There are many design choices that go into the SLaM pipelines, which we discuss now.
+
+The SLaM pipelines are designed around pixelized source modeling. Pixelized sources
+are necessary for fitting complex mass models, which the SLaM pipelines automate the
+fitting of. The design considerations below all follow from that:
+
+- **Source First**: the pipeline starts with the source, because complex mass models
+  (e.g. a ``PowerLaw``, or composite models with stars and dark matter) require
+  pixelized source modeling rather than simple light profiles. This step establishes a
+  robust pixelized source using a simpler mass model (``Isothermal`` with
+  ``ExternalShear``).
+
+- **Image Positions**: for pixelized source modeling, specifying the positions of the
+  multiple images of the lensed source is crucial to prevent unphysical
+  reconstructions, where the mass model demagnifies the source into a blob that fits
+  the data with no lensing at all. The positions are not input by hand: they are
+  estimated automatically from the previous stage's mass and source result.
+
+- **Adapt Images**: an adaptive pixelization uses an "adapt image" — a lens-light
+  subtracted image in which only the lensed source emission remains — to place source
+  pixels and set regularization weights according to the source's morphology. The
+  adapt image is therefore only set once a good model of the source is available.
+
+- **Lens Light Before Mass**: modeling the lens light accurately requires deblending
+  the lens and source emission, which a robust pixelized source model makes possible.
+  The lens light is refined while the mass model is still the simple ``Isothermal``,
+  so the harder mass fit begins from a clean lens-light subtraction.
+
+- **Mass Model Last**: the most complex mass model fitting is saved for last, and
+  benefits from the prior refinement of both the source and the lens light.
+
+These design choices enable the SLaM pipelines to deliver precise and automated lens
+modeling while optimizing each stage for robustness and efficiency.
+
+__This Script__
+
+Using a SOURCE LP, two SOURCE PIX, a LIGHT LP and a MASS TOTAL search, this script
+fits a Euclid VIS ``Imaging`` dataset of a strong lens where in the final model:
+
+ - The lens galaxy's light is a bulge with a Multi Gaussian Expansion (MGE) light
+   profile [fixed from LIGHT LP].
+ - The lens galaxy's total mass distribution is a ``PowerLaw`` plus an
+   ``ExternalShear``.
+ - The source galaxy's light is a ``Pixelization``: a ``Delaunay`` mesh with
+   ``AdaptSplit`` regularization [fixed from SOURCE PIX 2].
 """
 
 import os
@@ -38,6 +190,22 @@ source galaxy's light:
 
 The mass and source models from this search initialize the SOURCE PIX PIPELINE
 searches that follow.
+
+Everything is fit with light profiles here, and nothing is held fixed. That is
+the point of the stage: the MGE's intensities are solved linearly, so the
+non-linear parameter space stays small and well-conditioned and the search is
+very likely to find the global maximum. A pixelized source started from nothing
+is not — it needs a mass model that is already roughly right, and an adapt image
+of the source, neither of which exist until this search has run.
+
+__Settings__:
+
+ - Mass Centre: the ``Isothermal`` centre is given a uniform prior spanning
+   +/- 0.05" of the dataset centre (the brightest central pixel), rather than
+   being left fully free. The mass centre is expected to lie very close to the
+   lens light centre, and restricting it this tightly keeps the initial search
+   stable. Later stages chain the mass forward from this result rather than
+   setting it up again from scratch.
 """
 
 
@@ -92,6 +260,18 @@ __SOURCE PIX PIPELINE 1__
 Delaunay mesh + AdaptSplit regularization.  Creates the adapt image for the
 refined pixelisation in SOURCE PIX 2.
 
+This is the first of two pixelized searches, and it exists because of a
+chicken-and-egg problem. An adaptive pixelization needs an "adapt image" — a
+lens-light subtracted image containing only the lensed source emission — to
+decide where to put source pixels and how strongly to regularize them. The
+SOURCE LP result can supply one, but not a good one: the true source is often
+more complex than the MGE fitted to it, so the emission it predicts is smoother
+than the real thing. This search therefore fits a pixelization whose real
+product is its own reconstruction, which SOURCE PIX 2 then adapts to.
+
+The lens light is fixed to the SOURCE LP instance; the mass and shear are
+chained forward as models, so they are re-fit against the pixelized source.
+
 The Delaunay source pixels are the traced positions of an image-plane grid,
 which is built here (uniform ``Overlay`` grid over the mask, plus a ring of
 edge points) and handed to the analysis via ``AdaptImages``.  The number of
@@ -102,9 +282,25 @@ requires statically shaped arrays.
 Delaunay neighbours come from a ``scipy.spatial.Delaunay`` call on the traced
 source-plane grid, which cannot be traced under ``jit``/``grad``.
 
+__Positions__
+
 Image positions are computed automatically from the SOURCE LP result to prevent
-unphysical source reconstructions.  An adapt image is computed from the SOURCE
-LP result and passed to the analysis.
+unphysical source reconstructions — those where the mass model demagnifies the
+source so heavily that a featureless blob reproduces the data. They are not
+input by hand; deriving them from the previous result is a key part of what
+makes these pipelines automatic.
+
+__Adapt Images__
+
+An adapt image is computed from the SOURCE LP result and passed to the analysis,
+together with the image-plane mesh grid the Delaunay source pixels are traced
+from (both are built in ``fit`` below).
+
+__Mass Chaining__
+
+``unfix_mass_centre=True`` is passed to ``mass_from`` for consistency with the
+standard SLaM API. It has nothing to unfix here: the SOURCE LP mass centre was
+already free within its +/- 0.05" prior rather than fixed to a value.
 """
 
 
@@ -168,6 +364,16 @@ grid is now drawn by a ``Hilbert`` image mesh weighted by that adapt image, so
 Delaunay source pixels concentrate where the source is bright, and
 ``reg.AdaptSplit`` adapts the regularization weights to the source's
 morphology.
+
+The lens light, mass and shear are all passed as instances — the lens light from
+SOURCE LP, the mass and shear from SOURCE PIX 1 — so the only free parameters in
+this search are those of the regularization scheme. It is a small, cheap search
+(hence its low ``n_live``) whose job is to settle the source reconstruction that
+LIGHT LP and MASS TOTAL are then fit against.
+
+Because the mass is fixed here, this result carries no mass posterior worth
+chaining. The MASS TOTAL priors are therefore taken from SOURCE PIX 1, the last
+search in which the mass was free.
 """
 
 
@@ -220,11 +426,23 @@ def source_pix_2(
 """
 __LIGHT LP PIPELINE__
 
-Refines the lens light (2×20 Gaussians) with mass and source fixed.
+Refines the lens light (2 x 20 Gaussians) with mass and source fixed:
+
+ - The lens light is a new MGE, fit from scratch [free].
+ - The ``Isothermal`` mass and ``ExternalShear`` are fixed from SOURCE PIX 1.
+ - The source is fixed from SOURCE PIX 2, passed through by
+   ``source_custom_model_from`` with ``source_is_model=False``.
 
 The lens light model is fit from scratch (not seeded from SOURCE LP) because the
 earlier mass and source models may not have been precise enough for an accurate
-lens-light subtraction.
+lens-light subtraction. The lens light and the lensed source overlap on the sky,
+so a source that is even slightly wrong pushes its residuals into the lens light
+model; now that the source is a converged pixelized reconstruction, the
+deblending is trustworthy and the light model is worth refitting properly.
+
+This ordering is what makes the final mass fit possible: MASS TOTAL takes this
+lens light as a fixed instance, so it never has to fit light and a ``PowerLaw``
+at the same time.
 """
 
 
@@ -273,11 +491,33 @@ def light_lp(
 """
 __MASS TOTAL PIPELINE__
 
-PowerLaw + ExternalShear mass model, priors seeded from SOURCE PIX result.
+The final search, fitting the mass model the whole pipeline exists to measure:
 
-Positions are computed from the SOURCE PIX 2 result for more precise multiple
-image positions.  The shear prior is reset to broad uniform priors because the
-``PowerLaw`` model can absorb azimuthal structure previously captured by shear.
+ - The lens light is the MGE fixed from LIGHT LP.
+ - The mass is a ``PowerLaw`` with an ``ExternalShear``, with priors initialized
+   from the ``Isothermal`` fit of SOURCE PIX 1 via ``al.util.chaining.mass_from``
+   (the ``PowerLaw`` adds a ``slope``, which the ``Isothermal`` fixed at 2.0).
+ - The source is carried through from SOURCE PIX 2 by
+   ``al.util.chaining.source_from``, so the mass is measured against the source
+   reconstruction those stages settled on.
+
+__Positions__
+
+Positions are computed from the SOURCE PIX 2 result rather than reused from
+SOURCE LP. The pixelized source reconstructs the source plane far better than
+the MGE did, so the multiple image positions it predicts are more precise, and
+the position threshold they impose on this search is correspondingly tighter.
+
+__Shear__
+
+``fit`` calls this stage with ``reset_shear_prior=True``, which replaces the
+chained shear with a fresh ``ExternalShear`` model: the search starts from the
+broad uniform priors of ``config/priors``, not from the SOURCE PIX posterior.
+Chaining a narrow shear prior into this search would be a mistake: the
+``PowerLaw`` slope changes how much azimuthal structure the mass profile itself
+can produce, so shear values that were the best fit alongside an ``Isothermal``
+are not the ones that best fit alongside a ``PowerLaw``. The shear has to be free
+to move.
 """
 
 
@@ -353,11 +593,30 @@ def fit(
     import autofit as af
     import autolens as al
 
+    """
+    __Dataset__
+
+    ``util.load_vis_dataset`` performs all standard dataset preparation in one
+    call: FITS layout, noise scaling, mask, over-sampling, PSF, WCS and zero-point.
+    Every step is documented individually in ``scripts/initial_lens_model.py``, and
+    the dataset contract it reads — including ``info.json``, which is where the mask
+    radius comes from — is described in ``start_here.py``.
+
+    The sparse operator is then applied on top. It speeds up the linear algebra of
+    the pixelized searches, which is where this pipeline spends most of its time.
+    """
     d = util.load_vis_dataset(dataset_name, sample_name=sample_name)
 
     # full_model uses a sparse operator for faster pixelisation fits
     dataset = d.dataset.apply_sparse_operator()
 
+    """
+    __Settings AutoFit__
+
+    Controls output paths and search behaviour. ``unique_tag="slam"`` places all five
+    searches of this pipeline together in ``output/<sample>/<dataset>/slam/``, one
+    folder per search name (``source_lp[1]``, ``source_pix[1]``, and so on).
+    """
     settings_search = af.SettingsSearch(
         path_prefix=(
             Path(sample_name) / dataset_name
@@ -369,14 +628,27 @@ def fit(
         session=None,
     )
 
+    """
+    __Redshifts__
+
+    For a single-plane lens, PyAutoLens units are dimensionless so the redshifts do
+    not affect the lens model. These are placeholders; photometric redshifts are
+    estimated after modeling via SED fitting of the latent-variable fluxes.
+    """
     redshift_lens = 0.5
     redshift_source = 1.0
 
     """
     __SOURCE LP PIPELINE__
 
-    Isothermal mass + MGE lens + MGE source.  Provides the initial model and
-    adapt image for the pixelised source stages that follow.
+    Isothermal mass + MGE lens + MGE source, all free.  Provides the initial model
+    and adapt image for the pixelised source stages that follow.
+
+    The analysis uses the multiple-image positions that came with the dataset:
+    ``util.load_vis_dataset`` reads ``positions.json`` if it is present, and
+    otherwise derives positions from the segmentation source flux map, leaving them
+    unused if neither is available. Later stages replace them with positions derived
+    from the previous search's result.
     """
     analysis = util.AnalysisImaging(
         dataset=dataset,
@@ -434,6 +706,17 @@ def fit(
     (``zeroed_pixels``) so the reconstruction is not distorted by the mask
     boundary.  ``pixels`` is therefore fixed by the grid rather than a free
     parameter: JAX requires statically shaped arrays.
+
+    The grid is uniform at this stage because the only adapt image available is the
+    one predicted by the SOURCE LP MGE source, which is too smooth to be worth
+    weighting a mesh by.  SOURCE PIX 2 does that, using this search's own
+    reconstruction.
+
+    The positions handed to the analysis are recomputed from the SOURCE LP result
+    with ``positions_likelihood_from``. Its threshold is not a hand-chosen number: it
+    is set by how closely the positions trace to one another in the source plane
+    under the best-fit mass model, multiplied by ``factor=3.0`` so plausible mass
+    models are not rejected, and floored at ``minimum_threshold=0.2``.
     """
     mask = dataset.mask
     edge_pixels_total = 30
@@ -510,7 +793,16 @@ def fit(
     Refined pixelisation using the adapt image from SOURCE PIX 1.  The
     image-plane grid is redrawn by a ``Hilbert`` image mesh weighted by that
     adapt image, so Delaunay source pixels concentrate on the bright parts of
-    the source.
+    the source and its faintest regions are reconstructed with far fewer pixels.
+    ``weight_power=3.5`` sets how sharply the point density follows the adapt
+    image, and ``weight_floor=0.01`` keeps the faint outskirts from being left
+    with no pixels at all.
+
+    Like the ``Overlay`` grid before it, this grid is computed here, before the
+    search, and stays fixed for its duration — which is why the lens light, mass
+    and shear are all fixed instances in this search: with the mesh frozen, the
+    only thing left to fit is the regularization, and freeing the mass alongside
+    it would reintroduce degeneracies that are slow and difficult to sample.
 
     ``pixels=500`` follows the Euclid sibling ``scripts/initial_lens_model.py``
     rather than the ``autolens_workspace`` ``delaunay.py`` example, which uses
@@ -575,7 +867,13 @@ def fit(
     """
     __LIGHT LP PIPELINE__
 
-    Refines the lens light (2×30 Gaussians) with mass and source fixed.
+    Refines the lens light (a fresh MGE of 2 x 20 Gaussians) with the mass fixed from
+    SOURCE PIX 1 and the source fixed from SOURCE PIX 2.
+
+    The analysis reuses the ``adapt_images`` built for SOURCE PIX 2, so the fixed
+    source instance is evaluated on the mesh grid it was fitted with. No positions
+    likelihood is needed: the mass model is not being varied here, so there are no
+    unphysical mass solutions to guard against.
     """
     analysis = util.AnalysisImaging(
         dataset=dataset,
@@ -608,7 +906,13 @@ def fit(
     """
     __MASS TOTAL PIPELINE__
 
-    PowerLaw + ExternalShear mass model, priors seeded from SOURCE LP result.
+    ``PowerLaw`` + ``ExternalShear`` mass model, with the mass priors seeded from
+    SOURCE PIX 1 — the last search in which the mass was free — the lens light fixed
+    from LIGHT LP and the source fixed from SOURCE PIX 2.
+
+    The positions likelihood is rebuilt from SOURCE PIX 2, whose pixelized source
+    gives a better source-plane reconstruction, and therefore more precise multiple
+    image positions, than the SOURCE LP fit used earlier.
     """
     analysis = util.AnalysisImaging(
         dataset=dataset,

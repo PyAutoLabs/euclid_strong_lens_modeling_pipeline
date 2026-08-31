@@ -75,6 +75,12 @@ If key output for your science case is not generated, please contact James Night
 SLACK so it can be added to the pipeline and become a standard output of the Euclid strong lens modeling pipeline
 and therefore data release.
 
+Some scripts used for the DR1 science runs were deliberately left out of this
+repository — see
+[`AGENTS.md`](AGENTS.md#not-ported--available-in-scienceeuclid) for the list and a
+reason for each, and [`docs/drift_report.md`](docs/drift_report.md) for the full
+record of what this pipeline inherited from the DR1 runs and why.
+
 ## Workflow
 
 After running `scripts/initial_lens_model.py` on many lenses, you will begin to build up a large number of results
@@ -84,6 +90,14 @@ efficient workflow to inspect the results and perform scientific analysis.
 The `workflow` folder contains example scripts for creating workflows which enable efficient inspection of
 large lens modeling results. Workflows are designed by creating .png, .csv and .fits files from the results
 in the `output` folder for fast inspection.
+
+## Documentation
+
+The following links are useful for anyone more interested in the **PyAutoLens** software:
+
+- [The PyAutoLens readthedocs](https://pyautolens.readthedocs.io/en/latest): which includes [an overview of PyAutoLens's core features](https://pyautolens.readthedocs.io/en/latest/overview/overview_1_start_here.html), [a new user starting guide](https://pyautolens.readthedocs.io/en/latest/overview/overview_2_new_user_guide.html) and [an installation guide](https://pyautolens.readthedocs.io/en/latest/installation/overview.html).
+- [The introduction Jupyter Notebook on Colab](https://colab.research.google.com/github/PyAutoLabs/autolens_workspace/blob/2026.7.9.1/start_here.ipynb): try **PyAutoLens** in a web browser (without installation).
+- [The autolens_workspace GitHub repository](https://github.com/PyAutoLabs/autolens_workspace): example scripts and the HowToLens Jupyter notebook lectures.
 
 ## The Scripts
 
@@ -106,57 +120,21 @@ python scripts/full_model.py --sample=q1_walsmley --dataset=EUCLJ174517.55+65561
 | `scripts/mge_lens_only.py` | MGE subtraction of the lens light only, revealing the lensed source quickly. | — |
 | `scripts/full_model.py` | The full SLaM chain: MGE source, two Delaunay pixelized-source stages, refined lens light, then a PowerLaw + shear mass model. Uses `al.mesh.Delaunay` with `al.reg.AdaptSplit` (`reg.Adapt` cannot JIT on the Delaunay family) and `pixels=500` in its second stage — the `autolens_workspace` `delaunay.py` example uses 1000, but Euclid VIS cut-outs are small. | — |
 
+**PyAutoLens** also has automated pipelines for modeling group-scale strong lenses, lensed
+point sources (e.g. lensed quasars) and double source plane lenses. They were previously
+in this repository and were removed (commit `fc43be0`, 2025-11-05) when it was narrowed to
+the Euclid VIS chain above; they still live in **PyAutoLens** itself and can be restored
+here on request — contact James Nightingale on the Euclid consortium SLACK.
+
 ### Diagnostics and catalogue
 
 | Script | What it does |
 |---|---|
-| `scripts/diagnose_latent.py` | Replays the Euclid latent catalogue on one converged result and prints every latent value, flagging NaN and zero sentinels. Runs no search. |
-| `scripts/diagnose_latent_vis_pix.py` | The population version: the same replay over every `vis_pix` result in a sample, reporting per-dataset OK/ERR. |
-| `scripts/build_inspect.py` | Collects the inspection bundle's PNGs out of finished result zips. |
+| `scripts/tools/diagnose_latent.py` | Replays the Euclid latent catalogue on one converged result and prints every latent value, flagging NaN and zero sentinels. Runs no search. |
+| `scripts/tools/diagnose_latent_vis_pix.py` | The population version: the same replay over every `vis_pix` result in a sample, reporting per-dataset OK/ERR. |
+| `scripts/tools/build_inspect.py` | Collects the inspection bundle's PNGs out of finished result zips. |
 | `scripts/build_inspection_bundle.sh` | Runs all seven catalogue stages in order for a sample. |
 | `catalogue/` | The producers that turn finished fits into the per-lens inspection bundle and the master CSVs — see [`catalogue/README.md`](catalogue/README.md) for the 13-file to producer table and the run order. |
-
-### Simulating a lens
-
-`scripts/simulator.py` is this repository's **only** producer of simulated data — no
-fitting script auto-simulates a missing dataset, because most users fit real Euclid
-imaging and a silent auto-simulate would hide a broken data path. It writes an
-ordinary dataset of this pipeline, so every fitting script reads it unchanged, plus a
-`truth.json` recording every parameter, per-band flux, aperture flux, magnification
-and Einstein radius that went in.
-
-```bash
-# --from-params: an analytic lens (Isothermal + shear mass, Sersic lens light,
-# Sersic source) from the truth values at the top of the script
-python scripts/simulator.py --from-params --output-dataset=my_lens
-
-# --from-result: resimulate a fit you have already run. The tracer is rebuilt from
-# that result's model.json + maximum-log-likelihood sample; the bands, PSFs,
-# zero-points, WCS and noise come from the dataset it was fitted to.
-python scripts/simulator.py --from-result \
-    --sample=q1_walsmley --dataset=102018665_NEG570040238507752998 \
-    --unique_tag=sersic_lens_model --search=vis \
-    --output-dataset=102018665_resimulated
-```
-
-`python scripts/simulator.py --help` lists the rest (bands, image shape, pixel scale,
-mask radius, seed). Under `PYAUTO_TEST_MODE` the output goes to
-`$PYAUTO_OUTPUT_DIR/simulator/` instead of `dataset/`, so a smoke run can never
-overwrite a committed dataset; `--force-dataset-dir` writes to `dataset/` anyway.
-
-The mock this repository ships is `dataset/simulated/euclid_dr1_like/`. See
-[`dataset/README.md`](dataset/README.md) for every dataset here, what it is, what
-reads it and how to regenerate it.
-
-Some scripts used for the DR1 science runs were deliberately left out of this
-repository — see
-[`AGENTS.md`](AGENTS.md#not-ported--available-in-scienceeuclid) for the list and a
-reason for each, and [`docs/drift_report.md`](docs/drift_report.md) for the full
-record of what this pipeline inherited from the DR1 runs and why.
-
-**PyAutoLens** has automated pipelines for modeling group-scale strong lenses, lensed point sources (e.g. lensed quasars)
-and double source plane lenses. These will be added to this repository in future releases, but if you are interested
-in using these pipelines sooner please contact James Nightingale on the Euclid consortium SLACK.
 
 ## Command-Line Arguments
 
@@ -184,6 +162,32 @@ Two environment variables change where results go:
   `<output>/test_mode/`. Use it to check a script runs before submitting a real
   fit.
 
+## Simulating a lens
+
+`scripts/simulator.py` is this repository's **only** producer of simulated data — no
+fitting script auto-simulates a missing dataset, because most users fit real Euclid
+imaging and a silent auto-simulate would hide a broken data path. It writes an ordinary
+dataset of this pipeline, so every fitting script reads it unchanged, plus a `truth.json`
+recording every parameter, per-band flux, aperture flux, magnification and Einstein
+radius that went in; the mock it produced and this repository ships is
+`dataset/simulated/euclid_dr1_like/` (see [`dataset/README.md`](dataset/README.md) for
+every dataset here and how to regenerate it). `python scripts/simulator.py --help` lists
+the rest of the options — bands, image shape, pixel scale, mask radius, seed.
+
+```bash
+# --from-params: an analytic lens (Isothermal + shear mass, Sersic lens light,
+# Sersic source) from the truth values at the top of the script
+python scripts/simulator.py --from-params --output-dataset=my_lens
+
+# --from-result: resimulate a fit you have already run. The tracer is rebuilt from
+# that result's model.json + maximum-log-likelihood sample; the bands, PSFs,
+# zero-points, WCS and noise come from the dataset it was fitted to.
+python scripts/simulator.py --from-result \
+    --sample=q1_walsmley --dataset=102018665_NEG570040238507752998 \
+    --unique_tag=sersic_lens_model --search=vis \
+    --output-dataset=102018665_resimulated
+```
+
 ## Dataset Requirements
 
 A dataset directory is `dataset/<sample>/<name>/` and holds `<name>.fits` (the
@@ -192,30 +196,11 @@ multi-HDU cut-out) and `info.json` (`pixel_scale`, `mask_radius`, optionally
 dataset this repository ships is listed in [`dataset/README.md`](dataset/README.md),
 with what reads it and how to regenerate it.
 
-### The `WORST_BAND` / `WORST_PSF_*` header contract
-
-The four aperture-flux latent variables (`total_lens_flux_{1,2,3,4}_fwhm_mujy`)
-are matched-aperture photometry: the lens image is convolved to the resolution of
-the **worst-seeing** band across all MER bands, and fluxes are measured at 1, 2, 3
-and 4 times that band's PSF FWHM. Two things in the FITS **primary** header make
-that possible, and both are stamped by the upstream Euclid cut-out generator —
-neither this pipeline nor PyAutoReduce writes them, so they are an input contract
-on the dataset:
-
-- **`WORST_BAND`** names the worst-seeing band (e.g. `DES_G`). Lower-cased it
-  indexes the HDU list to find that band's PSF.
-- **`WORST_PSF_MER`**, **`WORST_PSF_HDR`**, **`WORST_PSF`** hold that PSF's FWHM
-  in arcsec. They are read in that order — the OU-MER measured value first, then
-  the cut-out pipeline's own — skipping Euclid's `-99` "not measured" sentinel.
-
-What happens when they are absent:
-
-- **`WORST_BAND` missing, or naming a band not in the cut-out** — a warning is
-  printed and the four aperture latents are skipped for that dataset. The fit
-  itself is unaffected.
-- **`WORST_BAND` present but all three FWHM keys missing or `-99`** — the load
-  **raises**. This is deliberate: the aperture radii are multiples of this FWHM,
-  so a guessed value would silently corrupt the photometry rather than fail.
+The FITS **primary** header additionally carries the `WORST_BAND` / `WORST_PSF_*`
+input contract that the aperture-flux latents need. It is documented where it is
+read, in `util.py` — `load_vis_dataset` for `WORST_BAND` and the two degradation
+paths, `psf_fwhm_arcsec_from_primary_header` for the FWHM key order and the `-99`
+sentinel.
 
 ## Testing and Continuous Integration
 
@@ -244,7 +229,8 @@ A new script is not automatically covered: `tests/test_repo_invariants.py` fails
 unless every `*.py` under `scripts/`, `catalogue/scripts/`, `preprocess/`, `tools/`,
 `workflow/`, `.github/scripts/` and the repository root is either listed in
 `smoke_tests.txt` or excluded in `config/build/no_run.yaml` with a written reason.
-[`AGENTS.md`](AGENTS.md#continuous-integration) has the full CI section.
+[`AGENTS.md`](AGENTS.md#continuous-integration) carries the runner details and the
+three invariants CI enforces.
 
 ## Visualization
 
@@ -259,11 +245,3 @@ That one key covers imaging data, fits, residual maps and inversion
 reconstructions. A single figure can be overridden without touching config by
 passing `colormap=` to the plot function. See
 [`config/visualize/README.md`](config/visualize/README.md) for the details.
-
-## Documentation
-
-The following links are useful for anyone more interested in the **PyAutoLens** software:
-
-- [The PyAutoLens readthedocs](https://pyautolens.readthedocs.io/en/latest): which includes [an overview of PyAutoLens's core features](https://pyautolens.readthedocs.io/en/latest/overview/overview_1_start_here.html), [a new user starting guide](https://pyautolens.readthedocs.io/en/latest/overview/overview_2_new_user_guide.html) and [an installation guide](https://pyautolens.readthedocs.io/en/latest/installation/overview.html).
-- [The introduction Jupyter Notebook on Colab](https://colab.research.google.com/github/PyAutoLabs/autolens_workspace/blob/2026.7.9.1/start_here.ipynb): try **PyAutoLens** in a web browser (without installation).
-- [The autolens_workspace GitHub repository](https://github.com/PyAutoLabs/autolens_workspace): example scripts and the HowToLens Jupyter notebook lectures.

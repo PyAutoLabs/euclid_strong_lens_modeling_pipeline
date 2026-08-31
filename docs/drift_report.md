@@ -71,7 +71,7 @@ meant to run under a dedicated `PYAUTO_OUTPUT_DIR` so the per-band SED
 outputs don't bloat the main results tree; each upstream stage
 cache-short-circuits if its result zip already exists.
 
-`scripts/diagnose_latent.py` and `scripts/diagnose_latent_vis_pix.py` are the
+`scripts/tools/diagnose_latent.py` and `scripts/tools/diagnose_latent_vis_pix.py` are the
 human-inspection route for the Euclid latent catalogue — the former replays
 it on one converged result, the latter sweeps a population of `vis_pix`
 results, reporting per-dataset OK/ERR so one bad tile cannot truncate the
@@ -81,7 +81,7 @@ The `catalogue/` producer tree (`catalogue/scripts/{deblending, lens_mass,
 lens_sersic, source_sersic, multi_wavelength, magnitudes}.py`, plus the
 shared `catalogue_util.py`) turns a directory of finished fits into the
 inspection bundle described in `catalogue/README.md`.
-`scripts/build_inspect.py` collects the bundle's image outputs, and
+`scripts/tools/build_inspect.py` collects the bundle's image outputs, and
 `scripts/build_inspection_bundle.sh` runs the full seven-stage order.
 
 ## 2. `start_here.py` collapsed to a shim

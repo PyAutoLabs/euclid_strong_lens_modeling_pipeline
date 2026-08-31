@@ -493,6 +493,20 @@ class LatentEuclid(al.LatentLens):
         with ``psf_lowest_resolution`` and centred at its brightest pixel. The
         ``FitImaging`` is built once and shared. Returns a tuple positionally
         aligned with :meth:`keys`.
+
+        The four aperture values are **matched-aperture** photometry: the lens
+        image is convolved to the resolution of the worst-seeing band across
+        all MER bands (``psf_lowest_resolution``, selected by the dataset's
+        ``WORST_BAND`` header key) and the flux is measured inside circular
+        apertures of 1, 2, 3 and 4 times that band's PSF FWHM — hence the
+        ``total_lens_flux_{1,2,3,4}_fwhm_mujy`` keys. Matching the aperture to
+        the worst band is what makes the per-band fluxes comparable, and so
+        usable for SED fitting.
+
+        If the analysis carries no worst-band PSF (``WORST_BAND`` absent from
+        the dataset, or naming a band not in the cut-out) the four values are
+        NaN and are dropped from the written latent summary; the fit itself is
+        unaffected.
         """
         from autolens.analysis.latent import LATENT_FUNCTIONS, latent_keys_enabled
 
@@ -828,9 +842,24 @@ def load_vis_dataset(
         hdu=0,
     )
 
-    # `WORST_BAND` / `WORST_PSF_*` are stamped by the upstream Euclid cut-out
-    # generator; neither this pipeline nor PyAutoReduce writes them. When they
-    # are absent the aperture-flux latents degrade to NaN rather than crashing.
+    # `WORST_BAND` / `WORST_PSF_*` are an *input contract* on the dataset: they
+    # are stamped by the upstream Euclid cut-out generator, and neither this
+    # pipeline nor PyAutoReduce writes them.
+    #
+    # `WORST_BAND` names the worst-seeing band across all MER bands (e.g.
+    # `DES_G`); lower-cased it indexes the HDU list to find that band's PSF,
+    # which the aperture-flux latents are convolved to. The FWHM itself comes
+    # from `WORST_PSF_MER` / `WORST_PSF_HDR` / `WORST_PSF` (see
+    # `psf_fwhm_arcsec_from_primary_header`).
+    #
+    # Two degradation paths, deliberately different:
+    #
+    #  - `WORST_BAND` missing, or naming a band absent from the cut-out: warn
+    #    and skip the four aperture latents (they come out NaN). The fit itself
+    #    is unaffected.
+    #  - `WORST_BAND` present but every FWHM key missing or `-99`: raise. The
+    #    aperture radii are multiples of that FWHM, so a guessed value would
+    #    silently corrupt the photometry rather than fail.
     worst_band = header_primary.get("WORST_BAND", None)
     if worst_band is not None:
         lowest_resolution_waveband = worst_band.lower()

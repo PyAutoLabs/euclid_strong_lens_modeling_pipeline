@@ -53,6 +53,10 @@ psf.output_to_fits(file_path=Path(dataset_path) / "psf.fits", overwrite=True)
 
 """
 __Png output__
+
+Plot the full and trimmed PSFs side by side as log10 .png images in the dataset
+folder, so the trim can be checked by eye: the trimmed kernel should retain the
+PSF core and its first ring while the clipped wings are visibly negligible.
 """
 aplt.plot_array(
     array=psf_full,
