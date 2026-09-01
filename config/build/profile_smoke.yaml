@@ -36,6 +36,6 @@ overrides:
   # `smoke_tests.txt` entries run sequentially in one un-wiped output dir, so
   # `start_here.py` (entry 1) has already produced the `vis_lp` result this
   # reads.
-  - pattern: scripts/diagnose_latent.py
+  - pattern: scripts/tools/diagnose_latent.py
     set:
       PYAUTO_OUTPUT_DIR: "output/test_mode"

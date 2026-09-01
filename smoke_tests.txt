@@ -1,6 +1,6 @@
 # Scripts run by the PyAutoHeart smoke runner, in this order, in one output
 # directory that is wiped once before the first entry. Order is load-bearing:
-# scripts/diagnose_latent.py replays the latents of a finished result, so every
+# scripts/tools/diagnose_latent.py replays the latents of a finished result, so every
 # fit it reads must already have run above it.
 # `scripts/simulator.py` first: it is the dataset producer, and under
 # PYAUTO_TEST_MODE it writes to $PYAUTO_OUTPUT_DIR/simulator/ rather than
@@ -14,4 +14,4 @@ scripts/lens_model_waveband.py
 scripts/mge_lens_only.py
 scripts/sersic_lens_model.py
 scripts/sersic_lens_model_waveband.py
-scripts/diagnose_latent.py
+scripts/tools/diagnose_latent.py

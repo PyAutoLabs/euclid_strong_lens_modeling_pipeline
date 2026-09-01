@@ -2,7 +2,7 @@
 Euclid Pipeline: Latent Variable Diagnostic (population sweep)
 ==============================================================
 
-The population version of ``scripts/diagnose_latent.py``. Where that script
+The population version of ``scripts/tools/diagnose_latent.py``. Where that script
 interrogates one result in depth, this one sweeps the first N converged results
 of a sample and prints the latent catalogue for each, so you can tell at a
 glance whether a latent failure is *universal* (every tile — a code or config
@@ -36,7 +36,7 @@ That is a real, reproducible property of the stage rather than a latent bug, and
 it is what a universal-failure sweep looks like. For a latent readout that
 evaluates end to end, sweep the light-profile stage instead::
 
-    python scripts/diagnose_latent_vis_pix.py --search=vis_lp
+    python scripts/tools/diagnose_latent_vis_pix.py --search=vis_lp
 
 The library latents that do not depend on the source reconstruction
 (``magnification``, ``effective_einstein_radius``, the lens fluxes) are
@@ -51,15 +51,15 @@ Usage
 -----
 Defaults target the shipped example dataset's sample::
 
-    python scripts/diagnose_latent_vis_pix.py
+    python scripts/tools/diagnose_latent_vis_pix.py
 
 Sweep a real sample::
 
-    python scripts/diagnose_latent_vis_pix.py --sample=dr1_prelim_grade_ab --limit=5
+    python scripts/tools/diagnose_latent_vis_pix.py --sample=dr1_prelim_grade_ab --limit=5
 
 Inspect a test-mode smoke run::
 
-    python scripts/diagnose_latent_vis_pix.py --output_path=output/test_mode
+    python scripts/tools/diagnose_latent_vis_pix.py --output_path=output/test_mode
 """
 
 import argparse
@@ -69,7 +69,7 @@ import sys
 import traceback
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import util
 
@@ -213,7 +213,7 @@ def main():
 
     from autolens import conf
 
-    project_root = Path(__file__).parent.parent
+    project_root = Path(__file__).parent.parent.parent
     output_path = (
         Path(args.output_path)
         if args.output_path is not None

@@ -81,8 +81,8 @@ cd "$PROJECT_ROOT"
 
 mkdir -p "$INSPECT_DIR"
 
-echo "==> [1/7] inspection PNGs (scripts/build_inspect.py)"
-python "$PROJECT_ROOT/scripts/build_inspect.py" \
+echo "==> [1/7] inspection PNGs (scripts/tools/build_inspect.py)"
+python "$PROJECT_ROOT/scripts/tools/build_inspect.py" \
     --sample="$SAMPLE" \
     --output_path="$OUTPUT_DIR" \
     --inspect_dir="$INSPECT_DIR" \

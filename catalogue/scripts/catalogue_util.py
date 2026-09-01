@@ -119,7 +119,18 @@ def write_per_tile_csv(master_csv: Path, inspect_path: Path, filename: str) -> i
     emitting several rows per lens (``magnitudes``, one per waveband) both work.
     Rows without a ``lens_name`` are skipped.
 
-    Returns the number of per-lens files written.
+    The split reads the master back rather than being handed the rows, so the two
+    can never disagree, and each per-lens file keeps the master's full header —
+    the columns are identical, only the rows are fewer. That is what lets a
+    single lens folder be shipped on its own and still be parsed by anything that
+    reads the master.
+
+    Lens directories are created as needed, so this works on a fresh inspect
+    directory as well as alongside products earlier stages already wrote.
+
+    Returns the number of per-lens files written (i.e. the number of distinct
+    ``lens_name`` values), which for a multi-row producer is smaller than the
+    number of rows in the master.
     """
     with open(master_csv) as f:
         reader = csv.DictReader(f)

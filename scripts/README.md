@@ -1,7 +1,8 @@
-The `scripts` folder contains the pipelines that fit Euclid data, the simulator
-that makes data to fit, plus the diagnostics and the two orchestrators that
-build the catalogue's inspection bundle. Everything here is run from the
-**repository root**, not from this folder:
+The `scripts` folder contains the pipelines that fit Euclid data and the
+simulator that makes data to fit. The diagnostics and the catalogue-bundle
+tooling live one level down in `scripts/tools/`, keeping the model-running
+scripts separate from the things that inspect their results. Everything here is
+run from the **repository root**, not from this folder:
 
 ```bash
 python scripts/initial_lens_model.py --sample=q1_walsmley --dataset=<name>
@@ -59,7 +60,7 @@ All fitting pipelines share one argument parser (`util.parse_fit_args`) —
     `tests/test_compute_latent_variable.py`.
   - `--from-result` resimulates a fit you have already run: the tracer is rebuilt
     from that result's `model.json` + maximum-log-likelihood sample (resolved with
-    `diagnose_latent.py::resolve_files_path`, so the arguments are the same
+    `tools/diagnose_latent.py::resolve_files_path`, so the arguments are the same
     `--sample` / `--dataset` / `--unique_tag` / `--search` / `--result_hash`) and
     the bands, PSF stamps, zero-points, WCS and noise levels come from the dataset
     it was fitted to. A single-band fit written to multiple bands applies the
@@ -78,18 +79,18 @@ All fitting pipelines share one argument parser (`util.parse_fit_args`) —
 
 # Diagnostics
 
-- `diagnose_latent.py`: Replays the Euclid latent catalogue
+- `tools/diagnose_latent.py`: Replays the Euclid latent catalogue
   (`util.LatentEuclid`) on one converged result and prints every latent value,
   flagging NaN and zero sentinels, plus the Einstein radius in isolation. Runs no
   search. Test-mode results live under `<output>/test_mode/`, so pass
   `--output_path=output/test_mode` to inspect a smoke run.
-- `diagnose_latent_vis_pix.py`: The population version — the same replay over
+- `tools/diagnose_latent_vis_pix.py`: The population version — the same replay over
   every `vis_pix` result in a sample, reporting per-dataset OK/ERR plus a
   summary. Takes `--sample`, not `--dataset`.
 
 # Catalogue orchestration
 
-- `build_inspect.py`: Collects the inspection bundle's PNGs out of the result
+- `tools/build_inspect.py`: Collects the inspection bundle's PNGs out of the result
   zips PyAutoFit writes (falling back to an unzipped result directory).
 - `build_inspection_bundle.sh`: Runs all seven catalogue stages in order for a
   sample. See [`../catalogue/README.md`](../catalogue/README.md) for the
