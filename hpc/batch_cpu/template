@@ -1,4 +1,19 @@
 #!/bin/bash -l
+#
+# Starting point for a one-off CPU job: a single lens, no array, both stages in
+# one Numba-only Python process (`--use_cpu`, no JAX).
+#
+# Copy it, rename it, and change the `sample`, `dataset` and the `python3` line
+# to whichever script you want to run. For fitting more than one lens, start
+# from `submit_initial_lens_model` (array job, same single-process shape) or,
+# better, from the two-stage scripts:
+#
+#   submit_initial_lens_model_two_stage  one submission, two processes
+#   submit_initial_lens_model_vis_lp     stage 1, JAX on CPU
+#   submit_initial_lens_model_vis_pix    stage 2, Numba CPU sparse, no JAX
+#
+# which give each stage the thread/process environment it actually wants. See
+# the header of `submit_initial_lens_model` for why one process cannot.
 
 #SBATCH -J euclid_cpu
 #SBATCH -n 1
@@ -9,21 +24,29 @@
 #SBATCH -t 18:00:00
 #SBATCH --mem=64gb
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=james.w.nightingale@durham.ac.uk
+#SBATCH --mail-user=your.email@institution.ac.uk
 
-# -------------------------------
+# -----------------------------------------------------------------------------
 # Environment
 #
-# Set PROJECT_PATH before submitting:
-#   export PROJECT_PATH=/path/to/your/project
-# -------------------------------
+# Set PROJECT_PATH to this project on the HPC before submitting:
+#
+#   export PROJECT_PATH=/PATH/TO/LARGE_STORAGE/YOUR_USERNAME/euclid_strong_lens_modeling_pipeline
+#   sbatch hpc/batch_cpu/template
+#
+# This is the same location as $HPC_BASE/$PROJECT_NAME in hpc/sync.conf.
+# -----------------------------------------------------------------------------
 source $PROJECT_PATH/activate.sh
 
-# Force JAX to use CPU only (no GPU)
+# `--use_cpu` already keeps JAX out of the run; these are belt and braces, so
+# that an incidental JAX import somewhere in the stack cannot reach for a GPU
+# that was not allocated to this job.
 export JAX_PLATFORM_NAME=cpu
 export JAX_PLATFORMS=cpu
 
-# Pin thread counts to the allocated CPUs
+# Pin every linear algebra library to the CPUs SLURM actually allocated. Without
+# this each library spawns one thread per physical core, and jobs sharing a node
+# oversubscribe it badly.
 THREADS=$SLURM_CPUS_PER_TASK
 export OPENBLAS_NUM_THREADS=$THREADS
 export MKL_NUM_THREADS=$THREADS
@@ -32,18 +55,18 @@ export VECLIB_MAXIMUM_THREADS=$THREADS
 export NUMEXPR_NUM_THREADS=$THREADS
 export NPROC=$THREADS
 
-# -------------------------------
+# -----------------------------------------------------------------------------
 # Sample and Dataset
 #
 # Set sample to the subdirectory inside dataset/ and dataset to the specific lens.
-# For one-off single runs; use submit_initial_lens_model for array jobs.
-# -------------------------------
+# -----------------------------------------------------------------------------
 sample=q1_walsmley
 dataset=102018665_NEG570040238507752998
 
 echo "=========================================="
-echo "Sample: $sample"
-echo "Dataset: $dataset"
+echo "Sample  : $sample"
+echo "Dataset : $dataset"
+echo "CPUs    : $THREADS"
 date
 
 python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \

@@ -1,33 +1,28 @@
 #!/bin/bash -l
 #
-# Initial lens model on CPU: both stages, one submission, ONE Python process,
-# no JAX anywhere.
+# Initial lens model, stage 1 of 2 on CPU: the `vis_lp` search only.
 #
 # WHAT THIS DOES
-#   Runs `vis_lp` and `vis_pix` back to back in a single `python3` call with
-#   `--use_cpu`, which disables JAX for the whole run and swaps in the Numba CPU
-#   sparse operator for the pixelized stage.
+#   Fits the light-profile source model (`vis_lp`) with JAX pinned to the CPU
+#   backend, then exits. It does NOT fit the pixelized source.
 #
-# WHEN TO USE IT
-#   When JAX is unavailable or unwanted on the cluster -- this is the one route
-#   that never imports a JAX backend -- or for a single quick fit where the
-#   simplicity of one job is worth more than the runtime.
+# WHY IT EXITS AFTER vis_lp
+#   The pixelized stage (`vis_pix`) on CPU is parallelised by a forked
+#   multiprocessing pool, and a forked pool cannot be used safely in a process
+#   in which JAX has already initialised. Ending the job here guarantees the
+#   next stage starts in a fresh Python process that has never imported a JAX
+#   backend.
 #
-# THE COST, AND WHY THE TWO-STAGE SCRIPTS EXIST
-#   One process means one environment, and the two stages want opposite ones.
-#   `vis_lp` is fastest with the allocation spent on BLAS/Numba *threads*;
-#   `vis_pix` is parallelised by a Nautilus process pool and wants those threads
-#   pinned to 1, or each of `--number_of_cores` workers spawns a full complement
-#   of threads and oversubscribes the node. The thread counts below serve
-#   `vis_lp`, so the `vis_pix` half of this job is oversubscribed by design.
+# WHAT TO SUBMIT NEXT
+#   sbatch submit_initial_lens_model_vis_pix
+#   (keep the `sample`, `datasets` and `--array` values below in step with it,
+#   so array task N fits the same lens in both jobs)
 #
-#   `submit_initial_lens_model_two_stage` (one submission) and
-#   `submit_initial_lens_model_vis_lp` + `submit_initial_lens_model_vis_pix`
-#   (two submissions) split the run into two processes, which lets each stage
-#   have the environment it wants and lets `vis_lp` use JAX on the CPU. Prefer
-#   one of those for anything beyond a handful of lenses.
+#   If you would rather send one job to the queue instead of two, use
+#   `submit_initial_lens_model_two_stage`, which runs both stages back to back
+#   in separate Python processes inside a single allocation.
 
-#SBATCH -J euclid_initial_lens_model_cpu
+#SBATCH -J euclid_initial_lens_model_vis_lp
 #SBATCH -n 1
 #SBATCH --cpus-per-task=8
 #SBATCH -o output/output.%A_%a.out
@@ -45,15 +40,14 @@
 # Set PROJECT_PATH to this project on the HPC before submitting:
 #
 #   export PROJECT_PATH=/PATH/TO/LARGE_STORAGE/YOUR_USERNAME/euclid_strong_lens_modeling_pipeline
-#   sbatch hpc/batch_cpu/submit_initial_lens_model
+#   sbatch hpc/batch_cpu/submit_initial_lens_model_vis_lp
 #
 # This is the same location as $HPC_BASE/$PROJECT_NAME in hpc/sync.conf.
 # -----------------------------------------------------------------------------
 source $PROJECT_PATH/activate.sh
 
-# `--use_cpu` already keeps JAX out of the run; these are belt and braces, so
-# that an incidental JAX import somewhere in the stack cannot reach for a GPU
-# that was not allocated to this job.
+# Force JAX onto the CPU backend, so it does not try to use a GPU that was not
+# allocated to this job.
 export JAX_PLATFORM_NAME=cpu
 export JAX_PLATFORMS=cpu
 
@@ -61,8 +55,9 @@ export JAX_PLATFORMS=cpu
 # this each library spawns one thread per physical core, and array jobs sharing
 # a node oversubscribe it badly.
 #
-# This setting favours `vis_lp`; see "THE COST" in the header for what it means
-# for the `vis_pix` half of the run.
+# Threads are the right unit of parallelism for this stage: the `vis_lp` search
+# evaluates a batch of models on the device, so its speed comes from JAX and
+# BLAS threading rather than from a process pool.
 THREADS=$SLURM_CPUS_PER_TASK
 export OPENBLAS_NUM_THREADS=$THREADS
 export MKL_NUM_THREADS=$THREADS
@@ -91,9 +86,6 @@ datasets=(
 102018665_NEG570040238507752998
 )
 
-# -----------------------------------------------------------------------------
-# Select dataset for this array task
-# -----------------------------------------------------------------------------
 INDEX=$SLURM_ARRAY_TASK_ID
 dataset="${datasets[$INDEX]}"
 
@@ -101,15 +93,15 @@ echo "=========================================="
 echo "Array task : $INDEX / ${#datasets[@]}"
 echo "Sample     : $sample"
 echo "Dataset    : $dataset"
-echo "Stage      : vis_lp + vis_pix (Numba CPU, no JAX)"
+echo "Stage      : vis_lp (JAX on CPU)"
 echo "CPUs       : $THREADS"
 date
 
-# `--use_cpu` disables JAX and swaps in the Numba CPU sparse operator for the
-# pixelized stage; `--number_of_cores` parallelises the Nautilus sampler across
-# the CPUs allocated above.
+# `--number_of_cores` is inert for this stage — the `vis_lp` search takes its
+# parallelism from the device batch, not from a pool — but it is passed anyway
+# so the two stage scripts read identically and a single edit changes both.
 python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \
-    --use_cpu --number_of_cores=$THREADS
+    --stage=vis_lp --number_of_cores=$THREADS
 
-echo "Finished: $dataset"
+echo "Finished vis_lp: $dataset"
 date

@@ -1,4 +1,21 @@
 #!/bin/bash -l
+#
+# Initial lens model on GPU: both stages, one submission, one Python process.
+#
+# THIS IS THE RECOMMENDED ROUTE for fitting a small subset of lenses.
+#
+# WHAT THIS DOES
+#   Runs `vis_lp` and `vis_pix` end to end in a single `python3` call with JAX
+#   on the allocated GPU. Both stages -- including the pixelized inversion --
+#   run on the device, so no process pool is involved and no process boundary
+#   between the stages is needed. One job per lens, and that is the whole story.
+#
+# WHEN TO USE THE CPU SCRIPTS INSTEAD
+#   When no GPU partition is available to you, or when the GPU queue is long
+#   enough that CPU nodes get you results sooner. `hpc/batch_cpu/` holds those
+#   routes; start from `submit_initial_lens_model_two_stage`, and read its
+#   header for why the CPU path has to split the two stages across two
+#   processes and this one does not.
 
 #SBATCH -J euclid_initial_lens_model
 #SBATCH --partition=gpu
