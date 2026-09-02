@@ -14,9 +14,14 @@
 #   `submit_initial_lens_model_vis_lp` first and let it finish.
 #
 #   No JAX environment is exported below. That is deliberate, and is the reason
-#   this is a separate job: a forked pool cannot be used safely in a process in
-#   which JAX has already initialised, so the process boundary between the two
-#   stages is what makes the CPU route work at all.
+#   this is a separate job. The two stages run as separate Python processes.
+#   This is a conservative default: PyAutoFit documents an XLA deadlock for a
+#   forked worker whose likelihood touches JAX, and the DR1 science runs were
+#   submitted this way. A local control test (hpc/diagnostics/jax_fork_control.py)
+#   did not reproduce a hang for the CPU route, whose vis_pix likelihood is
+#   Numba; production sampler sizes and large pools are untested, so the
+#   boundary is kept until a cluster run passes. hpc/README.md has the
+#   measured table.
 
 #SBATCH -J euclid_initial_lens_model_vis_pix
 #SBATCH -n 1

@@ -619,10 +619,7 @@ def fit(
 
     On CPU the two searches are run as two separate processes: ``--stage vis_lp``
     first, with JAX on CPU, and then ``--stage vis_pix``, with the Numba sparse
-    operator and a multiprocessing pool of ``--number_of_cores``. They cannot
-    share one process, because a forked pool cannot be used in a process in which
-    JAX has already initialised — so the pool that this search wants is only
-    available to a process that never ran ``vis_lp``. The second process does not
+    operator and a multiprocessing pool of ``--number_of_cores``. The two stages run as separate Python processes. This is a conservative default: PyAutoFit documents an XLA deadlock for a forked worker whose likelihood touches JAX, and the DR1 science runs were submitted this way. A local control test (hpc/diagnostics/jax_fork_control.py) did not reproduce a hang for the CPU route, whose vis_pix likelihood is Numba; production sampler sizes and large pools are untested, so the boundary is kept until a cluster run passes. hpc/README.md has the measured table. The second process does not
     re-fit ``vis_lp``: it loads the completed result the first one wrote, and
     fails immediately if that result is missing (see "__Stage: vis_pix Requires A
     Completed vis_lp__" above). ``hpc/README.md`` documents the submission

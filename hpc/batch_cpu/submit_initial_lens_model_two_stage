@@ -8,9 +8,15 @@
 #   consecutive `python3` invocations inside a single SLURM allocation.
 #
 # WHY TWO PROCESSES RATHER THAN ONE
-#   The `vis_pix` search is parallelised by a forked multiprocessing pool, and a
-#   forked pool cannot be used safely in a process in which JAX has already
-#   initialised. Running the two stages as separate `python3` calls preserves
+#   The `vis_pix` search is parallelised by a forked multiprocessing pool. The
+#   two stages run as separate Python processes. This is a conservative
+#   default: PyAutoFit documents an XLA deadlock for a forked worker whose
+#   likelihood touches JAX, and the DR1 science runs were submitted this way.
+#   A local control test (hpc/diagnostics/jax_fork_control.py) did not
+#   reproduce a hang for the CPU route, whose vis_pix likelihood is Numba;
+#   production sampler sizes and large pools are untested, so the boundary is
+#   kept until a cluster run passes. hpc/README.md has the measured table.
+#   Running the two stages as separate `python3` calls preserves
 #   that process boundary -- the second call starts from a clean interpreter
 #   that has never imported a JAX backend -- while still costing you only one
 #   submission and one place in the queue.

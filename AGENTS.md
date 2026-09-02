@@ -43,7 +43,7 @@ environment variables and the per-script tables are in
 [`scripts/README.md`](scripts/README.md), not duplicated here. What is not there:
 
 - `util.parse_fit_args()` returns a **6-tuple**: `(sample_name, dataset_name,
-  iterations_per_quick_update, number_of_cores, use_cpu, skip_pix)`.
+  iterations_per_quick_update, number_of_cores, use_cpu, stage)`.
 - The diagnostics take their own arguments. `scripts/tools/diagnose_latent.py`
   accepts `--dataset` / `--sample` / `--output_path` / `--unique_tag` /
   `--search` / `--result_hash`; `scripts/tools/diagnose_latent_vis_pix.py` is a
@@ -186,14 +186,12 @@ overwrite the committed dataset (`--force-dataset-dir` overrides that).
 ## HPC
 
 `hpc/` holds the `batch_gpu/` / `batch_cpu/` SLURM submit scripts (with their
-`output/` and `error/` logs) and the `sync` script. Setup:
-`cp hpc/sync.conf.example hpc/sync.conf` and edit in your host and paths
-(`sync.conf` is gitignored). `hpc/sync push | pull | sync | status`: `push` sends
-the source trees plus `dataset/` with `--ignore-existing`, `pull` retrieves
-`output/`, `output_sed/` (the SED chain's tree) and `inspect/`, skipping any
-absent on the cluster. Submit from the cluster itself, e.g.
-`sbatch hpc/batch_gpu/submit_initial_lens_model`, with `PROJECT_PATH` exported to
-the remote project root.
+`output/` and `error/` logs) and the `sync` script (`push | pull | sync | status`
+plus `submit`, `push-submit`, `jobs`, `tail`, `logs`, `wait-and-pull` and more
+(`hpc/sync help`)). Route choice, the `--stage` argument, the per-stage
+environment blocks, the measured process-boundary test and the full `hpc/sync`
+verb list are in `hpc/README.md`; the three cluster `config/general.yaml` keys
+below are also repeated there.
 
 The shipped `config/` is deliberately **laptop-friendly**. Three
 `config/general.yaml` keys were different in the DR1 science runs — cluster

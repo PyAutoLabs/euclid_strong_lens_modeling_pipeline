@@ -47,10 +47,10 @@ if __name__ == "__main__":
         iterations_per_quick_update,
         number_of_cores,
         use_cpu,
-        skip_pix,
+        stage,
     ) = util.parse_fit_args()
 
-    # `skip_pix=True` is forced: the Sersic source prior is seeded from
+    # `stage="vis_lp"` is forced: the Sersic source prior is seeded from
     # `galaxies.source.bulge`, which the `vis_pix` stage replaces with a
     # pixelization.
     vis_lp_result = fit(
@@ -59,7 +59,7 @@ if __name__ == "__main__":
         iterations_per_quick_update=iterations_per_quick_update,
         number_of_cores=number_of_cores,
         use_cpu=use_cpu,
-        skip_pix=True,
+        stage="vis_lp",
     )
 
     sersic_result = fit_sersic(

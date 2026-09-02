@@ -55,7 +55,7 @@ date
 nvidia-smi
 
 # -------------------------------
-# Run the SED chain: vis_lp (skip_pix) -> Sersic VIS -> every other waveband.
+# Run the SED chain: vis_lp (--stage=vis_lp) -> Sersic VIS -> every other waveband.
 # -------------------------------
 python3 $PROJECT_PATH/scripts/sersic_lens_model_waveband.py --sample=$sample --dataset=$dataset
 

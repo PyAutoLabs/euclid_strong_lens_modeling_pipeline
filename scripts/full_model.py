@@ -22,7 +22,7 @@ script is that same idea generalised into five chained searches.
 This script accepts the shared pipeline arguments (``util.parse_fit_args``), but its
 ``fit`` function uses only ``--dataset``, ``--sample`` and
 ``--iterations_per_quick_update``. Every stage here runs on JAX and every stage is
-run, so ``--use_cpu``, ``--number_of_cores`` and ``--skip_pix`` have no effect.
+run, so ``--use_cpu``, ``--number_of_cores`` and ``--stage`` have no effect.
 
 __SLaM (Source, Light and Mass)__
 
@@ -952,7 +952,7 @@ if __name__ == "__main__":
         iterations_per_quick_update,
         number_of_cores,
         use_cpu,
-        skip_pix,
+        stage,
     ) = util.parse_fit_args()
     fit(
         dataset_name=dataset_name,

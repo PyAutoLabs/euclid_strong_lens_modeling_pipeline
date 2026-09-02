@@ -44,7 +44,7 @@ fewer than two positions are found on disk. `VisualizerImaging` also picked up
 tile dumps are actually stored on disk.
 
 `parse_fit_args` now returns a 6-tuple, adding `--number_of_cores`,
-`--use_cpu` and `--skip_pix`. This is a breaking change, and every call
+`--use_cpu` and `--stage`. This is a breaking change, and every call
 site — all six scripts that unpack it — was updated in the same commit.
 
 ### The script chain
@@ -65,7 +65,7 @@ latents, the RGB visualizer and `wcs.json` from every pixelized-source fit;
 all three are now restored.
 
 The new `scripts/sersic_lens_model_waveband.py` (~56 lines, no new model
-code) chains `initial_lens_model.fit(skip_pix=True)` →
+code) chains `initial_lens_model.fit(stage="vis_lp")` →
 `sersic_lens_model.fit_sersic` → `lens_model_waveband.fit_waveband`. It is
 meant to run under a dedicated `PYAUTO_OUTPUT_DIR` so the per-band SED
 outputs don't bloat the main results tree; each upstream stage
@@ -359,3 +359,10 @@ and are worth carrying forward:
   truth with one free parameter. `latent_draw_via_pdf_size` is inert for
   `af.Drawer` — it falls back to all samples — so it is not a knob for making
   that fit cheaper; `total_draws` is.
+
+## 2026-09-02 — hpc/ two-stage route (#49)
+
+The `hpc/batch_cpu/` two-stage CPU submit scripts, the extended `hpc/sync`
+verb set and the `--stage` argument were ported from `Science/euclid/hpc/`;
+personal values (host, user, paths) were scrubbed to placeholders. `sync_jump`
+and the DR1 chunking helper were not ported.

@@ -38,7 +38,7 @@ already resolved. With the mass fixed, the whole twelve-parameter space is light
 
 __Why It Chains Off vis_lp, Not vis_pix__
 
-``initial_lens_model.fit`` is called with ``skip_pix=True``, so this script chains
+``initial_lens_model.fit`` is called with ``stage="vis_lp"``, so this script chains
 off the light-profile search ``vis_lp`` rather than the pixelized search
 ``vis_pix``. This is not an optimisation. The source Sersic's centre priors are
 read from ``galaxies.source.bulge``, and the pixelized stage replaces the source
@@ -59,7 +59,7 @@ same two stages and then ``fit_waveband`` over every remaining band.
 
 Of the shared pipeline arguments, ``--number_of_cores`` and ``--use_cpu`` are
 forwarded to the upstream ``vis_lp`` fit; the Sersic search itself always runs on
-JAX. ``--skip_pix`` is ignored: it is forced to ``True`` regardless, for the reason
+JAX. ``--stage`` is ignored: it is forced to ``"vis_lp"`` regardless, for the reason
 above.
 
 New to the pipeline? Read ``start_here.py`` in the repository root first: it covers
@@ -282,7 +282,7 @@ if __name__ == "__main__":
         iterations_per_quick_update,
         number_of_cores,
         use_cpu,
-        skip_pix,
+        stage,
     ) = util.parse_fit_args()
 
     # Bypass vis_pix — the Sersic fit only needs vis_lp (which has the MGE
@@ -294,7 +294,7 @@ if __name__ == "__main__":
         iterations_per_quick_update=iterations_per_quick_update,
         number_of_cores=number_of_cores,
         use_cpu=use_cpu,
-        skip_pix=True,
+        stage="vis_lp",
     )
 
     sersic_result = fit_sersic(

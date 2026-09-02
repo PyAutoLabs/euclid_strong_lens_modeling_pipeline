@@ -97,6 +97,10 @@ a GPU, and around 20 minutes on an 8-core CPU. Over a sample of a few thousand
 candidates that difference decides whether the run is a coffee break or a
 cluster allocation.
 
+For SLURM clusters, ``hpc/README.md`` explains how to choose between the
+one-job GPU route and the two-stage CPU route by sample size, and holds the
+submission scripts.
+
 __Running The Pipeline__
 
 Every script in this repository is run from the repository root, and they all
@@ -405,9 +409,7 @@ that bulge with a pixelization, leaving nothing to seed from.
 ``--stage vis_pix`` is the other half of that split: it runs only the pixelized
 stage, loading the completed ``vis_lp`` result from ``output/`` rather than
 re-fitting it, and refusing to start if that result is not there. It exists for
-the CPU route, where the two searches have to run as two separate processes —
-``vis_pix`` wants a multiprocessing pool, and a forked pool cannot be used in a
-process where JAX has already initialised. On GPU, leave ``--stage`` at its
+the CPU route, where ``vis_pix`` wants a multiprocessing pool. The two stages run as separate Python processes. This is a conservative default: PyAutoFit documents an XLA deadlock for a forked worker whose likelihood touches JAX, and the DR1 science runs were submitted this way. A local control test (hpc/diagnostics/jax_fork_control.py) did not reproduce a hang for the CPU route, whose vis_pix likelihood is Numba; production sampler sizes and large pools are untested, so the boundary is kept until a cluster run passes. hpc/README.md has the measured table. On GPU, leave ``--stage`` at its
 ``all`` default and both searches run in one go. ``--skip_pix`` remains a
 deprecated spelling of ``--stage vis_lp``.
 
