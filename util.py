@@ -962,10 +962,19 @@ def parse_fit_args():
     Returns
     -------
     (sample_name, dataset_name, iterations_per_quick_update, number_of_cores,
-     use_cpu, skip_pix)
-        ``mask_radius`` is always read from the dataset's ``info.json``.
+     use_cpu, stage)
+        ``stage`` is one of ``"all"``, ``"vis_lp"`` or ``"vis_pix"``, and
+        selects which of the two searches in ``scripts/initial_lens_model.py``
+        the run performs. ``mask_radius`` is always read from the dataset's
+        ``info.json``.
+
+        The tuple's last element used to be the boolean ``skip_pix``.
+        ``--skip_pix`` is still accepted as a deprecated alias for
+        ``--stage vis_lp`` — it emits a deprecation line on stderr and resolves
+        to the string ``"vis_lp"``, so the tuple is still six elements long.
     """
     import argparse
+    import sys
 
     parser = argparse.ArgumentParser(description="PyAutoLens Euclid Pipeline")
     parser.add_argument(
@@ -1002,17 +1011,46 @@ def parse_fit_args():
         help="CPU mode: disables JAX and applies the sparse operator for vis_pix.",
     )
     parser.add_argument(
+        "--stage",
+        metavar="name",
+        required=False,
+        choices=["all", "vis_lp", "vis_pix"],
+        default=None,
+        help=(
+            "Which of the two searches to run: 'all' (default) runs vis_lp and "
+            "then vis_pix in one process; 'vis_lp' runs the MGE light-profile "
+            "fit only and returns its result; 'vis_pix' runs the pixelized "
+            "source fit only, and requires a completed vis_lp result on disk "
+            "(it fails immediately if there is none)."
+        ),
+    )
+    parser.add_argument(
         "--skip_pix",
         action="store_true",
         default=False,
-        help="Skip the pixelization stage and return after the MGE light-profile fit.",
+        help="Deprecated alias for --stage vis_lp.",
     )
     args = parser.parse_args()
+
+    stage = args.stage
+
+    if args.skip_pix:
+        if stage is not None and stage != "vis_lp":
+            parser.error(
+                f"--skip_pix is the deprecated spelling of --stage vis_lp and "
+                f"cannot be combined with --stage {stage}."
+            )
+        print("--skip_pix is deprecated; use --stage vis_lp", file=sys.stderr)
+        stage = "vis_lp"
+
+    if stage is None:
+        stage = "all"
+
     return (
         args.sample,
         args.dataset,
         int(args.iterations_per_quick_update),
         int(args.number_of_cores),
         args.use_cpu,
-        args.skip_pix,
+        stage,
     )

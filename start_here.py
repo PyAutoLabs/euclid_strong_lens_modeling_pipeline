@@ -130,8 +130,12 @@ The arguments, all of which this file forwards unchanged:
   searches.
 - ``--use_cpu`` (default: off) — CPU mode: disables JAX and applies the CPU
   sparse operator to the pixelized stage.
-- ``--skip_pix`` (default: off) — return after the light-profile fit, skipping
-  the pixelized source stage.
+- ``--stage`` (default: ``all``) — which of the two searches to run. ``all``
+  runs ``vis_lp`` and then ``vis_pix`` in one process; ``vis_lp`` returns after
+  the light-profile fit, skipping the pixelized source stage; ``vis_pix`` runs
+  only the pixelized stage, loading the ``vis_lp`` result from disk and failing
+  immediately if it is not there. ``--skip_pix`` is still accepted as a
+  deprecated spelling of ``--stage vis_lp``.
 
 Note what is *not* on that list: ``mask_radius``. It is not a command-line
 argument. It is always read from the dataset's ``info.json``, so that the mask
@@ -393,10 +397,19 @@ Delaunay mesh. Because this stage starts from a converged mass model, its
 positional constraint can be tightened using the ``vis_lp`` result, which is
 what keeps the reconstruction physical.
 
-``--skip_pix`` stops after ``vis_lp`` and returns its result. That is not just a
-speed switch: ``scripts/sersic_lens_model.py`` uses it because its Sersic source
+``--stage vis_lp`` stops after ``vis_lp`` and returns its result. That is not just
+a speed switch: ``scripts/sersic_lens_model.py`` uses it because its Sersic source
 prior is seeded from ``galaxies.source.bulge``, and the pixelized fit replaces
 that bulge with a pixelization, leaving nothing to seed from.
+
+``--stage vis_pix`` is the other half of that split: it runs only the pixelized
+stage, loading the completed ``vis_lp`` result from ``output/`` rather than
+re-fitting it, and refusing to start if that result is not there. It exists for
+the CPU route, where the two searches have to run as two separate processes —
+``vis_pix`` wants a multiprocessing pool, and a forked pool cannot be used in a
+process where JAX has already initialised. On GPU, leave ``--stage`` at its
+``all`` default and both searches run in one go. ``--skip_pix`` remains a
+deprecated spelling of ``--stage vis_lp``.
 
 __Pixelized Sources__
 
@@ -568,7 +581,7 @@ full; one line each:
   pixelized Delaunay source (``vis_pix``).
 - ``scripts/sersic_lens_model.py`` — Sersic lens and source fits with the mass
   model fixed to the initial fit, giving the cleaner photometry that SED fitting
-  needs. Chains off ``initial_lens_model`` run with ``--skip_pix``.
+  needs. Chains off ``initial_lens_model`` run with ``--stage vis_lp``.
 - ``scripts/lens_model_waveband.py`` — fits the lower-resolution NIR and EXT
   bands with the VIS lens model held fixed.
 - ``scripts/sersic_lens_model_waveband.py`` — the **SED chain** driver, running
@@ -652,7 +665,7 @@ if __name__ == "__main__":
         iterations_per_quick_update,
         number_of_cores,
         use_cpu,
-        skip_pix,
+        stage,
     ) = util.parse_fit_args()
     fit(
         dataset_name=dataset_name,
@@ -660,5 +673,5 @@ if __name__ == "__main__":
         iterations_per_quick_update=iterations_per_quick_update,
         number_of_cores=number_of_cores,
         use_cpu=use_cpu,
-        skip_pix=skip_pix,
+        stage=stage,
     )

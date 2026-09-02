@@ -116,13 +116,13 @@ def test_parse_fit_args_defaults(monkeypatch):
     result = util.parse_fit_args()
 
     assert len(result) == 6
-    sample, dataset, iterations, cores, use_cpu, skip_pix = result
+    sample, dataset, iterations, cores, use_cpu, stage = result
     assert sample is None
     assert dataset == "abc"
     assert iterations == 5000
     assert cores == 1
     assert use_cpu is False
-    assert skip_pix is False
+    assert stage == "all"
 
 
 def test_parse_fit_args_all_flags(monkeypatch):
@@ -136,17 +136,66 @@ def test_parse_fit_args_all_flags(monkeypatch):
             "--iterations_per_quick_update=250",
             "--number_of_cores=8",
             "--use_cpu",
-            "--skip_pix",
+            "--stage=vis_pix",
         ],
     )
 
-    sample, dataset, iterations, cores, use_cpu, skip_pix = util.parse_fit_args()
+    sample, dataset, iterations, cores, use_cpu, stage = util.parse_fit_args()
 
     assert (sample, dataset) == ("xyz", "abc")
     assert (iterations, cores) == (250, 8)
     assert isinstance(iterations, int) and isinstance(cores, int)
     assert use_cpu is True
-    assert skip_pix is True
+    assert stage == "vis_pix"
+
+
+@pytest.mark.parametrize("stage", ["all", "vis_lp", "vis_pix"])
+def test_parse_fit_args_stage_round_trips(monkeypatch, stage):
+    monkeypatch.setattr(sys, "argv", ["prog", "--dataset=abc", "--stage", stage])
+
+    result = util.parse_fit_args()
+
+    assert len(result) == 6
+    assert result[-1] == stage
+
+
+def test_parse_fit_args_rejects_unknown_stage(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["prog", "--dataset=abc", "--stage=bogus"])
+
+    with pytest.raises(SystemExit):
+        util.parse_fit_args()
+
+
+def test_parse_fit_args_skip_pix_is_a_deprecated_alias(monkeypatch, capsys):
+    """
+    ``--skip_pix`` still resolves, to the string ``"vis_lp"``, and says so once
+    on stderr. The tuple stays six elements long.
+    """
+    monkeypatch.setattr(sys, "argv", ["prog", "--dataset=abc", "--skip_pix"])
+
+    result = util.parse_fit_args()
+
+    assert len(result) == 6
+    assert result[-1] == "vis_lp"
+    assert "--skip_pix is deprecated; use --stage vis_lp" in capsys.readouterr().err
+
+
+def test_parse_fit_args_skip_pix_with_matching_stage_is_allowed(monkeypatch):
+    monkeypatch.setattr(
+        sys, "argv", ["prog", "--dataset=abc", "--skip_pix", "--stage=vis_lp"]
+    )
+
+    assert util.parse_fit_args()[-1] == "vis_lp"
+
+
+@pytest.mark.parametrize("stage", ["all", "vis_pix"])
+def test_parse_fit_args_skip_pix_conflicts_with_other_stages(monkeypatch, stage):
+    monkeypatch.setattr(
+        sys, "argv", ["prog", "--dataset=abc", "--skip_pix", f"--stage={stage}"]
+    )
+
+    with pytest.raises(SystemExit):
+        util.parse_fit_args()
 
 
 def test_parse_fit_args_requires_dataset(monkeypatch):

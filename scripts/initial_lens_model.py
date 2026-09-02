@@ -20,6 +20,11 @@ MGE lens light, an SIE + shear mass model and an MGE source together; ``vis_pix`
 fixes the lens light, frees the mass centre, and replaces the source with a pixelized
 Delaunay reconstruction. The prose below documents how each is built, line by line.
 
+``--stage`` selects which of the two runs: ``all`` (the default) runs both in this
+process, ``vis_lp`` stops after the first, and ``vis_pix`` runs only the second,
+loading the ``vis_lp`` result from disk. See "__Search: vis_pix__" below for why the
+CPU route splits the two into separate processes.
+
 ``scripts/full_model.py`` extends this fit with the full Source, Light and Mass (SLaM)
 chain — see ``start_here.py``, "__SLaM: Source, Light And Mass__".
 
@@ -41,7 +46,8 @@ def fit(
     iterations_per_quick_update: int = 5000,
     number_of_cores: int = 1,
     use_cpu: bool = False,
-    skip_pix: bool = False,
+    stage: str = "all",
+    skip_pix: bool = None,
 ):
     """
     Fit the initial Euclid lens model: an MGE light + SIE mass ``vis_lp`` search
@@ -59,11 +65,33 @@ def fit(
         Number of CPU cores used by the ``vis_pix`` Nautilus search.
     use_cpu
         Disable JAX and use the CPU sparse operator for the pixelization.
+    stage
+        Which of the two searches to run.
+
+        - ``"all"`` (default) — run ``vis_lp``, then ``vis_pix``, in this
+          process, and return the ``vis_pix`` result.
+        - ``"vis_lp"`` — run ``vis_lp`` and return its result without running
+          ``vis_pix``. Used by ``sersic_lens_model.py``, whose Sersic source
+          prior is seeded from ``galaxies.source.bulge`` — which the pixelized
+          fit replaces.
+        - ``"vis_pix"`` — run ``vis_pix`` only. The ``vis_lp`` search is not
+          re-run: its completed output must already be on disk, and is loaded
+          from there. If it is not complete this raises ``RuntimeError``
+          immediately, before any fitting, rather than silently re-running
+          ``vis_lp`` in a process configured for the pixelized stage.
     skip_pix
-        Return the ``vis_lp`` result without running the ``vis_pix`` search.
-        Used by ``sersic_lens_model.py``, whose Sersic source prior is seeded
-        from ``galaxies.source.bulge`` — which the pixelized fit replaces.
+        Deprecated alias for ``stage``: ``skip_pix=True`` means
+        ``stage="vis_lp"``. Kept so existing callers keep working; new code
+        should pass ``stage``.
     """
+    if skip_pix is not None and skip_pix:
+        stage = "vis_lp"
+
+    if stage not in ("all", "vis_lp", "vis_pix"):
+        raise ValueError(
+            f"stage must be one of 'all', 'vis_lp' or 'vis_pix', but got {stage!r}."
+        )
+
     from autolens import conf
 
     project_root = Path(__file__).parent.parent
@@ -221,11 +249,43 @@ def fit(
         n_like_max=200000,
     )
 
+    """
+    __Stage: vis_pix Requires A Completed vis_lp__
+
+    Under ``--stage vis_pix`` this process must not run ``vis_lp``; it must load
+    the one that a previous ``--stage vis_lp`` run left on disk. ``search.fit``
+    would do exactly that on its own — it short-circuits to
+    ``result_via_completed_fit`` when ``paths.is_complete`` — but if the result
+    is *not* there it would instead run the whole light-profile fit silently,
+    inside a process configured for the pixelized stage. So the condition is
+    checked here and the run is failed instead.
+
+    The check is the library's own, reached the same way ``search.fit`` reaches
+    it: attach the (analysis-modified) model and the unique tag to the paths so
+    the output directory and its identifier resolve, restore any zipped result,
+    and read ``paths.is_complete`` — the ``.completed`` marker file that
+    ``paths.completed()`` writes at the end of a successful fit.
+    """
+    if stage == "vis_pix":
+        search.paths.model = analysis.modify_model(model)
+        search.paths.unique_tag = search.unique_tag
+        search.paths.restore()
+
+        if not search.paths.is_complete:
+            sample_arg = f"--sample={sample_name} " if sample_name is not None else ""
+            raise RuntimeError(
+                f"--stage vis_pix requires a completed vis_lp result, but none "
+                f"was found at:\n\n    {search.paths.output_path}\n\n"
+                f"Run the light-profile stage first:\n\n"
+                f"    python scripts/initial_lens_model.py "
+                f"{sample_arg}--dataset={dataset_name} --stage vis_lp\n"
+            )
+
     source_lp_result = search.fit(
         model=model, analysis=analysis, **settings_search.fit_dict
     )
 
-    if skip_pix:
+    if stage == "vis_lp":
         return source_lp_result
 
     """
@@ -555,7 +615,19 @@ def fit(
     takes its parallelism from the batch of models it evaluates on the device,
     whereas this search is the one that benefits from a multiprocessing pool —
     which is why ``--use_cpu`` and ``--number_of_cores`` are usually passed
-    together.
+    together, and why ``--stage`` exists.
+
+    On CPU the two searches are run as two separate processes: ``--stage vis_lp``
+    first, with JAX on CPU, and then ``--stage vis_pix``, with the Numba sparse
+    operator and a multiprocessing pool of ``--number_of_cores``. They cannot
+    share one process, because a forked pool cannot be used in a process in which
+    JAX has already initialised — so the pool that this search wants is only
+    available to a process that never ran ``vis_lp``. The second process does not
+    re-fit ``vis_lp``: it loads the completed result the first one wrote, and
+    fails immediately if that result is missing (see "__Stage: vis_pix Requires A
+    Completed vis_lp__" above). ``hpc/README.md`` documents the submission
+    scripts that run the pair in order. On GPU there is no such constraint and
+    the default ``--stage all`` runs both searches in one process.
     """
     vis_pix_search_dict = {
         **settings_search.search_dict,
@@ -581,7 +653,7 @@ if __name__ == "__main__":
         iterations_per_quick_update,
         number_of_cores,
         use_cpu,
-        skip_pix,
+        stage,
     ) = util.parse_fit_args()
     fit(
         dataset_name=dataset_name,
@@ -589,5 +661,5 @@ if __name__ == "__main__":
         iterations_per_quick_update=iterations_per_quick_update,
         number_of_cores=number_of_cores,
         use_cpu=use_cpu,
-        skip_pix=skip_pix,
+        stage=stage,
     )
