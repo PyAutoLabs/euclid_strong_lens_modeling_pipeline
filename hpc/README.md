@@ -86,6 +86,10 @@ It is a diagnostic, never part of CI, and it writes `results.json` with one entr
 leg (start method, whether an XLA backend was initialised at the fork point, wall
 time, outcome).
 
+`hpc/batch_cpu/submit_jax_fork_control` is that command as a SLURM job -- 16 cores,
+all three legs, results under `output_diag/jax_fork_control` -- so the pooled legs are
+measured at the size a production `vis_pix` fit actually forks.
+
 ## Setting up the cluster
 
 1. **The environment.** Every submit script runs `source $PROJECT_PATH/activate.sh`.

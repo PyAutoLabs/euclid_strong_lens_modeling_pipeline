@@ -1,0 +1,93 @@
+#!/bin/bash -l
+#
+# Diagnostic: run the JAX-vs-forked-pool control test as a SLURM job.
+#
+# WHAT THIS DOES
+#   Runs `hpc/diagnostics/jax_fork_control.py --leg all` on a compute node, so the
+#   question hpc/README.md's "Why the CPU route uses two processes" leaves open --
+#   does a process that has initialised JAX poison a later forked Nautilus pool
+#   whose likelihood is Numba? -- is answered at cluster scale rather than on a
+#   laptop. The measured table in that section was taken on WSL2 with a pool of 4;
+#   what it does not cover is a real node: a large pool, cgroup limits, and the
+#   allocation a production `vis_pix` fit actually gets.
+#
+#   Three legs run, each in its own child process so a leg that deadlocks is killed
+#   at `--timeout` and recorded as HANG rather than hanging the driver:
+#     control       a JAX likelihood evaluated in-process, then a `use_jax=False`
+#                   pooled Nautilus fit.
+#     control_real  the pipeline's own `fit(stage="vis_lp")` under JAX, then
+#                   `fit(stage="vis_pix", use_cpu=True)` in the same process.
+#     subprocess    the two-process shape the CPU submit scripts use: the JAX stage
+#                   in a child of a JAX-free parent, then the pooled fit.
+#
+#   `results.json` and the per-leg `leg.log` under `$PROJECT_PATH/output_diag/` are
+#   the evidence. If every leg PASSes here, the process boundary in
+#   `submit_initial_lens_model_two_stage` is bookkeeping rather than necessity; if
+#   `control` or `control_real` HANGs, the boundary is load-bearing and the two-stage
+#   scripts are right to keep it.
+#
+# THIS IS A DIAGNOSTIC, NOT A FIT
+#   It runs a real but tiny Nautilus fit and answers a design question. It is never
+#   part of CI and produces no science output. Submit it once per cluster.
+#
+# ENVIRONMENT
+#   `--cores $SLURM_CPUS_PER_TASK` is the point of running this here: the pooled legs
+#   are what matter, and 16 workers is the size a production CPU `vis_pix` job would
+#   fork. Thread counts are pinned to 1 for the same reason the `vis_pix` stage pins
+#   them -- the parallelism is pool processes, and a full complement of BLAS threads
+#   in each worker would oversubscribe the node by a factor of 16. `JAX_PLATFORMS=cpu`
+#   keeps the JAX legs off any GPU, which this partition has not allocated.
+#
+#   Memory scales with `--cpus-per-task`: each forked worker holds its own copy of the
+#   dataset, roughly 2 GB per worker on the example lens (measured MaxRSS 36 GB at 16
+#   cores on RAL), so raise `--mem` with the core count.
+
+#SBATCH -J euclid_jax_fork_control
+#SBATCH -n 1
+#SBATCH --cpus-per-task=16
+#SBATCH -o output/output.%A.out
+#SBATCH -e error/error.%A.err
+#SBATCH --partition=cpu
+#SBATCH -t 04:00:00
+#SBATCH --mem=64gb
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=your.email@institution.ac.uk
+
+# -----------------------------------------------------------------------------
+# Environment
+#
+# Set PROJECT_PATH to this project on the HPC before submitting:
+#
+#   export PROJECT_PATH=/PATH/TO/LARGE_STORAGE/YOUR_USERNAME/euclid_strong_lens_modeling_pipeline
+#   sbatch hpc/batch_cpu/submit_jax_fork_control
+#
+# This is the same location as $HPC_BASE/$PROJECT_NAME in hpc/sync.conf.
+# -----------------------------------------------------------------------------
+source $PROJECT_PATH/activate.sh
+
+# Keep JAX on the CPU backend: the legs that initialise JAX must not reach for a
+# GPU this job was not allocated.
+export JAX_PLATFORM_NAME=cpu
+export JAX_PLATFORMS=cpu
+
+# The pooled legs are what this test measures, so every worker gets one thread.
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
+CORES=$SLURM_CPUS_PER_TASK
+
+echo "=========================================="
+echo "Diagnostic : jax_fork_control (--leg all)"
+echo "Cores      : $CORES"
+echo "Output     : $PROJECT_PATH/output_diag/jax_fork_control"
+date
+
+python3 $PROJECT_PATH/hpc/diagnostics/jax_fork_control.py --leg all \
+    --cores $CORES --n_like_max 2000 --timeout 3600 \
+    --output $PROJECT_PATH/output_diag/jax_fork_control
+
+echo "Finished: jax_fork_control"
+date

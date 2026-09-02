@@ -141,6 +141,15 @@ EXCLUDES=(
 push() {
     local dryrun="${1:-}"
 
+    # Create the project directory on the HPC before the first rsync. rsync only
+    # ever creates the last component of a destination path, so on a cluster that
+    # has never seen this project `${REMOTE}/catalogue/` needs two levels made and
+    # the transfer dies with "mkdir ... failed: No such file or directory". A dry
+    # run must leave the remote untouched, so it is skipped there.
+    if [[ -z "$dryrun" ]]; then
+        ssh "${HPC_HOST}" "mkdir -p '${REMOTE_PATH}'"
+    fi
+
     echo "==> [push] code/config  →  ${REMOTE}"
     for dir in "${CODE_DIRS[@]}"; do
         local src="${PROJECT_ROOT}/${dir}/"
