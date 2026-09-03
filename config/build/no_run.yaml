@@ -56,6 +56,10 @@
 - workflow/example/csv/magnitudes.py  # Aggregator workflow example: scrapes latent magnitudes from converged multi-band fits in `output/`; skip_latents() is True in every test mode, so no latents are written.
 - workflow/example/png/mge_inspect.py  # Aggregator workflow example: builds MGE inspection PNGs from converged fits; PYAUTO_FAST_PLOTS=1 in the smoke profile suppresses all PNG output.
 
+# --- HPC diagnostics ------------------------------------------------------
+
+- hpc/diagnostics/jax_fork_control.py  # Cluster diagnostic, not a pipeline example: it runs real Nautilus fits (a JAX leg, then a forked-pool leg, then a subprocess leg) to measure whether the CPU route's process boundary is still needed. Minutes to tens of minutes per leg, takes its own --leg/--cores/--output arguments, and is meant to be run by hand on the cluster you are about to use. hpc/README.md documents it.
+
 # --- CI runners -----------------------------------------------------------
 # The PR gate reaches these through PyAutoHeart's reusable workflow. A
 # DISCOVERY run points run_python.py at "." and rglobs, dotted directories

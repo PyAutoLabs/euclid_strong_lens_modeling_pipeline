@@ -1,23 +1,31 @@
 # HPC sync configuration
 # ─────────────────────────────────────────────────────────────────────────────
 # Copy this file to hpc/sync.conf and fill in your values.
-# sync.conf is gitignored — it lives only on your local machine.
+# sync.conf is gitignored — it lives only on your local machine, and `hpc/sync`
+# never pushes it to the cluster.
 #
-# Once set, $HPC_BASE/$PROJECT_NAME is equivalent to $PROJECT_PATH used
-# inside the SLURM batch scripts, so activation and script paths stay consistent.
+# Once set, $HPC_BASE/$PROJECT_NAME is equivalent to the $PROJECT_PATH you
+# export before `sbatch`, so the paths in the batch scripts and the paths
+# `hpc/sync` transfers to are the same place.
 #
-# You can also export these as environment variables instead:
-#   export HPC_HOST=euclid_jump
-#   export HPC_BASE=/mnt/ral/jnightin
+# You can also export these as environment variables instead of editing a file:
+#   export HPC_HOST=your_hpc_ssh_alias
+#   export HPC_BASE=/path/to/large/storage/your_username
 #   hpc/sync push
 # ─────────────────────────────────────────────────────────────────────────────
 
-# SSH host alias (from ~/.ssh/config) or user@hostname
-HPC_HOST=euclid_jump
+# How to reach the cluster: an SSH host alias defined in your ~/.ssh/config, or
+# a plain user@hostname. An alias is worth setting up — it is the one place to
+# put a ProxyJump, an identity file or a non-standard port, and every `hpc/sync`
+# command (rsync, sbatch, squeue, tail) then inherits it.
+HPC_HOST=your_hpc_ssh_alias
 
-# Base directory on the HPC under which all your projects sit.
-# The full remote path will be $HPC_BASE/$PROJECT_NAME.
-HPC_BASE=/mnt/ral/jnightin
+# Base directory on the HPC under which all your projects sit — normally your
+# space on the large/scratch filesystem, not your home directory, since the
+# dataset and output trees get big. The full remote path this project syncs to
+# is $HPC_BASE/$PROJECT_NAME.
+HPC_BASE=/path/to/large/storage/your_username
 
-# Name of this project on the HPC (defaults to the local folder name if unset).
+# Name of this project's directory on the HPC, underneath $HPC_BASE.
+# Defaults to the name of your local project folder if left unset.
 PROJECT_NAME=euclid_strong_lens_modeling_pipeline

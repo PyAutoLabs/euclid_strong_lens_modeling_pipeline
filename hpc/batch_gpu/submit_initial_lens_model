@@ -1,4 +1,29 @@
 #!/bin/bash -l
+#
+# Initial lens model on GPU: both stages, one submission, one Python process.
+#
+# THIS IS THE RECOMMENDED ROUTE for fitting a small subset of lenses.
+#
+# WHAT THIS DOES
+#   Runs `vis_lp` and `vis_pix` end to end in a single `python3` call with JAX
+#   on the allocated GPU. Both stages -- including the pixelized inversion --
+#   run on the device, so no process pool is involved and no process boundary
+#   between the stages is needed. One job per lens, and that is the whole story.
+#
+# MEASURED WALLTIME
+#   One lens of the committed example sample took 1 h 14 min end to end on an
+#   A100 80GB PCIe with the committed `config/`, and 1 h 44 min for the same lens
+#   on a different A100 node -- most of that spread is the node, measured on the
+#   `vis_lp` stage, which was identical in both runs. The 4 hour default below
+#   leaves headroom for a slower lens or a busier node; hpc/README.md has the full
+#   acceptance table.
+#
+# WHEN TO USE THE CPU SCRIPTS INSTEAD
+#   When no GPU partition is available to you, or when the GPU queue is long
+#   enough that CPU nodes get you results sooner. `hpc/batch_cpu/` holds those
+#   routes; start from `submit_initial_lens_model_two_stage`, and read its
+#   header for why the CPU path has to split the two stages across two
+#   processes and this one does not.
 
 #SBATCH -J euclid_initial_lens_model
 #SBATCH --partition=gpu
@@ -6,7 +31,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=32gb
-#SBATCH --time=02:00:00
+#SBATCH --time=04:00:00
 #SBATCH --array=0-0
 #SBATCH -o output/output.%A_%a.out
 #SBATCH -e error/error.%A_%a.err
@@ -41,6 +66,16 @@ echo "Sample: $sample"
 echo "Dataset: $dataset"
 date
 nvidia-smi
+
+# Fail fast if JAX cannot actually see the allocated GPU. A GPU job that falls back to
+# the CPU backend is worse than one that dies: it looks alive, runs the fit on
+# `--cpus-per-task` cores, and burns the whole walltime. Measured on a MIG-mode A100
+# with no instances, where `cuInit(0)` fails with CUDA_ERROR_NO_DEVICE and JAX logs
+# "Falling back to cpu" -- a two-hour job that never touched the device.
+python3 -c 'import jax; b = jax.default_backend(); print(f"JAX backend: {b}"); raise SystemExit(0 if b == "gpu" else 1)' || {
+    echo "ERROR: JAX cannot see a GPU on $(hostname) (MIG-mode or missing CUDA); refusing to run a GPU job on the CPU. Resubmit with --exclude=<node> or check the nvidia-smi output above." >&2
+    exit 1
+}
 
 # -------------------------------
 # Run the initial lens model.

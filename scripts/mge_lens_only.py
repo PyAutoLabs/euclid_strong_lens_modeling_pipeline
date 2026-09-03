@@ -596,7 +596,7 @@ if __name__ == "__main__":
         iterations_per_quick_update,
         number_of_cores,
         use_cpu,
-        skip_pix,
+        stage,
     ) = util.parse_fit_args()
 
     """
@@ -608,7 +608,7 @@ if __name__ == "__main__":
     The shared argument parser is used so that one command line works across all
     the pipelines, but this script only acts on ``--sample``, ``--dataset`` and
     ``--iterations_per_quick_update``. ``--number_of_cores``, ``--use_cpu`` and
-    ``--skip_pix`` are accepted and ignored: there is no pixelized stage to skip
+    ``--stage`` are accepted and ignored: there is no pixelized stage to skip
     and no CPU-parallel search to size, because every search here runs under
     JAX on a model with a handful of parameters. ``mask_radius`` is not an
     argument at all — it comes from the dataset's ``info.json``.

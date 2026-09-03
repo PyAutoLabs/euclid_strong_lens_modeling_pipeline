@@ -555,7 +555,7 @@ if __name__ == "__main__":
         iterations_per_quick_update,
         number_of_cores,
         use_cpu,
-        skip_pix,
+        stage,
     ) = util.parse_fit_args()
 
     """
@@ -572,7 +572,7 @@ if __name__ == "__main__":
     — where the bands are fitted against a Sersic VIS model instead — run
     ``scripts/sersic_lens_model_waveband.py``.
     """
-    # `skip_pix=True` is forced (the `--skip_pix` flag is not consulted here):
+    # `stage="vis_lp"` is forced (the `--stage` flag is not consulted here):
     # the multi-band model takes `vis_result.instance.galaxies.source.bulge`,
     # which only exists on the `vis_lp` result — `vis_pix` replaces the source
     # bulge with a pixelization.
@@ -582,7 +582,7 @@ if __name__ == "__main__":
         iterations_per_quick_update=iterations_per_quick_update,
         number_of_cores=number_of_cores,
         use_cpu=use_cpu,
-        skip_pix=True,
+        stage="vis_lp",
     )
 
     fit_waveband(

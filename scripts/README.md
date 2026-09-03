@@ -10,22 +10,22 @@ python scripts/initial_lens_model.py --sample=q1_walsmley --dataset=<name>
 
 All fitting pipelines share one argument parser (`util.parse_fit_args`) —
 `--dataset`, `--sample`, `--iterations_per_quick_update`, `--number_of_cores`,
-`--use_cpu`, `--skip_pix`. See the repository `README.md` for what each does.
+`--use_cpu`, `--stage`. See the repository `README.md` for what each does.
 
 # Fitting pipelines
 
 - `initial_lens_model.py`: **The entry point.** MGE lens light + SIE + shear mass
   + MGE source (`vis_lp`), then a pixelized Delaunay source (`vis_pix`). The
   repository root's `start_here.py` is a thin shim over this script's `fit()`.
-  `--skip_pix` returns after `vis_lp`.
+  `--stage=vis_lp` returns after `vis_lp`.
 - `sersic_lens_model.py`: Sersic lens and source fits with the mass model fixed
   to the initial fit, giving more accurate photometry for SED fitting. Chains off
-  `initial_lens_model.fit(..., skip_pix=True)` — `vis_pix` replaces the source
+  `initial_lens_model.fit(..., stage="vis_lp")` — `vis_pix` replaces the source
   bulge with a pixelization, so its instance cannot seed a Sersic source prior.
 - `lens_model_waveband.py`: After modeling the high resolution VIS imaging, model
   the lower resolution NIR / EXT imaging with the lens model held fixed.
 - `sersic_lens_model_waveband.py`: The **SED chain** driver — runs
-  `initial_lens_model --skip_pix`, then `sersic_lens_model`, then
+  `initial_lens_model --stage=vis_lp`, then `sersic_lens_model`, then
   `lens_model_waveband` over every band. Run it under its own
   `PYAUTO_OUTPUT_DIR` so the per-band results stay out of the main `output/`
   tree; both upstream stages cache-short-circuit if their result zips are

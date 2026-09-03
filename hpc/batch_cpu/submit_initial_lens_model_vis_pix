@@ -1,0 +1,104 @@
+#!/bin/bash -l
+#
+# Initial lens model, stage 2 of 2 on CPU: the `vis_pix` search only.
+#
+# WHAT THIS DOES
+#   Fits the pixelized source model (`vis_pix`) with JAX disabled entirely, so
+#   the inversion runs through the Numba CPU sparse operator and the Nautilus
+#   sampler is parallelised by a forked multiprocessing pool.
+#
+# WHAT IT REQUIRES
+#   A completed `vis_lp` result for the same sample and dataset. `--stage=vis_pix`
+#   loads that result to build its model and fails fast — before the allocation
+#   is spent — if it is not there. Submit
+#   `submit_initial_lens_model_vis_lp` first and let it finish.
+#
+#   No JAX environment is exported below. That is deliberate, and is the reason
+#   this is a separate job. The two stages run as separate Python processes.
+#   This is a conservative default: PyAutoFit documents an XLA deadlock for a
+#   forked worker whose likelihood touches JAX, and the DR1 science runs were
+#   submitted this way. A local control test (hpc/diagnostics/jax_fork_control.py)
+#   did not reproduce a hang for the CPU route, whose vis_pix likelihood is
+#   Numba; production sampler sizes and large pools are untested, so the
+#   boundary is kept until a cluster run passes. hpc/README.md has the
+#   measured table.
+
+#SBATCH -J euclid_initial_lens_model_vis_pix
+#SBATCH -n 1
+#SBATCH --cpus-per-task=8
+#SBATCH -o output/output.%A_%a.out
+#SBATCH -e error/error.%A_%a.err
+#SBATCH --partition=cpu
+#SBATCH -t 18:00:00
+#SBATCH --mem=64gb
+#SBATCH --array=0-0
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=your.email@institution.ac.uk
+
+# -----------------------------------------------------------------------------
+# Environment
+#
+# Set PROJECT_PATH to this project on the HPC before submitting:
+#
+#   export PROJECT_PATH=/PATH/TO/LARGE_STORAGE/YOUR_USERNAME/euclid_strong_lens_modeling_pipeline
+#   sbatch hpc/batch_cpu/submit_initial_lens_model_vis_pix
+#
+# This is the same location as $HPC_BASE/$PROJECT_NAME in hpc/sync.conf.
+# -----------------------------------------------------------------------------
+source $PROJECT_PATH/activate.sh
+
+# Pin every linear algebra library to a SINGLE thread.
+#
+# This stage's parallelism is the Nautilus process pool: `--number_of_cores`
+# below forks one worker per allocated CPU. If each of those workers also
+# spawned one BLAS thread per core the node would be oversubscribed by a factor
+# of $THREADS, and the run gets slower as it is given more CPUs. One thread per
+# worker process is the correct pairing.
+THREADS=$SLURM_CPUS_PER_TASK
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export NPROC=$THREADS
+
+# -----------------------------------------------------------------------------
+# Sample
+#
+# The sample is the subdirectory inside dataset/ that contains the datasets.
+# Must match the vis_lp job that produced the results this stage reads.
+# -----------------------------------------------------------------------------
+sample=q1_walsmley
+
+# -----------------------------------------------------------------------------
+# Dataset list
+#
+# Each entry is the name of a subdirectory inside dataset/$sample/.
+# Keep this list, and the --array directive above, identical to the vis_lp job,
+# so array task N fits the same lens in both stages.
+# -----------------------------------------------------------------------------
+datasets=(
+102018665_NEG570040238507752998
+)
+
+INDEX=$SLURM_ARRAY_TASK_ID
+dataset="${datasets[$INDEX]}"
+
+echo "=========================================="
+echo "Array task : $INDEX / ${#datasets[@]}"
+echo "Sample     : $sample"
+echo "Dataset    : $dataset"
+echo "Stage      : vis_pix (Numba CPU sparse, no JAX)"
+echo "Pool procs : $THREADS"
+date
+
+# `--use_cpu` disables JAX and swaps in the Numba CPU sparse operator;
+# `--number_of_cores` sizes the Nautilus pool; `--iterations_per_quick_update`
+# is lowered from its default of 5000 because CPU inversions are slow enough
+# that 5000 iterations is a long wait for the first sign of progress -- 1000
+# gets an on-disk update out of a long-running job far sooner.
+python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \
+    --stage=vis_pix --use_cpu --number_of_cores=$THREADS --iterations_per_quick_update=1000
+
+echo "Finished vis_pix: $dataset"
+date

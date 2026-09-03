@@ -58,12 +58,13 @@ fi
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$( cd -- "$SCRIPT_DIR/.." && pwd )"
 
-# On HPC, activate.sh activates the shared PyAuto venv under /mnt/ral and puts
-# its checkouts on PYTHONPATH. It is HPC-only — sourcing it elsewhere fails — so
-# it is used only when that venv is actually present and the caller has not
+# On HPC, activate.sh activates the shared PyAuto venv under PYAUTO_HPC_BASE and
+# puts its checkouts on PYTHONPATH. It is HPC-only — sourcing it elsewhere fails
+# — so it is used only when that venv is actually present and the caller has not
 # already set up an environment (PYAUTO_ROOT is exported by a worktree
-# activate.sh). Everywhere else the ambient install is used.
-HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
+# activate.sh). Everywhere else the ambient install is used. Export
+# PYAUTO_HPC_BASE to point at your shared PyAuto checkout.
+HPC_BASE="${PYAUTO_HPC_BASE:-/path/to/large/storage/your_username/PyAuto}"
 if [ -z "${PYAUTO_ROOT:-}" ] && [ -d "$HPC_BASE" ] && [ -f "$PROJECT_ROOT/activate.sh" ]; then
     # shellcheck disable=SC1091
     source "$PROJECT_ROOT/activate.sh"

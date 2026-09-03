@@ -18,6 +18,13 @@ To ensure GPU acceleration, it is recommended that you install JAX with GPU supp
 
 If you install **PyAutoLens** without a proper GPU setup, a warning will be displayed.
 
+## Running On A Cluster
+
+`hpc/README.md` covers SLURM submission: a one-job GPU route recommended for a small
+subset of lenses, and a two-stage CPU route (`vis_lp` under JAX on CPU, then `vis_pix`
+with Numba and a process pool) for large samples on many cores, with example scripts
+under `hpc/batch_gpu/` and `hpc/batch_cpu/` and the `hpc/sync` transfer/submit tool.
+
 ## Getting Started
 
 **PyAutoLens** supports Python 3.12 and later, with **Python 3.13 recommended**.
@@ -58,7 +65,9 @@ the lens model improve over time!
 ## Overview
 
 The starting point for Euclid strong lens modeling is `scripts/initial_lens_model.py`. It performs
-automated lens modeling in around 10 minutes per lens on a GPU, around 20 minutes on an 8 core CPU.
+automated lens modeling in around 10 minutes per lens on a GPU, around 20 minutes on an 8 core CPU
+(times from the DR1 science runs under their own `config/`; `hpc/README.md` has the times measured with the committed one).
+Which to use for a whole sample is a question of scale — see `hpc/README.md`.
 
 This script can be run as a black-box, with key output being generated, including:
 
@@ -113,10 +122,10 @@ python scripts/full_model.py --sample=q1_walsmley --dataset=EUCLJ174517.55+65561
 | Script | What it fits | Chains off |
 |---|---|---|
 | `start_here.py` | Thin shim over `scripts/initial_lens_model.py` — kept so older commands keep working. | — |
-| `scripts/initial_lens_model.py` | **The entry point.** SIE + shear mass, MGE lens light, MGE source (`vis_lp`), then a pixelized Delaunay source (`vis_pix`). `--skip_pix` stops after `vis_lp`. | — |
+| `scripts/initial_lens_model.py` | **The entry point.** SIE + shear mass, MGE lens light, MGE source (`vis_lp`), then a pixelized Delaunay source (`vis_pix`). `--stage=vis_lp` stops after `vis_lp`. | — |
 | `scripts/sersic_lens_model.py` | Sersic lens and source with the mass model fixed, for accurate SED photometry. | `initial_lens_model` `vis_lp` |
 | `scripts/lens_model_waveband.py` | Every non-VIS band (NIR / EXT) with the VIS lens model held fixed. | `initial_lens_model` or `sersic_lens_model` |
-| `scripts/sersic_lens_model_waveband.py` | The **SED chain** driver: runs `initial_lens_model --skip_pix`, then `sersic_lens_model`, then `lens_model_waveband` over every band. Run it under its own `PYAUTO_OUTPUT_DIR`. | — (drives the three above) |
+| `scripts/sersic_lens_model_waveband.py` | The **SED chain** driver: runs `initial_lens_model --stage=vis_lp`, then `sersic_lens_model`, then `lens_model_waveband` over every band. Run it under its own `PYAUTO_OUTPUT_DIR`. | — (drives the three above) |
 | `scripts/mge_lens_only.py` | MGE subtraction of the lens light only, revealing the lensed source quickly. | — |
 | `scripts/full_model.py` | The full SLaM chain: MGE source, two Delaunay pixelized-source stages, refined lens light, then a PowerLaw + shear mass model. Uses `al.mesh.Delaunay` with `al.reg.AdaptSplit` (`reg.Adapt` cannot JIT on the Delaunay family) and `pixels=500` in its second stage — the `autolens_workspace` `delaunay.py` example uses 1000, but Euclid VIS cut-outs are small. | — |
 
@@ -147,7 +156,7 @@ All fitting pipelines share one argument parser (`util.parse_fit_args`):
 | `--iterations_per_quick_update` | `5000` | Sampler iterations between on-the-fly visualisation updates. |
 | `--number_of_cores` | `1` | CPU cores for the non-JAX Nautilus searches. |
 | `--use_cpu` | off | CPU mode: disables JAX and applies the CPU sparse operator to the pixelized stage. |
-| `--skip_pix` | off | Return after the MGE light-profile fit, skipping the pixelized source stage. Used by the Sersic chain, whose source prior cannot be seeded from a pixelization. |
+| `--stage` | all | Which stage(s) to run: all, vis_lp (MGE fit only) or vis_pix (pixelized source only; requires a completed vis_lp result and stops with an error otherwise). --skip_pix is a deprecated alias of --stage vis_lp. |
 
 `mask_radius` is **not** an argument — it is always read from the dataset's `info.json`.
 

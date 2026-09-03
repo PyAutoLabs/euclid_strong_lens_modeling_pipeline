@@ -54,8 +54,18 @@ echo "Output dir: $PYAUTO_OUTPUT_DIR"
 date
 nvidia-smi
 
+# Fail fast if JAX cannot actually see the allocated GPU. A GPU job that falls back to
+# the CPU backend is worse than one that dies: it looks alive, runs the fit on
+# `--cpus-per-task` cores, and burns the whole walltime. Measured on a MIG-mode A100
+# with no instances, where `cuInit(0)` fails with CUDA_ERROR_NO_DEVICE and JAX logs
+# "Falling back to cpu" -- a two-hour job that never touched the device.
+python3 -c 'import jax; b = jax.default_backend(); print(f"JAX backend: {b}"); raise SystemExit(0 if b == "gpu" else 1)' || {
+    echo "ERROR: JAX cannot see a GPU on $(hostname) (MIG-mode or missing CUDA); refusing to run a GPU job on the CPU. Resubmit with --exclude=<node> or check the nvidia-smi output above." >&2
+    exit 1
+}
+
 # -------------------------------
-# Run the SED chain: vis_lp (skip_pix) -> Sersic VIS -> every other waveband.
+# Run the SED chain: vis_lp (--stage=vis_lp) -> Sersic VIS -> every other waveband.
 # -------------------------------
 python3 $PROJECT_PATH/scripts/sersic_lens_model_waveband.py --sample=$sample --dataset=$dataset
 

@@ -93,9 +93,15 @@ and install **PyAutoLens** afterwards. If **PyAutoLens** is installed without a
 working GPU setup a warning is printed; the pipeline still runs, just on CPU.
 
 For scale: ``scripts/initial_lens_model.py`` fits a lens in around 10 minutes on
-a GPU, and around 20 minutes on an 8-core CPU. Over a sample of a few thousand
+a GPU, and around 20 minutes on an 8-core CPU (times from the DR1 science runs
+under their own ``config/``; ``hpc/README.md`` has the times measured with the
+committed one). Over a sample of a few thousand
 candidates that difference decides whether the run is a coffee break or a
 cluster allocation.
+
+For SLURM clusters, ``hpc/README.md`` explains how to choose between the
+one-job GPU route and the two-stage CPU route by sample size, and holds the
+submission scripts.
 
 __Running The Pipeline__
 
@@ -130,8 +136,12 @@ The arguments, all of which this file forwards unchanged:
   searches.
 - ``--use_cpu`` (default: off) — CPU mode: disables JAX and applies the CPU
   sparse operator to the pixelized stage.
-- ``--skip_pix`` (default: off) — return after the light-profile fit, skipping
-  the pixelized source stage.
+- ``--stage`` (default: ``all``) — which of the two searches to run. ``all``
+  runs ``vis_lp`` and then ``vis_pix`` in one process; ``vis_lp`` returns after
+  the light-profile fit, skipping the pixelized source stage; ``vis_pix`` runs
+  only the pixelized stage, loading the ``vis_lp`` result from disk and failing
+  immediately if it is not there. ``--skip_pix`` is still accepted as a
+  deprecated spelling of ``--stage vis_lp``.
 
 Note what is *not* on that list: ``mask_radius``. It is not a command-line
 argument. It is always read from the dataset's ``info.json``, so that the mask
@@ -393,10 +403,17 @@ Delaunay mesh. Because this stage starts from a converged mass model, its
 positional constraint can be tightened using the ``vis_lp`` result, which is
 what keeps the reconstruction physical.
 
-``--skip_pix`` stops after ``vis_lp`` and returns its result. That is not just a
-speed switch: ``scripts/sersic_lens_model.py`` uses it because its Sersic source
+``--stage vis_lp`` stops after ``vis_lp`` and returns its result. That is not just
+a speed switch: ``scripts/sersic_lens_model.py`` uses it because its Sersic source
 prior is seeded from ``galaxies.source.bulge``, and the pixelized fit replaces
 that bulge with a pixelization, leaving nothing to seed from.
+
+``--stage vis_pix`` is the other half of that split: it runs only the pixelized
+stage, loading the completed ``vis_lp`` result from ``output/`` rather than
+re-fitting it, and refusing to start if that result is not there. It exists for
+the CPU route, where ``vis_pix`` wants a multiprocessing pool. The two stages run as separate Python processes. This is a conservative default: PyAutoFit documents an XLA deadlock for a forked worker whose likelihood touches JAX, and the DR1 science runs were submitted this way. A local control test (hpc/diagnostics/jax_fork_control.py) did not reproduce a hang for the CPU route, whose vis_pix likelihood is Numba; production sampler sizes and large pools are untested, so the boundary is kept until a cluster run passes. hpc/README.md has the measured table. On GPU, leave ``--stage`` at its
+``all`` default and both searches run in one go. ``--skip_pix`` remains a
+deprecated spelling of ``--stage vis_lp``.
 
 __Pixelized Sources__
 
@@ -456,9 +473,11 @@ compiles it and dispatches it to a GPU if one is available. That is where the
 50x comes from.
 
 ``--use_cpu`` turns JAX off and takes the CPU path. This is not simply "the same
-thing, slower": the pixelized stage applies a **CPU sparse operator** in place of
-the dense GPU-friendly one, because the linear algebra that is fastest dense on
-a GPU is fastest sparse on a CPU. When you pass ``--use_cpu``, pass
+thing, slower": the pixelized stage applies a **CPU sparse operator**, a Numba
+precomputation of the PSF products the inversion needs, because that is the
+fastest way to do this linear algebra on a CPU. It is the CPU route's tool and is
+applied only under ``--use_cpu`` — the JAX path applies no sparse operator and
+fits the plain dataset. When you pass ``--use_cpu``, pass
 ``--number_of_cores`` as well — that is the argument the ``vis_pix`` search uses
 to parallelise across CPU cores.
 
@@ -568,7 +587,7 @@ full; one line each:
   pixelized Delaunay source (``vis_pix``).
 - ``scripts/sersic_lens_model.py`` — Sersic lens and source fits with the mass
   model fixed to the initial fit, giving the cleaner photometry that SED fitting
-  needs. Chains off ``initial_lens_model`` run with ``--skip_pix``.
+  needs. Chains off ``initial_lens_model`` run with ``--stage vis_lp``.
 - ``scripts/lens_model_waveband.py`` — fits the lower-resolution NIR and EXT
   bands with the VIS lens model held fixed.
 - ``scripts/sersic_lens_model_waveband.py`` — the **SED chain** driver, running
@@ -652,7 +671,7 @@ if __name__ == "__main__":
         iterations_per_quick_update,
         number_of_cores,
         use_cpu,
-        skip_pix,
+        stage,
     ) = util.parse_fit_args()
     fit(
         dataset_name=dataset_name,
@@ -660,5 +679,5 @@ if __name__ == "__main__":
         iterations_per_quick_update=iterations_per_quick_update,
         number_of_cores=number_of_cores,
         use_cpu=use_cpu,
-        skip_pix=skip_pix,
+        stage=stage,
     )
