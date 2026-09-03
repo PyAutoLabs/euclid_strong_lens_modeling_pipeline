@@ -12,7 +12,7 @@ Read this page once to pick a route. Everything else about the fits themselves i
 
 | Your situation | Route | Script | What one job does |
 |---|---|---|---|
-| A small subset of lenses (up to a few hundred) and a GPU node is available | **GPU** (recommended) | `batch_gpu/submit_initial_lens_model` | Both stages, `vis_lp` then `vis_pix`, in one process under JAX. Measured on one A100 with the committed config: 74 min per lens (31 min `vis_lp`, 42 min `vis_pix`). |
+| A small subset of lenses (up to a few hundred) and a GPU node is available | **GPU** (recommended) | `batch_gpu/submit_initial_lens_model` | Both stages, `vis_lp` then `vis_pix`, in one process under JAX. Measured on one A100 80GB PCIe with the committed config: 1 h 14 min to 1 h 44 min per lens across two runs on two different nodes (`vis_lp` 30-38 min, `vis_pix` 42-64 min). |
 | A large sample and many CPU cores, or no GPU | **Two-stage CPU** | `batch_cpu/submit_initial_lens_model_two_stage` | One submission; `vis_lp` under JAX on the CPU backend, then `vis_pix` with the Numba sparse operator and a process pool, as two consecutive Python processes. Measured on 8 cores with the committed config: 3 h 17 min per lens (26 min `vis_lp`, 2 h 51 min `vis_pix`). |
 | As above, but you want different walltime, memory or core counts per stage, or to re-run one stage alone | **Two-stage CPU, two jobs** | `batch_cpu/submit_initial_lens_model_vis_lp` then `batch_cpu/submit_initial_lens_model_vis_pix` | The same two stages as two array jobs. Submit the second once the first has finished. |
 | A cluster where JAX is unavailable or broken | **Numba only** | `batch_cpu/submit_initial_lens_model` | Both stages in one process with JAX disabled. The `vis_lp` stage is markedly slower this way. |
@@ -24,7 +24,13 @@ measured under that run's own configuration (`hpc.hpc_mode: true`, a much larger
 `hpc.iterations_per_quick_update`, and its own sampler settings); it has not been
 reproduced with the committed config, and the quick-update overhead alone does
 not account for the gap. Treat the measured numbers above as the ones you will
-see out of the box. The discrepancy is open, and tracked as
+see out of the box.
+
+The GPU range above is node-to-node spread, not a setting you can choose. The two
+runs used different A100 nodes, and the `vis_lp` stage — whose code and iteration
+count were identical in both — was 25% slower on the second, which accounts for
+most of the difference. The discrepancy against the science figure is still open
+and tracked as
 `PyAutoMind/draft/bug/euclid/gpu_per_lens_time_vs_documented_10_min.md`.
 
 The GPU route is the simplest and, per lens, by far the fastest. The two-stage CPU route
@@ -118,8 +124,28 @@ RAL cluster on 2026-09-03:
 
 | Route | Script | Allocation | `vis_lp` | `vis_pix` | Total | Outcome |
 |---|---|---|---|---|---|---|
-| GPU | `batch_gpu/submit_initial_lens_model` | one A100 80GB PCIe, 1 core | 31.5 min | 42.5 min | 1 h 14 min | COMPLETED |
+| GPU | `batch_gpu/submit_initial_lens_model` | A100 80GB PCIe (`euclid-ral-gpu-2`), 1 core | 30.2 min | 42.4 min | 1 h 14 min | COMPLETED |
+| GPU, re-run after the sparse-operator fix | `batch_gpu/submit_initial_lens_model` | A100 80GB PCIe (`euclid-ral-gpu-1`), 1 core | 37.7 min | 63.8 min | 1 h 44 min | COMPLETED |
 | Two-stage CPU | `batch_cpu/submit_initial_lens_model_two_stage` | 8 cores, 8 pool workers | 25.5 min | 2 h 51 min | 3 h 17 min | COMPLETED |
+
+The second GPU row is the same lens re-run after `scripts/initial_lens_model.py`
+stopped applying the Numba sparse operator on the JAX path (it is the CPU route's
+tool; the science tree never applied it under JAX). It is recorded here because
+the obvious expectation — that the GPU route would get faster — is wrong, and the
+next reader should not have to re-run it to find that out:
+
+- `vis_lp` does not touch the operator in either run, and both runs took exactly
+  15 quick-update blocks, so it is a clean node-speed probe: 2.01 min per block
+  against 2.51, a **25% slower node** on the re-run.
+- `vis_pix` went from 3.26 min per block to 4.55, a factor of 1.40. Divide out the
+  1.25 node factor and about 1.12 is left — one run against one run on a shared
+  cluster, which is inside the noise.
+- The quick updates themselves are unchanged (13.8 s against 13.2 s mean).
+
+So the operator was neither the reason the GPU route is slow nor a meaningful
+speed-up on it. The fix stands as a correctness fix — the JAX path now matches the
+science tree and fits the plain dataset — and the gap to the documented ~10 min
+per lens has to come from somewhere else.
 
 The CPU chain's second process logged `Fit Already Completed: skipping
 non-linear search` for `vis_lp` and went straight to `vis_pix`. That is the
@@ -135,6 +161,15 @@ healthy A100 throughout, and nothing in the job's own output said the GPU had
 gone. Every script in `batch_gpu/` now checks `jax.default_backend()` before it
 starts, so a GPU job whose JAX backend is CPU exits within seconds, naming the
 node, instead of burning its entire walltime.
+
+That guard also trips when the Python environment was never activated, because
+then JAX is not importable at all and the check fails the same way. If it fires,
+read the `.err` file before blaming the node: `No local .venv found (set
+PYAUTO_HPC_BASE ...)` followed by `ModuleNotFoundError: No module named 'jax'`
+means `activate.sh` found nothing, not that the GPU is missing. `sbatch` does not
+carry your login shell's exports into the job unless you pass them, so submit with
+`--export=ALL,PROJECT_PATH=...,PYAUTO_HPC_BASE=...` or set both in your cluster
+shell profile.
 
 ## Setting up the cluster
 

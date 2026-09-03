@@ -12,9 +12,11 @@
 #
 # MEASURED WALLTIME
 #   One lens of the committed example sample took 1 h 14 min end to end on an
-#   A100 80GB PCIe with the committed `config/` -- 31 min for `vis_lp`, 42 min
-#   for `vis_pix`. The 4 hour default below leaves headroom for a slower lens
-#   or a busier node; hpc/README.md has the full acceptance table.
+#   A100 80GB PCIe with the committed `config/`, and 1 h 44 min for the same lens
+#   on a different A100 node -- most of that spread is the node, measured on the
+#   `vis_lp` stage, which was identical in both runs. The 4 hour default below
+#   leaves headroom for a slower lens or a busier node; hpc/README.md has the full
+#   acceptance table.
 #
 # WHEN TO USE THE CPU SCRIPTS INSTEAD
 #   When no GPU partition is available to you, or when the GPU queue is long
