@@ -93,7 +93,9 @@ and install **PyAutoLens** afterwards. If **PyAutoLens** is installed without a
 working GPU setup a warning is printed; the pipeline still runs, just on CPU.
 
 For scale: ``scripts/initial_lens_model.py`` fits a lens in around 10 minutes on
-a GPU, and around 20 minutes on an 8-core CPU. Over a sample of a few thousand
+a GPU, and around 20 minutes on an 8-core CPU (times from the DR1 science runs
+under their own ``config/``; ``hpc/README.md`` has the times measured with the
+committed one). Over a sample of a few thousand
 candidates that difference decides whether the run is a coffee break or a
 cluster allocation.
 

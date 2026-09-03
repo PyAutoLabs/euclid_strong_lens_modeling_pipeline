@@ -65,7 +65,8 @@ the lens model improve over time!
 ## Overview
 
 The starting point for Euclid strong lens modeling is `scripts/initial_lens_model.py`. It performs
-automated lens modeling in around 10 minutes per lens on a GPU, around 20 minutes on an 8 core CPU.
+automated lens modeling in around 10 minutes per lens on a GPU, around 20 minutes on an 8 core CPU
+(times from the DR1 science runs under their own `config/`; `hpc/README.md` has the times measured with the committed one).
 Which to use for a whole sample is a question of scale — see `hpc/README.md`.
 
 This script can be run as a black-box, with key output being generated, including:

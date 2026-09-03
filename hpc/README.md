@@ -12,10 +12,20 @@ Read this page once to pick a route. Everything else about the fits themselves i
 
 | Your situation | Route | Script | What one job does |
 |---|---|---|---|
-| A small subset of lenses (up to a few hundred) and a GPU node is available | **GPU** (recommended) | `batch_gpu/submit_initial_lens_model` | Both stages, `vis_lp` then `vis_pix`, in one process under JAX. About 10 minutes per lens. |
-| A large sample and many CPU cores, or no GPU | **Two-stage CPU** | `batch_cpu/submit_initial_lens_model_two_stage` | One submission; `vis_lp` under JAX on the CPU backend, then `vis_pix` with the Numba sparse operator and a process pool, as two consecutive Python processes. |
+| A small subset of lenses (up to a few hundred) and a GPU node is available | **GPU** (recommended) | `batch_gpu/submit_initial_lens_model` | Both stages, `vis_lp` then `vis_pix`, in one process under JAX. Measured on one A100 with the committed config: 74 min per lens (31 min `vis_lp`, 42 min `vis_pix`). |
+| A large sample and many CPU cores, or no GPU | **Two-stage CPU** | `batch_cpu/submit_initial_lens_model_two_stage` | One submission; `vis_lp` under JAX on the CPU backend, then `vis_pix` with the Numba sparse operator and a process pool, as two consecutive Python processes. Measured on 8 cores with the committed config: 3 h 17 min per lens (26 min `vis_lp`, 2 h 51 min `vis_pix`). |
 | As above, but you want different walltime, memory or core counts per stage, or to re-run one stage alone | **Two-stage CPU, two jobs** | `batch_cpu/submit_initial_lens_model_vis_lp` then `batch_cpu/submit_initial_lens_model_vis_pix` | The same two stages as two array jobs. Submit the second once the first has finished. |
 | A cluster where JAX is unavailable or broken | **Numba only** | `batch_cpu/submit_initial_lens_model` | Both stages in one process with JAX disabled. The `vis_lp` stage is markedly slower this way. |
+
+Both figures come from the acceptance runs recorded below, with the committed,
+laptop-friendly `config/`. The "around 10 minutes per lens" quoted in the
+repository's `README.md` and `start_here.py` is the DR1 science-run figure,
+measured under that run's own configuration (`hpc.hpc_mode: true`, a much larger
+`hpc.iterations_per_quick_update`, and its own sampler settings); it has not been
+reproduced with the committed config, and the quick-update overhead alone does
+not account for the gap. Treat the measured numbers above as the ones you will
+see out of the box. The discrepancy is open, and tracked as
+`PyAutoMind/draft/bug/euclid/gpu_per_lens_time_vs_documented_10_min.md`.
 
 The GPU route is the simplest and, per lens, by far the fastest. The two-stage CPU route
 exists because a cluster with hundreds of CPU cores and few GPUs can fit a large sample
@@ -59,21 +69,28 @@ than a measured necessity. PyAutoFit documents that a forked worker whose *likel
 touches JAX deadlocks in XLA compilation (`autofit/non_linear/search/nest/nautilus/search.py`),
 and the DR1 science runs were submitted as two jobs on that basis. The `vis_pix`
 likelihood under `--use_cpu` is Numba, not JAX, so the documented case does not apply
-directly, and a control test on a laptop did not reproduce a hang:
+directly, and a control test did not reproduce a hang on either a laptop or a
+cluster node:
 
 | Leg (`hpc/diagnostics/jax_fork_control.py`) | Machine | Pool | Wall | Outcome |
 |---|---|---|---|---|
 | `control`: JAX likelihood evaluated in-process, then a `use_jax=False` pooled Nautilus | WSL2, 8 logical CPUs, CPU JAX | 4 | 265 s | PASS |
 | `control_real`: the script's own `fit(stage="vis_lp")` under JAX, then `fit(stage="vis_pix", use_cpu=True)` in the same process | same | 4 | 494 s | PASS |
 | `subprocess`: JAX stage in a child of a JAX-free parent, then the pooled fit | same | 4 | 233 s | PASS |
+| `control` | RAL `euclid-ral-compute-1`, 16 cores | 16 | 216 s | PASS |
+| `control_real` | same | 16 | 378 s | PASS |
+| `subprocess` | same | 16 | 220 s | PASS |
 
-Untested there: production sampler sizes (`n_live` 750 and 300 against 50 in the
-test), multi-hour wall times, pools of 16 or more workers, and cluster cgroup limits.
-Until the same run passes on a cluster node at production scale, keep the process
-boundary. It costs nothing with the single-submission script, which already gives
-you one submission and one place in the queue. `forkserver` and `spawn` are not an
-option: PyAutoFit pins the `fork` start method because `forkserver` corrupts model
-instances (PyAutoFit#1437).
+The cluster rows add a 16-worker pool under real cgroup limits, which the laptop
+run could not exercise. What remains untested is production sampler size (`n_live`
+750 and 300, against 50 in the control) and multi-hour wall times: every leg above
+ran a small fit. Until a production-size run passes, keep the process boundary. It
+costs nothing with the single-submission script, which already gives you one
+submission and one place in the queue. The single-process route is filed as a
+follow-up rather than abandoned
+(`PyAutoMind/draft/feature/euclid/single_process_cpu_route_jax_vis_lp_numba_vis_pix.md`).
+`forkserver` and `spawn` are not an option: PyAutoFit pins the `fork` start method
+because `forkserver` corrupts model instances (PyAutoFit#1437).
 
 To repeat the measurement on your cluster:
 
@@ -88,7 +105,34 @@ time, outcome).
 
 `hpc/batch_cpu/submit_jax_fork_control` is that command as a SLURM job -- 16 cores,
 all three legs, results under `output_diag/jax_fork_control` -- so the pooled legs are
-measured at the size a production `vis_pix` fit actually forks.
+measured at the size a production `vis_pix` fit actually forks. The RAL rows in
+the table above came from that job (16 cores, all three legs, 13.6 min total).
+
+## Acceptance on RAL
+
+Both routes were run end to end from the scripts in this directory, on the
+committed example lens (`q1_walsmley/102018665_NEG570040238507752998`), on the
+RAL cluster on 2026-09-03:
+
+| Route | Script | Allocation | `vis_lp` | `vis_pix` | Total | Outcome |
+|---|---|---|---|---|---|---|
+| GPU | `batch_gpu/submit_initial_lens_model` | one A100 80GB PCIe, 1 core | 31.5 min | 42.5 min | 1 h 14 min | COMPLETED |
+| Two-stage CPU | `batch_cpu/submit_initial_lens_model_two_stage` | 8 cores, 8 pool workers | 25.5 min | 2 h 51 min | 3 h 17 min | COMPLETED |
+
+The CPU chain's second process logged `Fit Already Completed: skipping
+non-linear search` for `vis_lp` and went straight to `vis_pix`. That is the
+`--stage vis_pix` guard doing its job: it found the cached `vis_lp` result and
+did not re-fit it.
+
+A first GPU attempt did not get that far. The allocated A100 was in MIG mode
+with no instances configured, so `cuInit(0)` failed with
+`CUDA_ERROR_NO_DEVICE`, JAX fell back to its CPU backend, and the job ran the
+whole fit on its single allocated core -- `vis_lp` took 45 minutes and `vis_pix`
+was about 5% done when the two-hour wall killed it. `nvidia-smi` reported a
+healthy A100 throughout, and nothing in the job's own output said the GPU had
+gone. Every script in `batch_gpu/` now checks `jax.default_backend()` before it
+starts, so a GPU job whose JAX backend is CPU exits within seconds, naming the
+node, instead of burning its entire walltime.
 
 ## Setting up the cluster
 

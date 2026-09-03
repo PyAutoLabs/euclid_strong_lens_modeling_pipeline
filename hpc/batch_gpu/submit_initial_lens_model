@@ -10,6 +10,12 @@
 #   run on the device, so no process pool is involved and no process boundary
 #   between the stages is needed. One job per lens, and that is the whole story.
 #
+# MEASURED WALLTIME
+#   One lens of the committed example sample took 1 h 14 min end to end on an
+#   A100 80GB PCIe with the committed `config/` -- 31 min for `vis_lp`, 42 min
+#   for `vis_pix`. The 4 hour default below leaves headroom for a slower lens
+#   or a busier node; hpc/README.md has the full acceptance table.
+#
 # WHEN TO USE THE CPU SCRIPTS INSTEAD
 #   When no GPU partition is available to you, or when the GPU queue is long
 #   enough that CPU nodes get you results sooner. `hpc/batch_cpu/` holds those
@@ -23,7 +29,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=32gb
-#SBATCH --time=02:00:00
+#SBATCH --time=04:00:00
 #SBATCH --array=0-0
 #SBATCH -o output/output.%A_%a.out
 #SBATCH -e error/error.%A_%a.err
