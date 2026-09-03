@@ -473,9 +473,11 @@ compiles it and dispatches it to a GPU if one is available. That is where the
 50x comes from.
 
 ``--use_cpu`` turns JAX off and takes the CPU path. This is not simply "the same
-thing, slower": the pixelized stage applies a **CPU sparse operator** in place of
-the dense GPU-friendly one, because the linear algebra that is fastest dense on
-a GPU is fastest sparse on a CPU. When you pass ``--use_cpu``, pass
+thing, slower": the pixelized stage applies a **CPU sparse operator**, a Numba
+precomputation of the PSF products the inversion needs, because that is the
+fastest way to do this linear algebra on a CPU. It is the CPU route's tool and is
+applied only under ``--use_cpu`` — the JAX path applies no sparse operator and
+fits the plain dataset. When you pass ``--use_cpu``, pass
 ``--number_of_cores`` as well — that is the argument the ``vis_pix`` search uses
 to parallelise across CPU cores.
 

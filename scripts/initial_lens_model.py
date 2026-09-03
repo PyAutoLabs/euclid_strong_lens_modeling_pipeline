@@ -324,24 +324,22 @@ def fit(
     A pixelized fit solves a large linear system at every likelihood evaluation,
     and the expensive ingredient in it is the PSF: the mapping between image
     pixels and source pixels has to be convolved before the source can be solved
-    for. The sparse operator precomputes the PSF-and-noise-map products that
-    convolution needs, once, when the dataset is built. Each likelihood evaluation
-    then reuses them instead of recomputing them. The operator is attached to the
-    returned dataset and picked up automatically by the fit, and it is applied
-    only here, because only a pixelized fit performs that inversion — ``vis_lp``
-    above runs on the plain ``d.dataset``.
+    for. The sparse operator is the CPU route's tool for that. It precomputes the
+    PSF-and-noise-map products the convolution needs, once, when the dataset is
+    built, in a Numba implementation; each likelihood evaluation then reuses them
+    instead of recomputing them. The operator is attached to the returned dataset
+    and picked up automatically by the fit, and it is applied only here, because
+    only a pixelized fit performs that inversion — ``vis_lp`` above runs on the
+    plain ``d.dataset``.
 
-    The two calls build the same operator by different routes.
-    ``apply_sparse_operator`` uses JAX, which is the GPU path;
-    ``apply_sparse_operator_cpu`` uses a Numba CPU implementation. ``--use_cpu``
-    selects the latter, and is the same switch that sets ``use_jax=False`` on the
-    analysis below — so it does not merely move the same arithmetic to another
-    device, it changes which implementation of the linear algebra is used.
+    It is applied only under ``--use_cpu``, the same switch that sets
+    ``use_jax=False`` on the analysis below. Under JAX — the GPU route — no sparse
+    operator is applied at all: the pixelized inversion uses JAX's own linear
+    algebra on the plain dataset, and applying the operator on top of that path
+    replaces the linear algebra JAX is fastest at with one it is not.
     """
     if use_cpu:
         dataset = dataset.apply_sparse_operator_cpu()
-    else:
-        dataset = dataset.apply_sparse_operator()
 
     """
     __Image Mesh__

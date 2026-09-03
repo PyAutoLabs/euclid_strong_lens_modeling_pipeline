@@ -30,8 +30,10 @@ see out of the box. The discrepancy is open, and tracked as
 The GPU route is the simplest and, per lens, by far the fastest. The two-stage CPU route
 exists because a cluster with hundreds of CPU cores and few GPUs can fit a large sample
 faster in aggregate: the `vis_lp` MGE fit is a good fit for JAX on the CPU backend, while
-the pixelized `vis_pix` fit is fastest with the Numba sparse operator and a forked
-process pool, which JAX's sparse linear algebra does not yet match. Under JAX the
+the pixelized `vis_pix` fit, with JAX switched off, is fastest with the Numba sparse
+operator and a forked process pool across many cores. That operator is the CPU route's
+tool and is applied only under `--use_cpu`; the GPU route applies no sparse operator at
+all and fits the plain dataset with JAX's own linear algebra. Under JAX the
 `--number_of_cores` argument is ignored, because PyAutoFit routes a JAX likelihood
 to its serial path and lets JAX vectorise instead.
 

@@ -602,13 +602,15 @@ def fit(
     the dataset contract it reads — including ``info.json``, which is where the mask
     radius comes from — is described in ``start_here.py``.
 
-    The sparse operator is then applied on top. It speeds up the linear algebra of
-    the pixelized searches, which is where this pipeline spends most of its time.
+    Every search in this script runs under JAX, so the dataset is fitted exactly as
+    it is loaded. The Numba sparse operator that ``scripts/initial_lens_model.py``
+    applies to its pixelized stage is the CPU route's tool, applied only under
+    ``--use_cpu``; under JAX the pixelized inversion uses JAX's own linear algebra
+    on the plain dataset.
     """
     d = util.load_vis_dataset(dataset_name, sample_name=sample_name)
 
-    # full_model uses a sparse operator for faster pixelisation fits
-    dataset = d.dataset.apply_sparse_operator()
+    dataset = d.dataset
 
     """
     __Settings AutoFit__
