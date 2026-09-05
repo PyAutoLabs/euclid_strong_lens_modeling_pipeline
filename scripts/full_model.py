@@ -782,7 +782,7 @@ def fit(
         analysis=analysis,
         source_lp_result=source_lp_result,
         mesh_init=al.mesh.Delaunay(
-            pixels=image_plane_mesh_grid.shape[0],
+            pixels=image_plane_mesh_grid.shape[0] - edge_pixels_total,
             zeroed_pixels=edge_pixels_total,
         ),
         regularization_init=al.reg.AdaptSplit,
@@ -859,7 +859,7 @@ def fit(
         source_lp_result=source_lp_result,
         source_pix_result_1=source_pix_result_1,
         mesh=al.mesh.Delaunay(
-            pixels=image_plane_mesh_grid.shape[0],
+            pixels=hilbert_pixels,
             zeroed_pixels=edge_pixels_total,
         ),
         regularization=al.reg.AdaptSplit,

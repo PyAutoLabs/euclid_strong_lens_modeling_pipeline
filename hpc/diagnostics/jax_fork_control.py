@@ -429,7 +429,7 @@ def pooled_pix_fit(dataset: str, sample: str, output_path: Path, cores: int, n_l
                 pixelization=af.Model(
                     al.Pixelization,
                     mesh=al.mesh.Delaunay(
-                        pixels=image_plane_mesh_grid.shape[0],
+                        pixels=HILBERT_PIXELS,
                         zeroed_pixels=EDGE_PIXELS_TOTAL,
                     ),
                     regularization=al.reg.AdaptSplit,
