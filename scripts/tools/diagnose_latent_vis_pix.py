@@ -38,10 +38,32 @@ evaluates end to end, sweep the light-profile stage instead::
 
     python scripts/tools/diagnose_latent_vis_pix.py --search=vis_lp
 
-The library latents that do not depend on the source reconstruction
-(``magnification``, ``effective_einstein_radius``, the lens fluxes) are
-identical between the two stages, because ``vis_pix`` holds the lens light as an
-instance from ``vis_lp``.
+__Which latents are stage-invariant__
+
+Only some of them, so a ``vis_lp`` sweep is not a substitute for a ``vis_pix``
+one. ``effective_einstein_radius`` and the lens fluxes (``total_lens_flux``,
+``total_lens_flux_mujy`` and the four aperture
+``total_lens_flux_{1,2,3,4}_fwhm_mujy`` values) *are* identical between the two
+stages: they depend only on the mass model and the lens light, and ``vis_pix``
+holds the lens light as an instance from ``vis_lp``.
+
+The source latents are not. ``total_source_flux``, ``total_source_flux_mujy``,
+``total_lensed_source_flux``, ``total_lensed_source_flux_mujy`` and
+``magnification`` — which is the ratio of the last two — all depend on the
+*source* model, and the source model is exactly what ``vis_pix`` replaces. They
+therefore differ between the stages by construction, and the difference is
+physical rather than a fault.
+
+For a pixelized source the source-plane flux is the inversion's reconstruction
+integrated over the source mesh — ``sum_i s_i A_i``, the reconstructed value of
+each source pixel times the area the mesh publishes for it as
+``areas_for_magnification``. That definition arrived with PyAutoLens#726 (PR
+#727). Before it the denominator read the source galaxy's ``image_2d_from``,
+which is zeros for a galaxy whose only light model is a ``Pixelization``, so
+every pixelized stage of this pipeline reported ``total_source_flux = 0.0`` and
+an infinite ``magnification`` — dropped from ``latent_summary.json`` by
+PyAutoFit's NaN guard, or archived as the ``0.0`` this script tags
+``<<ZERO sentinel>>``. A ``vis_pix`` magnification is finite now.
 
 Phase 2 of the DR1 prep epic puts unit tests and CI on the latent catalogue;
 this script is the human-inspection route that stays useful for triaging a

@@ -32,10 +32,18 @@ together with a ``truth.json`` that records both
 Every test therefore makes two named assertions: one against the replayed
 pipeline value, one against the independent truth block.
 
+One block at the end is not a known-answer test. The ``vis_pix`` stage replaces
+the source's light profile with a ``Delaunay`` pixelization, and for that source
+``total_source_flux`` — and therefore ``magnification`` — is the inversion's
+reconstruction integrated over the source mesh (PyAutoLens#726). Those two tests
+assert that the pixelized ``magnification`` is present and finite, and which
+latents the source swap may and may not change; the mesh areas the integral uses
+are version-dependent, so no tolerance against ``truth.json`` is claimed there.
+
 These tests are deliberately **JAX-free** (``use_jax=False`` everywhere, as
 ``AGENTS.md`` requires) and run no non-linear search. The whole module is a
-handful of seconds: the dataset is loaded and the latents evaluated once, in
-session-scoped fixtures.
+handful of seconds: the dataset is loaded and each set of latents evaluated
+once, in session-scoped fixtures.
 """
 
 import inspect
@@ -74,6 +82,22 @@ LENS_FLUX_REL = 0.15  # extended lens light: masked vs full frame
 APERTURE_REL = 0.005  # aperture photometry: masked vs full frame
 MAGNIFICATION_REL = 0.002  # flux ratio, masked vs full frame
 EINSTEIN_RADIUS_REL = 0.01  # critical-curve radius vs model parameter
+
+# The `vis_pix` Delaunay mesh, mirrored from `scripts/initial_lens_model.py` at a
+# size that keeps the inversion inside the fast suite: the script draws 500
+# Hilbert points and appends a 30-point circle-edge ring, this draws 150 and
+# appends the same ring. `HILBERT_WEIGHT_POWER` / `HILBERT_WEIGHT_FLOOR` and the
+# adapt-image floor are the script's own values.
+HILBERT_PIXELS = 150
+EDGE_PIXELS_TOTAL = 30
+HILBERT_WEIGHT_POWER = 3.5
+HILBERT_WEIGHT_FLOOR = 0.01
+ADAPT_IMAGE_FLOOR = 0.01
+
+# The model path `AdaptImages` keys its per-galaxy entries by, which is why the
+# pixelized model's galaxies are named `lens` / `source` (as the pipeline names
+# them) rather than `galaxy_0` / `galaxy_1` (as `truth.json` does).
+SOURCE_PATH = "('galaxies', 'source')"
 
 
 # ---------------------------------------------------------------------------
@@ -160,13 +184,19 @@ def truth_model(truth):
     )
 
 
-def _analysis_from(euclid_dataset):
+def _analysis_from(euclid_dataset, adapt_images=None):
     """
     The pipeline ``AnalysisImaging`` exactly as ``scripts/simulator.py`` builds
     it when it writes ``truth["latents"]`` — same kwargs, ``use_jax=False``.
+
+    ``adapt_images`` defaults to ``None``, which is the library default and so
+    reproduces the simulator's call byte for byte. The pixelized-source tests
+    pass an ``al.AdaptImages`` here, the way ``scripts/initial_lens_model.py``
+    hands the ``vis_pix`` stage its image-plane mesh grid.
     """
     return util.AnalysisImaging(
         dataset=euclid_dataset.dataset,
+        adapt_images=adapt_images,
         positions_likelihood_list=None,
         use_jax=False,
         dataset_main_path=euclid_dataset.dataset_main_path,
@@ -199,6 +229,120 @@ def latents(analysis, truth_model):
     keys = util.LatentEuclid.keys(analysis)
     values = util.LatentEuclid.variables(
         analysis=analysis, parameters=[], model=truth_model
+    )
+    return {key: float(value) for key, value in zip(keys, values)}
+
+
+@pytest.fixture(scope="session")
+def pixelized_source_model(truth, euclid_dataset):
+    """
+    The ``vis_pix`` stage as a zero-free-parameter model, together with the
+    ``al.AdaptImages`` its ``Delaunay`` mesh needs.
+
+    ``scripts/initial_lens_model.py`` builds that stage from the preceding
+    ``vis_lp`` result: the lens galaxy is carried over as an *instance* (light +
+    mass + shear), and the source's light profile is replaced by a
+    ``Pixelization`` whose ``Delaunay`` mesh takes its vertices from an
+    image-plane grid built at run time — a ``Hilbert`` mesh drawn from the
+    source's adapt image, with a ring of circle-edge points appended and zeroed.
+    That grid cannot live in the model, so it travels to the analysis inside
+    ``AdaptImages``.
+
+    Mirrored here with the truth model standing in for the ``vis_lp`` result:
+    the lens is the truth lens, and the adapt image is the truth source's own
+    image-plane (lensed) image with the script's floor applied, which is what the
+    ``vis_lp`` source model image is an estimate of. The mesh is a quarter the
+    size the pipeline uses, purely so the inversion stays inside the fast suite.
+    """
+    import autofit as af
+    import autolens as al
+
+    lens_entry = truth["model"]["galaxy_0"]
+    source_entry = truth["model"]["galaxy_1"]
+
+    lens = al.Galaxy(
+        redshift=lens_entry["redshift"],
+        **{
+            profile_name: _profile_from(entry)
+            for profile_name, entry in lens_entry["profiles"].items()
+        },
+    )
+    sersic_source = al.Galaxy(
+        redshift=source_entry["redshift"],
+        **{
+            profile_name: _profile_from(entry)
+            for profile_name, entry in source_entry["profiles"].items()
+        },
+    )
+
+    dataset = euclid_dataset.dataset
+
+    adapt_data = al.Tracer(
+        galaxies=[lens, sersic_source]
+    ).galaxy_image_2d_dict_from(grid=dataset.grids.lp)[sersic_source]
+    adapt_data = adapt_data + np.max(adapt_data) * ADAPT_IMAGE_FLOOR
+
+    image_plane_mesh_grid = al.image_mesh.Hilbert(
+        pixels=HILBERT_PIXELS,
+        weight_power=HILBERT_WEIGHT_POWER,
+        weight_floor=HILBERT_WEIGHT_FLOOR,
+    ).image_plane_mesh_grid_from(mask=dataset.mask, adapt_data=adapt_data)
+
+    image_plane_mesh_grid = al.image_mesh.append_with_circle_edge_points(
+        image_plane_mesh_grid=image_plane_mesh_grid,
+        centre=dataset.mask.mask_centre,
+        radius=euclid_dataset.mask_radius + dataset.mask.pixel_scale / 2.0,
+        n_points=EDGE_PIXELS_TOTAL,
+    )
+
+    adapt_images = al.AdaptImages(
+        galaxy_name_image_dict={SOURCE_PATH: adapt_data},
+        galaxy_name_image_plane_mesh_grid_dict={SOURCE_PATH: image_plane_mesh_grid},
+    )
+
+    model = af.Collection(
+        galaxies=af.Collection(
+            lens=af.Model.from_instance(lens),
+            source=af.Model(
+                al.Galaxy,
+                redshift=source_entry["redshift"],
+                pixelization=af.Model(
+                    al.Pixelization,
+                    mesh=al.mesh.Delaunay(
+                        pixels=image_plane_mesh_grid.shape[0],
+                        zeroed_pixels=EDGE_PIXELS_TOTAL,
+                    ),
+                    regularization=al.reg.AdaptSplit(),
+                ),
+            ),
+        )
+    )
+
+    assert model.prior_count == 0, (
+        "the pixelized model must have zero free parameters so "
+        "`LatentEuclid.variables` can be called with an empty parameter vector, "
+        f"got {model.prior_count}"
+    )
+
+    return model, adapt_images
+
+
+@pytest.fixture(scope="session")
+def pixelized_latents(euclid_dataset, pixelized_source_model):
+    """
+    The 12 latent values of the pixelized (``vis_pix``) fit, keyed by name.
+
+    Evaluated by the same direct ``LatentEuclid.variables`` call the
+    light-profile ``latents`` fixture uses — no non-linear search — on an
+    analysis carrying the stage's ``AdaptImages``.
+    """
+    model, adapt_images = pixelized_source_model
+
+    analysis = _analysis_from(euclid_dataset, adapt_images=adapt_images)
+
+    keys = util.LatentEuclid.keys(analysis)
+    values = util.LatentEuclid.variables(
+        analysis=analysis, parameters=[], model=model
     )
     return {key: float(value) for key, value in zip(keys, values)}
 
@@ -432,3 +576,125 @@ def test_magnification_equals_lensed_over_source_flux(latents):
         "the magnification latent must equal lensed-source uJy / source uJy "
         "computed from the same latent block"
     )
+
+
+# ---------------------------------------------------------------------------
+# Pixelized source — the `vis_pix` stage  (PyAutoLens#726)
+# ---------------------------------------------------------------------------
+
+
+def test_pixelized_source_magnification_is_finite(pixelized_latents):
+    """
+    Regression for PyAutoLens#726: the ``magnification`` latent of a Delaunay
+    pixelized source — the ``vis_pix`` and ``full_model`` stages of this
+    pipeline — is present and finite.
+
+    ``magnification`` is ``total_lensed_source_flux_mujy /
+    total_source_flux_mujy``. Until PyAutoLens PR #727 the denominator read the
+    source galaxy's ``image_2d_from``, which is zeros for a galaxy whose only
+    light model is a ``Pixelization``: every pixelized fit in this pipeline had
+    ``total_source_flux = 0.0`` and an infinite ``magnification``, dropped from
+    ``latent_summary.json`` by PyAutoFit's NaN guard or archived as a ``0.0``
+    sentinel. The source-plane flux is now the reconstruction integrated over
+    the source mesh, ``sum_i s_i A_i`` with ``A_i`` the mesh's
+    ``areas_for_magnification``.
+
+    The assertion is **present, finite and positive**, not "matches the truth
+    magnification". Two reasons, and both are deliberate:
+
+    * the mesh areas a Delaunay reconstruction is integrated against changed
+      with PyAutoArray#524, so the numerical value depends on which autoarray
+      is installed — a tight tolerance would assert the local wheel, not the
+      physics. ``test_magnification`` keeps the known-answer check where the
+      source *is* a light profile and no mesh is involved;
+    * accuracy of the pixelized magnification is the human acceptance step
+      recorded on PyAutoLens#726, not something this suite can rule on.
+
+    This direct call is nonetheless the only place the ``vis_pix``
+    magnification is asserted numerically at all: the run-level test is test
+    mode, where ``autonerves.test_mode.skip_latents()`` gates the write, so a
+    run-level check can only ever be structural.
+    """
+    assert "magnification" in pixelized_latents, (
+        "the `magnification` latent must be present for a pixelized source; "
+        f"got keys {sorted(pixelized_latents)}"
+    )
+
+    magnification = pixelized_latents["magnification"]
+    source_flux = pixelized_latents["total_source_flux"]
+    source_flux_mujy = pixelized_latents["total_source_flux_mujy"]
+
+    # Measured locally on 2026-09-05 with autoarray 2026.9.4.1 (pre
+    # PyAutoArray#524): total_source_flux 0.01257, total_source_flux_mujy
+    # 0.006597, total_lensed_source_flux_mujy 7.2266, magnification 1095.4.
+    # Recorded as a datum, not asserted — see the docstring.
+    assert np.isfinite(source_flux) and source_flux > 0.0, (
+        "the source-plane flux of a pixelized source must be the finite, "
+        "positive mesh integral `sum_i s_i A_i`, not the 0.0 a `Pixelization`'s "
+        f"`image_2d_from` returns; got total_source_flux={source_flux!r}"
+    )
+    assert np.isfinite(source_flux_mujy) and source_flux_mujy > 0.0, (
+        "total_source_flux_mujy must be finite and positive for a pixelized "
+        f"source; got {source_flux_mujy!r}"
+    )
+    assert np.isfinite(magnification), (
+        "the pixelized-source magnification must be finite (it was `inf` before "
+        f"PyAutoLens PR #727); got {magnification!r} with "
+        f"total_source_flux={source_flux!r}"
+    )
+    assert magnification > 0.0, (
+        f"the pixelized-source magnification must be positive; got "
+        f"{magnification!r} with total_source_flux={source_flux!r}"
+    )
+
+    ratio = (
+        pixelized_latents["total_lensed_source_flux_mujy"] / source_flux_mujy
+    )
+    assert magnification == pytest.approx(ratio), (
+        "the pixelized-source magnification must equal lensed-source uJy / "
+        f"source uJy computed from the same latent block; got {magnification!r} "
+        f"against {ratio!r}"
+    )
+
+
+def test_pixelized_source_latents_stage_invariance(pixelized_latents, latents):
+    """
+    Which latents survive the swap from a Sersic source to a pixelization, and
+    which do not.
+
+    The lens-side latents do: ``effective_einstein_radius`` and every lens flux
+    depend only on the mass model and the lens light, which ``vis_pix`` holds as
+    instances chained from ``vis_lp``. The source-side ones do not — they depend
+    on the source model, which is exactly what the stage replaces — so a
+    ``vis_lp`` readout is not a substitute for a ``vis_pix`` one. This is the
+    claim the module docstring of ``scripts/tools/diagnose_latent_vis_pix.py``
+    got backwards until PyAutoLens#726 was fixed and it could be measured.
+    """
+    invariant = [
+        "total_lens_flux",
+        "total_lens_flux_mujy",
+        "effective_einstein_radius",
+    ] + list(util.LatentEuclid.APERTURE_LATENT_KEYS)
+
+    for key in invariant:
+        assert pixelized_latents[key] == pytest.approx(
+            latents[key], rel=REPLAY_REL
+        ), (
+            f"latent '{key}' depends only on the mass model and the lens light, "
+            "which the pixelized model shares with the light-profile model, so "
+            "it must be unchanged by the source swap; got "
+            f"{pixelized_latents[key]!r} against {latents[key]!r}"
+        )
+
+    for key in (
+        "total_source_flux",
+        "total_source_flux_mujy",
+        "total_lensed_source_flux",
+        "total_lensed_source_flux_mujy",
+        "magnification",
+    ):
+        assert pixelized_latents[key] != pytest.approx(latents[key], rel=1e-3), (
+            f"latent '{key}' depends on the source model and must differ "
+            "between a Sersic source and a Delaunay pixelization; got "
+            f"{pixelized_latents[key]!r} against {latents[key]!r}"
+        )
