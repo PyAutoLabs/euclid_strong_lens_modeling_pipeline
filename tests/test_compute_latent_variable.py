@@ -625,9 +625,11 @@ def test_pixelized_source_magnification_is_finite(pixelized_latents):
     source_flux_mujy = pixelized_latents["total_source_flux_mujy"]
 
     # Measured locally on 2026-09-05 with autoarray 2026.9.4.1 (pre
-    # PyAutoArray#524): total_source_flux 0.01257, total_source_flux_mujy
-    # 0.006597, total_lensed_source_flux_mujy 7.2266, magnification 1095.4.
-    # Recorded as a datum, not asserted — see the docstring.
+    # PyAutoArray#524, Voronoi areas) and PyAutoLens PR #728 (flux per data
+    # pixel): total_source_flux 1.2571, total_source_flux_mujy 0.6597,
+    # total_lensed_source_flux_mujy 7.2266, magnification 10.95 against the
+    # Sersic control's 15.15. Recorded as a datum, not asserted — see the
+    # docstring.
     assert np.isfinite(source_flux) and source_flux > 0.0, (
         "the source-plane flux of a pixelized source must be the finite, "
         "positive mesh integral `sum_i s_i A_i`, not the 0.0 a `Pixelization`'s "
