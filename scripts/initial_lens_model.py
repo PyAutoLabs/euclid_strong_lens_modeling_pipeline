@@ -588,7 +588,7 @@ def fit(
                 pixelization=af.Model(
                     al.Pixelization,
                     mesh=al.mesh.Delaunay(
-                        pixels=image_plane_mesh_grid.shape[0],
+                        pixels=hilbert_pixels,
                         zeroed_pixels=edge_pixels_total,
                     ),
                     regularization=al.reg.AdaptSplit,
