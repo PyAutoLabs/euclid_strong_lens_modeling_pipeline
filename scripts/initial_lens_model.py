@@ -199,6 +199,29 @@ def fit(
         centre=d.dataset_centre,
     )
 
+    # Bound the source ell_comps to [-0.7, 0.7] per component: 0.7^2 + 0.7^2 =
+    # 0.98 < 1, the largest axis-aligned box inside the unit disk, so |e| >= 1
+    # (which raises ModelParameterException at instance construction) is
+    # unreachable by construction. On-axis this still admits q down to ~0.18.
+    # This is not the lens cap's reasoning: [-0.5, 0.5] above is a lens-light
+    # systematic (multi-blob MGE absorbing source flux), whereas this is pure
+    # geometry (unit-disk validity) and so keeps nearly all of the range the
+    # library default meant to offer. That default box is [-1, 1] per component
+    # with its corner at |e| = sqrt(2) — 21.5% of the box is unphysical — which
+    # killed RAL 342301 task 3 at its first quick update (PyAutoFit#1567).
+    #
+    # gaussian_per_basis defaults to 1, so this is one basis of 20 gaussians
+    # sharing a single ell_comps prior pair; reassign one fresh pair to keep it.
+    source_ell_0 = af.TruncatedGaussianPrior(
+        mean=0.0, sigma=0.3, lower_limit=-0.7, upper_limit=0.7
+    )
+    source_ell_1 = af.TruncatedGaussianPrior(
+        mean=0.0, sigma=0.3, lower_limit=-0.7, upper_limit=0.7
+    )
+    for g in source_bulge.profile_list:
+        g.ell_comps.ell_comps_0 = source_ell_0
+        g.ell_comps.ell_comps_1 = source_ell_1
+
     model = af.Collection(
         galaxies=af.Collection(
             lens=af.Model(
