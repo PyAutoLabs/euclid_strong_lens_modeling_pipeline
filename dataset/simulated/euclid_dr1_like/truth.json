@@ -42,10 +42,10 @@
             ],
             "noise_sigma": 0.004,
             "lens_intensity_scale": 0.11953689308619059,
-            "source_intensity_scale": 0.03240097038327698,
+            "source_intensity_scale": 0.032400970383276974,
             "lens_flux_counts": 144.54397707459307,
-            "lensed_source_flux_counts": 13.182567385564083,
-            "source_flux_counts": 0.8709670044476694,
+            "lensed_source_flux_counts": 13.18256738556408,
+            "source_flux_counts": 0.8709670044476692,
             "lens_flux_mujy": 75.86234251131022,
             "lensed_source_flux_mujy": 6.918727866924541,
             "source_flux_mujy": 0.45711760908143007
@@ -59,10 +59,10 @@
             ],
             "noise_sigma": 2.356,
             "lens_intensity_scale": 18.94532081002555,
-            "source_intensity_scale": 3.552695755914436,
+            "source_intensity_scale": 3.5526957559144354,
             "lens_flux_counts": 22908.676527677795,
             "lensed_source_flux_counts": 1445.4397707459307,
-            "source_flux_counts": 95.49963299370154,
+            "source_flux_counts": 95.49963299370152,
             "lens_flux_mujy": 100.00604421820891,
             "lensed_source_flux_mujy": 6.309954809188985,
             "source_flux_mujy": 0.4168962143427225
@@ -76,10 +76,10 @@
             ],
             "noise_sigma": 2.389,
             "lens_intensity_scale": 27.384320168351334,
-            "source_intensity_scale": 3.8954534338906024,
+            "source_intensity_scale": 3.8954534338906015,
             "lens_flux_counts": 33113.11214825915,
-            "lensed_source_flux_counts": 1584.8931924611143,
-            "source_flux_counts": 104.71326531726989,
+            "lensed_source_flux_counts": 1584.893192461114,
+            "source_flux_counts": 104.71326531726984,
             "lens_flux_mujy": 120.23371021032871,
             "lensed_source_flux_mujy": 5.754747181826294,
             "source_flux_mujy": 0.38021386636700677
@@ -93,10 +93,10 @@
             ],
             "noise_sigma": 2.228,
             "lens_intensity_scale": 27.38432016835122,
-            "source_intensity_scale": 3.24009703832769,
+            "source_intensity_scale": 3.2400970383276895,
             "lens_flux_counts": 33113.11214825901,
             "lensed_source_flux_counts": 1318.2567385564048,
-            "source_flux_counts": 87.09670044476673,
+            "source_flux_counts": 87.09670044476671,
             "lens_flux_mujy": 131.83364168702343,
             "lensed_source_flux_mujy": 5.248391807578443,
             "source_flux_mujy": 0.3467591674001288
@@ -170,7 +170,7 @@
                             -0.060356495881000366,
                             -0.16582810955045446
                         ],
-                        "intensity": 0.03240097038327698,
+                        "intensity": 0.032400970383276974,
                         "effective_radius": 0.15,
                         "sersic_index": 1.0
                     }
@@ -207,12 +207,12 @@
         ]
     },
     "magnification": {
-        "area": 15.135553147531587,
-        "point": 28.14700505667669
+        "area": 15.135553147531589,
+        "point": 28.14700505667951
     },
     "einstein_radius": {
         "model_parameter": 1.2,
-        "effective": 1.192117526130301
+        "effective": 1.192117526130312
     },
     "positions": [
         [
@@ -233,18 +233,18 @@
         ]
     ],
     "latents": {
-        "total_lens_flux": 131.13938459709908,
-        "total_lensed_source_flux": 13.146772686937368,
-        "total_source_flux": 0.8679858287428486,
-        "total_lens_flux_mujy": 68.82292736912149,
-        "total_lensed_source_flux_mujy": 6.899524384312648,
-        "total_source_flux_mujy": 0.4555254383153279,
-        "magnification": 15.146298766165936,
-        "effective_einstein_radius": 1.192117526130301,
-        "total_lens_flux_1_fwhm_mujy": 9.488140233241635,
-        "total_lens_flux_2_fwhm_mujy": 27.260853652022096,
-        "total_lens_flux_3_fwhm_mujy": 39.29798733383888,
-        "total_lens_flux_4_fwhm_mujy": 47.8520495870593
+        "total_lens_flux": 131.36541047625514,
+        "total_lensed_source_flux": 13.186319325895369,
+        "total_source_flux": 0.8709670044433919,
+        "total_lens_flux_mujy": 68.94154743671218,
+        "total_lensed_source_flux_mujy": 6.920278755465621,
+        "total_source_flux_mujy": 0.45708998156328795,
+        "magnification": 15.139860934596857,
+        "effective_einstein_radius": 1.192117526130312,
+        "total_lens_flux_1_fwhm_mujy": 9.511339462834504,
+        "total_lens_flux_2_fwhm_mujy": 27.328813067014213,
+        "total_lens_flux_3_fwhm_mujy": 39.39190087603129,
+        "total_lens_flux_4_fwhm_mujy": 47.957985112403996
     },
     "latents_skipped_reason": null
 }
