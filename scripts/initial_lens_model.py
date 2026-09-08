@@ -34,10 +34,174 @@ chain — see ``start_here.py``, "__SLaM: Source, Light And Mass__".
 import os
 import sys
 from pathlib import Path
+from typing import Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import util
+
+
+def vis_lp_model_from(
+    mask_radius: float,
+    dataset_centre: Tuple[float, float],
+    redshift_lens: float,
+    redshift_source: float,
+) -> "af.Collection":
+    """
+    Compose the ``vis_lp`` model: an MGE lens light, an SIE + shear mass and an MGE
+    source.
+
+    This is the model ``fit`` hands to the ``vis_lp`` search, split out of it so that
+    the priors and the assertion below can be inspected without loading a dataset or
+    running a search. ``tests/test_vis_lp_model.py`` is the caller that does that.
+
+    Parameters
+    ----------
+    mask_radius
+        Outer radius of the circular analysis mask in arcseconds (``d.mask_radius``),
+        which sets the largest Gaussian width in each MGE.
+    dataset_centre
+        The (y, x) brightest central pixel (``d.dataset_centre``), used as the midpoint
+        of the light centre priors and as the fixed mass centre.
+    redshift_lens
+        Redshift of the lens galaxy. A placeholder; see "__Redshifts__" in ``fit``.
+    redshift_source
+        Redshift of the source galaxy. A placeholder for the same reason.
+
+    Returns
+    -------
+    af.Collection
+        The lens and source galaxies, ready to fit.
+    """
+    import autofit as af
+    import autolens as al
+
+    """
+    __Model: MGE Lens + SIE Mass + MGE Source__
+
+    - Lens light:  40 Gaussians (2 sets of 20), 4 non-linear + ~40 linear parameters.
+    - Lens mass:   Isothermal ellipsoid + ExternalShear, 5 non-linear parameters.
+      Centre fixed to the brightest pixel for this initial fit.
+    - Source light: 20 Gaussians, 4 non-linear + ~20 linear parameters.
+
+    Total: ~15 non-linear parameters.  Linear parameters are solved at every
+    likelihood evaluation and add negligible sampling cost.
+    """
+
+    # `ell_comps_limit=0.5` truncates the lens ell_comps TruncatedGaussianPriors to
+    # [-0.5, 0.5] rather than the library default of [-1, 1]. Beyond that box the MGE
+    # forms a multi-blob shape that absorbs lensed-source flux into the lens light
+    # model, a known systematic. ell_comps in [-0.5, 0.5] corresponds to axis ratios
+    # q >= ~0.17 (at the diagonal corner), which is plenty wide.
+    #
+    # The box is set by this argument rather than by overwriting the priors on the
+    # returned model, which is what this script used to do. `order_bases` below
+    # attaches an assertion that references the prior objects `mge_model_from` built,
+    # so replacing them afterwards would leave the assertion pointing at priors the
+    # model no longer contains.
+    lens_bulge = al.model_util.mge_model_from(
+        mask_radius=mask_radius,
+        total_gaussians=20,
+        gaussian_per_basis=2,
+        centre_prior_is_uniform=True,
+        centre=dataset_centre,
+        ell_comps_limit=0.5,
+        order_bases=True,
+    )
+
+    """
+    __Ordering the two MGE bases__
+
+    ``gaussian_per_basis=2`` gives the lens light two sets of 20 Gaussians. The two
+    sets run over the same fixed sigma ladder, share the same centre, and have
+    independent ell_comps priors drawn from the same distribution; the 40 intensities
+    are solved linearly at every evaluation. Swapping which set holds which ell_comps
+    therefore permutes columns of the linear design matrix and leaves the model image
+    bit-identical. The two sets are exchangeable, the posterior has two exactly equal
+    modes, and an unseeded run lands in whichever one it reaches first. That is what
+    made 6 of 8 DR1 tiles report their two sets swapped between the May and September
+    runs of byte-identical data (issue #54, ``docs/mge_label_degeneracy.md``).
+
+    ``order_bases=True`` asks the library to keep one of the two modes: it attaches the
+    assertion ``ell_comps_1`` of the first basis is greater than ``ell_comps_1`` of the
+    second. No physical solution is removed, because the discarded mode is the same
+    solution under swapped labels; what is removed is the ambiguity about which label
+    it wears.
+
+    The key is ``ell_comps_1``, the ``cos 2phi`` component, and not the ellipticity
+    magnitude. At the maximum-likelihood point either key admits exactly one of the two
+    permutations, so neither forbids a solution; what decides whether the ordering
+    settles the labelling is the posterior spread. The two modes are separated in the
+    key by ``|key(e_A) - key(e_B)|``, and when that separation is smaller than the
+    marginal posterior width in the key, the constraint surface passes through both
+    modes: the retained region mixes the two labellings and the labels stay
+    undetermined. On Euclid phase-4 tile 102005065 the two sets sit at (0.007, -0.500)
+    and (-0.023, 0.497), a separation of 0.0025 in magnitude against 1.0 in
+    ``ell_comps_1``. The magnitude separation is far below any plausible marginal width,
+    so a magnitude key would leave the two labellings mixed, whereas ``ell_comps_1``
+    separates the modes by a margin no marginal width on these tiles approaches.
+
+    No continuous key is exact for every configuration. Tile 102007299 has its two sets
+    only 0.01 apart in ``ell_comps_1``, small compared with a typical marginal width, so
+    the ordering does not settle the labelling there. The diagnostic is direct: read the
+    two sets' ``ell_comps_1`` off a result, and if ``|delta ell_comps_1|`` is small
+    relative to the posterior width of the two sets, the labelling is undetermined
+    rather than ordered, and the pair should be read unordered as before.
+
+    Enforcement differs by backend but has the same outcome. Under ``--use_cpu`` the
+    NumPy path raises ``af.exc.FitException`` from ``check_assertions`` and Nautilus
+    resamples. Under JAX nothing can raise inside a trace, so the assertions are
+    evaluated as a traced boolean and a violating model is mapped to the resample
+    figure of merit instead (PyAutoFit#1583).
+
+    An assertion is part of the model, so it enters the PyAutoFit identifier with
+    PyAutoFit at or after the identifier fix that ships alongside this change (the
+    PyAutoFit follow-up to #1581, PR opened today): turning this on then gives an
+    otherwise identical fit a new ``unique_id`` and a fresh output directory. On older
+    PyAutoFit the assertion does not reach the identifier, so an ordered fit shares the
+    unordered fit's directory and would load a completed unordered result instead of
+    running. Results produced before it was turned on are not overwritten, and are not
+    comparable set by set. The library default is ``order_bases=False``; this pipeline
+    turns it on.
+    """
+
+    mass = af.Model(al.mp.Isothermal)
+    mass.centre.centre_0 = dataset_centre[0]
+    mass.centre.centre_1 = dataset_centre[1]
+
+    # `ell_comps_limit=0.7` bounds the source ell_comps to [-0.7, 0.7] per component:
+    # 0.7^2 + 0.7^2 = 0.98 < 1, the largest axis-aligned box inside the unit disk, so
+    # |e| >= 1 (which raises ModelParameterException at instance construction) is
+    # unreachable by construction. On-axis this still admits q down to ~0.18.
+    # This is not the lens cap's reasoning: [-0.5, 0.5] above is a lens-light
+    # systematic (multi-blob MGE absorbing source flux), whereas this is pure
+    # geometry (unit-disk validity) and so keeps nearly all of the range the
+    # library default meant to offer. That default box is [-1, 1] per component
+    # with its corner at |e| = sqrt(2), so 21.5% of the box is unphysical, which
+    # killed RAL 342301 task 3 at its first quick update (PyAutoFit#1567).
+    #
+    # gaussian_per_basis defaults to 1, so the source is a single basis of 20
+    # gaussians sharing one ell_comps prior pair. There is nothing to order.
+    source_bulge = al.model_util.mge_model_from(
+        mask_radius=mask_radius,
+        total_gaussians=20,
+        centre_prior_is_uniform=False,
+        centre=dataset_centre,
+        ell_comps_limit=0.7,
+    )
+
+    return af.Collection(
+        galaxies=af.Collection(
+            lens=af.Model(
+                al.Galaxy,
+                redshift=redshift_lens,
+                bulge=lens_bulge,
+                mass=mass,
+                shear=af.Model(al.mp.ExternalShear),
+            ),
+            source=af.Model(al.Galaxy, redshift=redshift_source, bulge=source_bulge),
+        )
+    )
 
 
 def fit(
@@ -48,6 +212,7 @@ def fit(
     use_cpu: bool = False,
     stage: str = "all",
     skip_pix: bool = None,
+    seed: Optional[int] = None,
 ):
     """
     Fit the initial Euclid lens model: an MGE light + SIE mass ``vis_lp`` search
@@ -83,6 +248,17 @@ def fit(
         Deprecated alias for ``stage``: ``skip_pix=True`` means
         ``stage="vis_lp"``. Kept so existing callers keep working; new code
         should pass ``stage``.
+    seed
+        Random seed for the ``vis_lp`` Nautilus search. It buys reproducibility and
+        nothing else: it fixes which sample sequence the search draws, so a rerun on
+        the same data with the same seed retraces the same path, but it does not
+        remove the two-fold lens-basis degeneracy. ``order_bases=True`` in
+        ``vis_lp_model_from`` is what does that.
+
+        ``seed`` is a Nautilus identifier field, so a different seed gives a different
+        ``unique_id`` and a fresh output directory. ``None``, the default, is
+        unseeded, and is what the witness reruns use: two *unseeded* runs agreeing set
+        by set are the evidence that the ordering, not the seed, fixed the labelling.
     """
     if skip_pix is not None and skip_pix:
         stage = "vis_lp"
@@ -149,90 +325,19 @@ def fit(
     redshift_source = 1.0
 
     """
-    __Model: MGE Lens + SIE Mass + MGE Source__
+    __Model__
 
-    - Lens light:  40 Gaussians (2 sets of 20), 4 non-linear + ~40 linear parameters.
-    - Lens mass:   Isothermal ellipsoid + ExternalShear, 5 non-linear parameters.
-      Centre fixed to the brightest pixel for this initial fit.
-    - Source light: 20 Gaussians, 4 non-linear + ~20 linear parameters.
-
-    Total: ~15 non-linear parameters.  Linear parameters are solved at every
-    likelihood evaluation and add negligible sampling cost.
+    ``vis_lp_model_from`` at the top of this file composes the model: the MGE lens
+    light (2 sets of 20 Gaussians, ordered), the Isothermal + ExternalShear mass with
+    its centre fixed to the brightest pixel, and the 20-Gaussian MGE source. Its prose
+    documents the ell_comps boxes and the basis ordering, and the parameter counts that
+    add up to the ~15 non-linear parameters the search below is sized for.
     """
-    lens_bulge = al.model_util.mge_model_from(
+    model = vis_lp_model_from(
         mask_radius=d.mask_radius,
-        total_gaussians=20,
-        gaussian_per_basis=2,
-        centre_prior_is_uniform=True,
-        centre=d.dataset_centre,
-    )
-
-    # Tighten the lens ell_comps TruncatedGaussianPrior bounds from the
-    # library default of [-1, 1] to [-0.5, 0.5]. Beyond that, the MGE forms
-    # a multi-blob shape that absorbs lensed-source flux into the lens light
-    # model — a known systematic. ell_comps in [-0.5, 0.5] corresponds to
-    # axis ratios q >= ~0.17 (at the diagonal corner), which is plenty wide.
-    #
-    # mge_model_from gives each of the 2 bases its own independent ell_comps
-    # prior shared across all 20 gaussians within the basis. Preserve that by
-    # creating exactly 2 fresh priors and reassigning them by basis-slice.
-    for j in range(2):
-        ell_0 = af.TruncatedGaussianPrior(
-            mean=0.0, sigma=0.3, lower_limit=-0.5, upper_limit=0.5
-        )
-        ell_1 = af.TruncatedGaussianPrior(
-            mean=0.0, sigma=0.3, lower_limit=-0.5, upper_limit=0.5
-        )
-        for i in range(20):
-            g = lens_bulge.profile_list[j * 20 + i]
-            g.ell_comps.ell_comps_0 = ell_0
-            g.ell_comps.ell_comps_1 = ell_1
-
-    mass = af.Model(al.mp.Isothermal)
-    mass.centre.centre_0 = d.dataset_centre[0]
-    mass.centre.centre_1 = d.dataset_centre[1]
-
-    source_bulge = al.model_util.mge_model_from(
-        mask_radius=d.mask_radius,
-        total_gaussians=20,
-        centre_prior_is_uniform=False,
-        centre=d.dataset_centre,
-    )
-
-    # Bound the source ell_comps to [-0.7, 0.7] per component: 0.7^2 + 0.7^2 =
-    # 0.98 < 1, the largest axis-aligned box inside the unit disk, so |e| >= 1
-    # (which raises ModelParameterException at instance construction) is
-    # unreachable by construction. On-axis this still admits q down to ~0.18.
-    # This is not the lens cap's reasoning: [-0.5, 0.5] above is a lens-light
-    # systematic (multi-blob MGE absorbing source flux), whereas this is pure
-    # geometry (unit-disk validity) and so keeps nearly all of the range the
-    # library default meant to offer. That default box is [-1, 1] per component
-    # with its corner at |e| = sqrt(2) — 21.5% of the box is unphysical — which
-    # killed RAL 342301 task 3 at its first quick update (PyAutoFit#1567).
-    #
-    # gaussian_per_basis defaults to 1, so this is one basis of 20 gaussians
-    # sharing a single ell_comps prior pair; reassign one fresh pair to keep it.
-    source_ell_0 = af.TruncatedGaussianPrior(
-        mean=0.0, sigma=0.3, lower_limit=-0.7, upper_limit=0.7
-    )
-    source_ell_1 = af.TruncatedGaussianPrior(
-        mean=0.0, sigma=0.3, lower_limit=-0.7, upper_limit=0.7
-    )
-    for g in source_bulge.profile_list:
-        g.ell_comps.ell_comps_0 = source_ell_0
-        g.ell_comps.ell_comps_1 = source_ell_1
-
-    model = af.Collection(
-        galaxies=af.Collection(
-            lens=af.Model(
-                al.Galaxy,
-                redshift=redshift_lens,
-                bulge=lens_bulge,
-                mass=mass,
-                shear=af.Model(al.mp.ExternalShear),
-            ),
-            source=af.Model(al.Galaxy, redshift=redshift_source, bulge=source_bulge),
-        )
+        dataset_centre=d.dataset_centre,
+        redshift_lens=redshift_lens,
+        redshift_source=redshift_source,
     )
 
     """
@@ -262,6 +367,10 @@ def fit(
     Nautilus nested sampling.  ``n_live=750`` balances accuracy and speed for this
     15-parameter model.
     ``n_like_max`` stops runaway fits (most complete well under 200 000 evaluations).
+
+    ``seed`` is passed straight through from ``--seed``. It is ``None`` by default,
+    which is unseeded; see the ``seed`` entry in this function's docstring for what it
+    does and does not fix.
     """
     search = af.Nautilus(
         name="vis_lp",
@@ -270,6 +379,7 @@ def fit(
         batch_size=50,
         iterations_per_quick_update=iterations_per_quick_update,
         n_like_max=200000,
+        seed=seed,
     )
 
     """
@@ -672,7 +782,8 @@ if __name__ == "__main__":
         number_of_cores,
         use_cpu,
         stage,
-    ) = util.parse_fit_args()
+        seed,
+    ) = util.parse_fit_args(with_seed=True)
     fit(
         dataset_name=dataset_name,
         sample_name=sample_name,
@@ -680,4 +791,5 @@ if __name__ == "__main__":
         number_of_cores=number_of_cores,
         use_cpu=use_cpu,
         stage=stage,
+        seed=seed,
     )

@@ -1057,23 +1057,35 @@ def load_vis_dataset(
 # ---------------------------------------------------------------------------
 
 
-def parse_fit_args():
+def parse_fit_args(with_seed: bool = False):
     """
     Parse the standard command-line arguments shared by all pipeline scripts.
+
+    Parameters
+    ----------
+    with_seed
+        If True, also parse ``--seed`` and return it as a seventh tuple element.
+        Off by default so that every script which does not take a seed keeps the
+        six-tuple it already unpacks; ``scripts/initial_lens_model.py`` is the one
+        caller that passes True.
 
     Returns
     -------
     (sample_name, dataset_name, iterations_per_quick_update, number_of_cores,
-     use_cpu, stage)
+     use_cpu, stage) or, when ``with_seed=True``, that tuple with ``seed``
+    appended
         ``stage`` is one of ``"all"``, ``"vis_lp"`` or ``"vis_pix"``, and
         selects which of the two searches in ``scripts/initial_lens_model.py``
         the run performs. ``mask_radius`` is always read from the dataset's
         ``info.json``.
 
-        The tuple's last element used to be the boolean ``skip_pix``.
+        ``seed`` is the Nautilus random seed, an ``int`` or ``None`` when the
+        flag is not given (unseeded, the default).
+
+        The six-tuple's last element used to be the boolean ``skip_pix``.
         ``--skip_pix`` is still accepted as a deprecated alias for
         ``--stage vis_lp`` — it emits a deprecation line on stderr and resolves
-        to the string ``"vis_lp"``, so the tuple is still six elements long.
+        to the string ``"vis_lp"``, so the tuple length is unchanged.
     """
     import argparse
     import sys
@@ -1132,6 +1144,20 @@ def parse_fit_args():
         default=False,
         help="Deprecated alias for --stage vis_lp.",
     )
+    if with_seed:
+        parser.add_argument(
+            "--seed",
+            metavar="int",
+            type=int,
+            required=False,
+            default=None,
+            help=(
+                "Random seed for the vis_lp Nautilus search. Omitted (the "
+                "default) the search is unseeded. The seed is part of the run "
+                "identifier, so a different seed writes to a different output "
+                "directory."
+            ),
+        )
     args = parser.parse_args()
 
     stage = args.stage
@@ -1148,7 +1174,7 @@ def parse_fit_args():
     if stage is None:
         stage = "all"
 
-    return (
+    parsed = (
         args.sample,
         args.dataset,
         int(args.iterations_per_quick_update),
@@ -1156,3 +1182,8 @@ def parse_fit_args():
         args.use_cpu,
         stage,
     )
+
+    if with_seed:
+        return parsed + (args.seed,)
+
+    return parsed
