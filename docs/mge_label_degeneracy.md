@@ -195,10 +195,15 @@ ell_comps, set A and set B as the run labelled them:
 | 102008848 | (-0.286, 0.495) | (-0.007, -0.239) | 0.734 | 0.572 | 0.239 |
 
 Tile 102005065, the clearest case in section 1, is also the case that rules out the magnitude
-key: its two sets are 0.002 apart in magnitude and 0.997 apart in `ell_comps_1`. Ordering by
-magnitude would be deciding the labelling on a difference three orders of magnitude smaller than
-the one the data actually determine, and would forbid whichever member of the pair the ordering
-came out against.
+key. At the maximum-likelihood point either key admits exactly one of the two permutations, so
+neither key forbids a solution; what decides whether the ordering settles the labelling is the
+posterior spread. The two modes are separated in the key by `|key(e_A) - key(e_B)|`, and when
+that separation is smaller than the marginal posterior width in the key, the constraint surface
+passes through both modes, the retained region mixes the two labellings, and the labels stay
+undetermined. On this tile the separation is 0.0025 in magnitude against 0.997 in `ell_comps_1`.
+Ordering by magnitude would be deciding the labelling on a difference three orders of magnitude
+smaller than the one the data actually determine, and far below any plausible marginal width, so
+it would leave the two labellings mixed rather than resolved.
 
 ### 7.2 Why no continuous key is exact
 
@@ -210,30 +215,39 @@ projection, and is blind exactly when `e_A - e_B` is perpendicular to `w`. That 
 the two-dimensional space of differences: a measure-zero set, but a real one, and a nearby
 difference is decided by a margin that the sampler's own resolution can flip.
 
-A rotation-invariant key cannot depend on the direction of the difference at all, so it reduces
-to a function of the two magnitudes, and is blind wherever `|e_A| = |e_B|`. That is not an
-exotic configuration for a two-basis MGE: when both sets pin against opposite edges of the
-[-0.5, 0.5] box they land in the cross configuration `(x, -0.5)` and `(-x, +0.5)`, which is
-equal in magnitude by construction. Tile 102005065 is that configuration, and it is the tile the
-degeneracy was first noticed on. A rotation-invariant key is therefore blind precisely where
-this model is most likely to need it.
+A rotation-invariant antisymmetric key cannot depend on the orientation of the pair as a whole,
+so it is a function of `|e_A|`, `|e_B|` and the angle between the two ellipticity vectors. The
+two natural choices are the magnitude difference `|e_A| - |e_B|` and the cross product
+`e_A0 e_B1 - e_A1 e_B0`, which equals `|e_A| |e_B|` times the sine of twice the position-angle
+difference. Both are blind on the configuration these tiles show. When both sets pin against
+opposite edges of the [-0.5, 0.5] box they land in the cross configuration `(x, -0.5)` and
+`(-x, +0.5)`: the two ellipticity vectors are antiparallel, the position angles are 90 degrees
+apart, and `e_B` is approximately `-e_A`. The magnitudes are then equal by construction and the
+cross product vanishes. Tile 102005065 is that configuration, and it is the tile the degeneracy
+was first noticed on, so both rotation-invariant keys are blind precisely where this model is
+most likely to need one.
 
-The choice is between a blind set that lies where the data are ambiguous anyway and one that
-lies where the data are sharp. `e1_A > e1_B` puts it in the first place; the magnitude puts it
-in the second.
+The general statement stands: any continuous antisymmetric key has a zero set of codimension
+one, so no single hard constraint is exact for every configuration. The choice is the key whose
+zero set is least likely on these data, which is to say a blind set that lies where the data are
+ambiguous anyway rather than where they are sharp. `e1_A > e1_B` puts it in the first place; the
+magnitude and the cross product put it in the second.
 
 ### 7.3 The key, and its blind band
 
 The implemented key is `e1_A > e1_B`: the `cos 2phi` component of the first basis must exceed
 that of the second. On the table above it separates nine of the ten tiles by more than 0.25.
 
-The tenth, 102007299, has `delta e1 = 0.011`, inside the width the search resolves. There the
-ordering does not settle the labelling, and the assertion merely picks whichever side of a
-near-tie the sampler happened to land on. That is the blind band, and it is readable from the
-result itself: take the two sets' `ell_comps_1` from a fit and compute `|delta e1|`. A value
-comparable to the posterior width on `ell_comps_1` (order 0.05 on these tiles) means the labelling
-is undetermined, and the pair must be read unordered, exactly as section 6 prescribes for
-pre-ordering runs. A value well above it means the ordering is doing real work.
+The tenth, 102007299, has `delta e1 = 0.011`, small compared with a typical marginal width on
+`ell_comps_1`. There the ordering does not settle the labelling: the constraint surface passes
+through both modes, so the retained region mixes the two labellings rather than selecting one.
+That is the blind band, and it is readable from the result itself: take the two sets'
+`ell_comps_1` from a fit and compute `|delta e1|`. A value comparable to the marginal posterior
+width of the two sets means the labelling is undetermined, and the pair must be read unordered,
+exactly as section 6 prescribes for pre-ordering runs. A value well above it means the ordering
+is doing real work. No measured width is quoted here: the 0.05 in the step-3 witness is an
+acceptance tolerance on run-to-run agreement, not a measured marginal width, and the width the
+band must be judged against is the one the witness reruns will measure.
 
 This is a diagnostic to run on every ordered result, not a one-off check: which tiles fall in the
 band depends on the data, not on the code.
@@ -269,6 +283,11 @@ ordering fixed the labelling.
 
 Both `order_bases` and `seed` enter the PyAutoFit identifier, so every run made with them is a
 fresh output directory and results predating them are untouched and not comparable set by set.
+The assertion reaches the identifier only with PyAutoFit at or after the identifier fix that
+ships alongside this change (the PyAutoFit follow-up to #1581, PR opened today); on older
+PyAutoFit an ordered fit shares the unordered fit's directory and would load a completed
+unordered result instead of running. The witness reruns of step 3 therefore isolate each run with
+its own `PYAUTO_OUTPUT_DIR`.
 
 ## Appendix A: demo summary
 

@@ -129,18 +129,24 @@ def vis_lp_model_from(
     it wears.
 
     The key is ``ell_comps_1``, the ``cos 2phi`` component, and not the ellipticity
-    magnitude. The magnitude does not separate the modes the search actually finds: on
-    Euclid phase-4 tile 102005065 the two sets sit at (0.007, -0.500) and
-    (-0.023, 0.497), equal in magnitude to within 0.003 but a full 1.0 apart in
-    ``ell_comps_1``. A magnitude key would cut through that pair and forbid the
-    solution the data prefer, whereas ``ell_comps_1`` separates it cleanly.
+    magnitude. At the maximum-likelihood point either key admits exactly one of the two
+    permutations, so neither forbids a solution; what decides whether the ordering
+    settles the labelling is the posterior spread. The two modes are separated in the
+    key by ``|key(e_A) - key(e_B)|``, and when that separation is smaller than the
+    marginal posterior width in the key, the constraint surface passes through both
+    modes: the retained region mixes the two labellings and the labels stay
+    undetermined. On Euclid phase-4 tile 102005065 the two sets sit at (0.007, -0.500)
+    and (-0.023, 0.497), a separation of 0.0025 in magnitude against 1.0 in
+    ``ell_comps_1``. The magnitude separation is far below any plausible marginal width,
+    so a magnitude key would leave the two labellings mixed, whereas ``ell_comps_1``
+    separates the modes by a margin no marginal width on these tiles approaches.
 
     No continuous key is exact for every configuration. Tile 102007299 has its two sets
-    only 0.01 apart in ``ell_comps_1``, well inside the width the search resolves, so
+    only 0.01 apart in ``ell_comps_1``, small compared with a typical marginal width, so
     the ordering does not settle the labelling there. The diagnostic is direct: read the
-    two sets' ``ell_comps_1`` off a result, and if ``|delta ell_comps_1|`` is small the
-    labelling is undetermined rather than ordered, and the pair should be read
-    unordered as before.
+    two sets' ``ell_comps_1`` off a result, and if ``|delta ell_comps_1|`` is small
+    relative to the posterior width of the two sets, the labelling is undetermined
+    rather than ordered, and the pair should be read unordered as before.
 
     Enforcement differs by backend but has the same outcome. Under ``--use_cpu`` the
     NumPy path raises ``af.exc.FitException`` from ``check_assertions`` and Nautilus
@@ -148,11 +154,15 @@ def vis_lp_model_from(
     evaluated as a traced boolean and a violating model is mapped to the resample
     figure of merit instead (PyAutoFit#1583).
 
-    An assertion is part of the model, so it enters the PyAutoFit identifier: turning
-    this on gives an otherwise identical fit a new ``unique_id`` and a fresh output
-    directory. Results produced before it was turned on are not overwritten, and are
-    not comparable set by set. The library default is ``order_bases=False``; this
-    pipeline turns it on.
+    An assertion is part of the model, so it enters the PyAutoFit identifier with
+    PyAutoFit at or after the identifier fix that ships alongside this change (the
+    PyAutoFit follow-up to #1581, PR opened today): turning this on then gives an
+    otherwise identical fit a new ``unique_id`` and a fresh output directory. On older
+    PyAutoFit the assertion does not reach the identifier, so an ordered fit shares the
+    unordered fit's directory and would load a completed unordered result instead of
+    running. Results produced before it was turned on are not overwritten, and are not
+    comparable set by set. The library default is ``order_bases=False``; this pipeline
+    turns it on.
     """
 
     mass = af.Model(al.mp.Isothermal)
