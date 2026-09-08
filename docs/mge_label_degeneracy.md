@@ -152,7 +152,8 @@ can enforce it under JAX. The pipeline should apply it locally first.
    actually separates "ordered" from "one mode found".
 4. **PyAutoGalaxy.** Add an ordering option to `mge_model_from` for `gaussian_per_basis > 1`, so
    every user gets the fix rather than this pipeline alone.
-5. **Meanwhile.** Apply (d) in the results layer, for runs already on disk and for reporting.
+5. **Meanwhile.** Nothing. Decision 2026-09-08: the tiles will be rerun from scratch once (1)
+   and (2) land, which also gives the speed comparison, so (d) is not implemented.
 
 ## 6. Interim guidance for reading current results
 
