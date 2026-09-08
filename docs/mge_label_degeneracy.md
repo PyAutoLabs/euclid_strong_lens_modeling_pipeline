@@ -2,9 +2,10 @@
 
 - **Date**: 2026-09-08
 - **Issue**: [#54](https://github.com/PyAutoLabs/euclid_strong_lens_modeling_pipeline/issues/54)
-- **Status**: recommendation, awaiting a human decision
-- **Scope**: research note. No code changed on this branch; it records the mechanism, the
-  measurements that establish it, and the option matrix a future session should implement from.
+- **Status**: implemented; see section 7
+- **Scope**: research note plus its implementation record. Sections 1 to 6 record the mechanism,
+  the measurements that establish it, and the option matrix as they stood when nothing had been
+  built; section 7 records what was built and where it departed from that matrix.
 
 ## 1. Symptom and evidence
 
@@ -84,6 +85,9 @@ symmetry is gone.
 | (c) explicit Nautilus seed | no | unchanged | unchanged | unchanged | unchanged | changes | run-to-run only | pipeline, with (a) |
 | (d) post-hoc relabelling | yes, at read time | unchanged | none | unchanged | unchanged | none | reporting only | results layer |
 
+The option matrix below is the state of the question as of the note's date; section 7
+records which options were implemented and how the ordering key changed on the way.
+
 **(a) Ordering assertion.** After the `af.Collection` is composed, attach
 `model.add_assertion((eA0**2 + eA1**2) > (eB0**2 + eB1**2))`, following the precedent at
 `autolens_workspace/scripts/guides/modeling/cookbook.py:311-317`. This removes the symmetry
@@ -155,6 +159,9 @@ can enforce it under JAX. The pipeline should apply it locally first.
 5. **Meanwhile.** Nothing. Decision 2026-09-08: the tiles will be rerun from scratch once (1)
    and (2) land, which also gives the speed comparison, so (d) is not implemented.
 
+Steps 1, 2 and 4 have since landed; section 7 records what was built, and why the ordering key
+is not the magnitude this section assumed.
+
 ## 6. Interim guidance for reading current results
 
 Compare the **unordered pair** of ellipticities between runs; it is conserved. Never cite one
@@ -162,6 +169,106 @@ set's position angle or ellipticity from an unordered run, and do not report a c
 between two runs as a physical result without first checking whether the pair as a whole moved.
 The mass model, the source, the centres, the Einstein radii and the log evidence are unaffected
 and can be read as usual.
+
+## 7. Implementation note (2026-09-08)
+
+Steps 1, 2 and 4 of the rollout above are implemented. This section records the one substantive
+change made on the way: the ordering key is `ell_comps_1`, not the ellipticity magnitude that
+section 4 proposed.
+
+### 7.1 What the phase-4 runs actually contain
+
+The ten `euclid_dr1_prelim` phase-4 tiles (RAL job 342301), maximum-likelihood lens-light
+ell_comps, set A and set B as the run labelled them:
+
+| tile | set A (e0, e1) | set B (e0, e1) | delta e1 | \|e_A\| | \|e_B\| |
+|---|---|---|---|---|---|
+| 102005065 | (0.007, -0.500) | (-0.023, 0.497) | -0.997 | 0.500 | 0.498 |
+| 102007299 | (-0.024, 0.121) | (-0.284, 0.110) | 0.011 | 0.123 | 0.305 |
+| 102007899 | (0.039, 0.497) | (0.339, -0.193) | 0.690 | 0.499 | 0.390 |
+| 102007903 | (0.305, -0.342) | (0.013, 0.153) | -0.495 | 0.458 | 0.154 |
+| 102008165 | (0.209, -0.045) | (-0.498, -0.428) | 0.383 | 0.214 | 0.657 |
+| 102008219 | (0.001, 0.019) | (-0.500, -0.496) | 0.515 | 0.019 | 0.705 |
+| 102008468 | (0.426, 0.047) | (-0.218, -0.209) | 0.256 | 0.429 | 0.302 |
+| 102008475 | (0.085, 0.404) | (-0.005, -0.074) | 0.478 | 0.413 | 0.074 |
+| 102008532 | (-0.060, 0.140) | (0.003, 0.394) | -0.254 | 0.152 | 0.394 |
+| 102008848 | (-0.286, 0.495) | (-0.007, -0.239) | 0.734 | 0.572 | 0.239 |
+
+Tile 102005065, the clearest case in section 1, is also the case that rules out the magnitude
+key: its two sets are 0.002 apart in magnitude and 0.997 apart in `ell_comps_1`. Ordering by
+magnitude would be deciding the labelling on a difference three orders of magnitude smaller than
+the one the data actually determine, and would forbid whichever member of the pair the ordering
+came out against.
+
+### 7.2 Why no continuous key is exact
+
+Any ordering key that is a continuous, antisymmetric function of the two ellipticity pairs is
+blind on a set of codimension one, and the only question is where that set lies.
+
+A linear key `w . (e_A - e_B)` for a fixed direction `w` decides the labelling by the sign of a
+projection, and is blind exactly when `e_A - e_B` is perpendicular to `w`. That is a line through
+the two-dimensional space of differences: a measure-zero set, but a real one, and a nearby
+difference is decided by a margin that the sampler's own resolution can flip.
+
+A rotation-invariant key cannot depend on the direction of the difference at all, so it reduces
+to a function of the two magnitudes, and is blind wherever `|e_A| = |e_B|`. That is not an
+exotic configuration for a two-basis MGE: when both sets pin against opposite edges of the
+[-0.5, 0.5] box they land in the cross configuration `(x, -0.5)` and `(-x, +0.5)`, which is
+equal in magnitude by construction. Tile 102005065 is that configuration, and it is the tile the
+degeneracy was first noticed on. A rotation-invariant key is therefore blind precisely where
+this model is most likely to need it.
+
+The choice is between a blind set that lies where the data are ambiguous anyway and one that
+lies where the data are sharp. `e1_A > e1_B` puts it in the first place; the magnitude puts it
+in the second.
+
+### 7.3 The key, and its blind band
+
+The implemented key is `e1_A > e1_B`: the `cos 2phi` component of the first basis must exceed
+that of the second. On the table above it separates nine of the ten tiles by more than 0.25.
+
+The tenth, 102007299, has `delta e1 = 0.011`, inside the width the search resolves. There the
+ordering does not settle the labelling, and the assertion merely picks whichever side of a
+near-tie the sampler happened to land on. That is the blind band, and it is readable from the
+result itself: take the two sets' `ell_comps_1` from a fit and compute `|delta e1|`. A value
+comparable to the posterior width on `ell_comps_1` (order 0.05 on these tiles) means the labelling
+is undetermined, and the pair must be read unordered, exactly as section 6 prescribes for
+pre-ordering runs. A value well above it means the ordering is doing real work.
+
+This is a diagnostic to run on every ordered result, not a one-off check: which tiles fall in the
+band depends on the data, not on the code.
+
+### 7.4 Where the ordering lives
+
+The ordering is in the library, not in this pipeline:
+`mge_model_from(..., order_bases=True)` (PyAutoGalaxy#610) attaches `K - 1` assertions to the
+returned `Basis` model, requiring the bases' shared `ell_comps_1` values to be strictly
+decreasing. It defaults to **off**, so no existing user's model or identifier changes; this
+pipeline turns it on for the lens light in `vis_lp_model_from`
+(`scripts/initial_lens_model.py`), together with `ell_comps_limit=0.5`.
+
+`ell_comps_limit` is the second half of the change. The pipeline used to impose its box by
+building fresh `TruncatedGaussianPrior`s after composition and reassigning them over the
+returned model's Gaussians. That is incompatible with an assertion attached inside
+`mge_model_from`, which references the prior objects that function built: reassigning would
+leave the assertion pointing at priors the model no longer contains. Passing the box in as
+`ell_comps_limit` (0.5 for the lens, 0.7 for the source) removes the reassignment loops
+entirely, and the priors the assertion references are the priors the model samples.
+
+Enforcement is backend-specific and PyAutoFit#1583 supplied the missing half. On NumPy
+(`--use_cpu`) `check_assertions` raises `af.exc.FitException` and Nautilus resamples, which is
+what section 4 described. Under JAX the assertions are now evaluated as a traced boolean and a
+violating model is mapped to the resample figure of merit, so the vmapped `Fitness` that
+Nautilus builds no longer raises `TracerBoolConversionError` at trace time. Option (a) is
+therefore no longer gated on `--use_cpu`.
+
+The search also takes `--seed` (option (c)), passed through to `af.Nautilus` for `vis_lp`. It
+buys run-to-run reproducibility only, and is `None` (unseeded) by default, which is what the
+witness reruns of step 3 need: two *unseeded* runs agreeing set by set is the evidence that the
+ordering fixed the labelling.
+
+Both `order_bases` and `seed` enter the PyAutoFit identifier, so every run made with them is a
+fresh output directory and results predating them are untouched and not comparable set by set.
 
 ## Appendix A: demo summary
 

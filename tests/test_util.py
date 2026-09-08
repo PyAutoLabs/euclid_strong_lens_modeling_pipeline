@@ -198,6 +198,40 @@ def test_parse_fit_args_skip_pix_conflicts_with_other_stages(monkeypatch, stage)
         util.parse_fit_args()
 
 
+def test_parse_fit_args_with_seed_defaults_to_none(monkeypatch):
+    """
+    ``with_seed=True`` appends a seventh element. Unseeded is the default, and is what
+    the witness reruns of the basis-ordering change use.
+    """
+    monkeypatch.setattr(sys, "argv", ["prog", "--dataset=abc"])
+
+    result = util.parse_fit_args(with_seed=True)
+
+    assert len(result) == 7
+    assert result[:6] == (None, "abc", 5000, 1, False, "all")
+    assert result[-1] is None
+
+
+def test_parse_fit_args_with_seed_parses_an_int(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["prog", "--dataset=abc", "--seed=3"])
+
+    seed = util.parse_fit_args(with_seed=True)[-1]
+
+    assert seed == 3
+    assert isinstance(seed, int)
+
+
+def test_parse_fit_args_seed_is_rejected_without_with_seed(monkeypatch):
+    """
+    The flag only exists for the callers that ask for it, so the scripts that do not
+    take a seed reject it rather than silently ignoring it.
+    """
+    monkeypatch.setattr(sys, "argv", ["prog", "--dataset=abc", "--seed=3"])
+
+    with pytest.raises(SystemExit):
+        util.parse_fit_args()
+
+
 def test_parse_fit_args_requires_dataset(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["prog", "--sample=xyz"])
 
