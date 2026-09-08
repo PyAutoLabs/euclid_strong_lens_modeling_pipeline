@@ -384,7 +384,7 @@ def fit_waveband(
             over_sample_size = (
                 al.util.over_sample.over_sample_size_via_radial_bins_from(
                     grid=dataset.grid,
-                    sub_size_list=[4, 2, 1],
+                    sub_size_list=[4, 2, 2],
                     radial_list=[0.1, 0.3],
                     centre_list=[dataset_centre],
                 )
@@ -406,7 +406,7 @@ def fit_waveband(
             over_sample_size_lens = (
                 al.util.over_sample.over_sample_size_via_radial_bins_from(
                     grid=dataset.grid,
-                    sub_size_list=[16, 4, 1],
+                    sub_size_list=[16, 4, 2],
                     radial_list=[0.1, 0.3],
                     centre_list=[dataset_centre],
                 )
