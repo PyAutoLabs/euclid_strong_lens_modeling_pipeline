@@ -518,7 +518,13 @@ class LatentEuclid(al.LatentLens):
         context = {"fit": fit, "magzero": magzero, "xp": xp}
 
         library_keys = latent_keys_enabled()
-        library_values = tuple(LATENT_FUNCTIONS[k](**context) for k in library_keys)
+        library_value_dict = {k: LATENT_FUNCTIONS[k](**context) for k in library_keys}
+        library_value_dict.update(
+            LatentEuclid._source_flux_latents_on_uniform_grid(
+                fit=fit, magzero=magzero, keys=library_keys, xp=xp
+            )
+        )
+        library_values = tuple(library_value_dict[k] for k in library_keys)
 
         try:
             image = fit.galaxy_image_dict[fit.tracer.galaxies[0]]
@@ -558,6 +564,100 @@ class LatentEuclid(al.LatentLens):
             aperture_values = (xp.nan, xp.nan, xp.nan, xp.nan)
 
         return library_values + aperture_values
+
+    # Keys re-evaluated by `_source_flux_latents_on_uniform_grid`: the two
+    # unlensed source-flux latents and the magnification built from them.
+    SOURCE_FLUX_LATENT_KEYS = [
+        "total_source_flux",
+        "total_source_flux_mujy",
+        "magnification",
+    ]
+
+    @staticmethod
+    def _source_flux_latents_on_uniform_grid(fit, magzero, keys, xp):
+        """
+        Re-evaluate the *unlensed* source-flux latents on a uniform
+        over-sample-4 version of the fit's masked grid, and rebuild
+        ``magnification`` from them. Returns a ``{key: value}`` dict covering
+        whichever of :attr:`SOURCE_FLUX_LATENT_KEYS` are enabled; every other
+        latent is left on the production light-profile grid.
+
+        Why. ``load_vis_dataset`` gives the fit a *lens-centred radial*
+        over-sampling map (4x4 within 0.3" of the lens centre, 2x2 beyond).
+        That map is built for the lens light and for the arcs, and both are
+        measured correctly on it. The unlensed source, however, is a compact
+        profile whose wings run straight out into the sub-size-2 outer bin,
+        where they are under-integrated — so ``total_source_flux`` depends on
+        where the radial bins happen to fall relative to the source, and
+        ``magnification`` (a lensed / unlensed ratio whose numerator is an
+        image-plane sum over the arcs, and so unaffected) inherits the whole
+        error. With the production ``[4, 4, 2]`` bins the arcs agree with the
+        simulator to +0.03 % while the magnification was still 0.21 % out
+        (autolens_profiling#235).
+
+        The reference is therefore the grid the simulator integrates its own
+        truth fluxes on: the same mask, uniform ``over_sample_size=4``
+        (``scripts/simulator.py`` builds
+        ``al.Grid2D.uniform(..., over_sample_size=4)`` and sums
+        ``source_galaxy.image_2d_from`` on it). This touches no modelling
+        stage and no other latent — only the reference grid of the unlensed
+        source-flux integral.
+
+        The pixelized (inversion) term is unchanged: it is integrated on the
+        source mesh, not on any image-plane over-sampling map, so it is read
+        back from the library helper as-is.
+        """
+        from autolens.analysis.latent import (
+            LATENT_FUNCTIONS,
+            _pixelized_source_flux,
+            ab_mag_via_flux_from as library_ab_mag_via_flux_from,
+            flux_mujy_via_ab_mag_from as library_flux_mujy_via_ab_mag_from,
+        )
+
+        wanted = [key for key in LatentEuclid.SOURCE_FLUX_LATENT_KEYS if key in keys]
+        if not wanted:
+            return {}
+
+        try:
+            tracer = fit.tracer_linear_light_profiles_to_light_profiles
+            grid_uniform = al.Grid2D.from_mask(
+                mask=fit.dataset.grids.lp.mask, over_sample_size=4, xp=xp
+            )
+            source_image = tracer.galaxies[-1].image_2d_from(grid=grid_uniform, xp=xp)
+        except (AttributeError, IndexError):
+            return {key: xp.nan for key in wanted}
+
+        source_flux = xp.sum(source_image.array) + _pixelized_source_flux(
+            fit=fit, xp=xp
+        )
+
+        values = {}
+        if "total_source_flux" in wanted:
+            values["total_source_flux"] = source_flux
+
+        # The uJy latents keep the library's magzero contract: without a
+        # zero-point they are NaN, which is what `LATENT_FUNCTIONS` already
+        # returned (with its one-time warning), so leave those values alone.
+        if magzero is None:
+            return values
+
+        source_flux_mujy = library_flux_mujy_via_ab_mag_from(
+            ab_mag=library_ab_mag_via_flux_from(
+                flux=source_flux, magzero=magzero, xp=xp
+            ),
+            xp=xp,
+        )
+        if "total_source_flux_mujy" in wanted:
+            values["total_source_flux_mujy"] = source_flux_mujy
+        if "magnification" in wanted:
+            values["magnification"] = (
+                LATENT_FUNCTIONS["total_lensed_source_flux_mujy"](
+                    fit=fit, magzero=magzero, xp=xp
+                )
+                / source_flux_mujy
+            )
+
+        return values
 
 
 class AnalysisImaging(al.AnalysisImaging):
@@ -830,7 +930,9 @@ def load_vis_dataset(
 
     over_sample_size = al.util.over_sample.over_sample_size_via_radial_bins_from(
         grid=dataset.grid,
-        sub_size_list=[4, 2, 2],
+        # [4,4,2] since 2026-09-08 (autolens_profiling#235): sub-size 1 causes gradient issues,
+        # and sub-size 2 in the 0.1-0.3" annulus under-integrates a compact source by ~0.6 % (magnification cross-check).
+        sub_size_list=[4, 4, 2],
         radial_list=[0.1, 0.3],
         centre_list=[dataset_centre],
     )

@@ -472,14 +472,14 @@ def fit_waveband(
         """
         __Over Sampling__
 
-        The standard radial scheme: 4x4 sub-pixels within 0.1" of the lens
-        centre, 2x2 out to 0.3", 1x1 beyond. Light profiles change fastest in
-        the galaxy's core, so that is where evaluating one point per pixel would
-        be inaccurate — and it is where all of this model's light is.
+        The standard radial scheme: 4x4 sub-pixels within 0.3" of the lens
+        centre, 2x2 beyond. Light profiles change fastest in the galaxy's core,
+        so that is where evaluating one point per pixel would be inaccurate —
+        and it is where all of this model's light is.
         """
         over_sample_size = al.util.over_sample.over_sample_size_via_radial_bins_from(
             grid=dataset.grid,
-            sub_size_list=[4, 2, 2],
+            sub_size_list=[4, 4, 2],
             radial_list=[0.1, 0.3],
             centre_list=[dataset_centre],
         )
