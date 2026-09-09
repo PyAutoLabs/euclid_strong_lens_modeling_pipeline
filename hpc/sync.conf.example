@@ -29,3 +29,11 @@ HPC_BASE=/path/to/large/storage/your_username
 # Name of this project's directory on the HPC, underneath $HPC_BASE.
 # Defaults to the name of your local project folder if left unset.
 PROJECT_NAME=euclid_strong_lens_modeling_pipeline
+
+# Extra output roots to pull, space-separated. The Cortex check-in sets this for
+# you from the `output*` folders your tasks declare, so a run pointed at a custom
+# PYAUTO_OUTPUT_DIR comes down without PULL_DIRS being edited by hand:
+#   PYAUTO_PULL_DIRS="output_ordered_witness" hpc/sync pull
+# Appended to this project's own PULL_DIRS, never replacing them. Leave it unset
+# for the ordinary pull.
+# PYAUTO_PULL_DIRS=
