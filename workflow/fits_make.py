@@ -92,7 +92,7 @@ Set up the aggregator which will load results from the output folder of the mode
 """
 from autofit.aggregator.aggregator import Aggregator
 
-agg = Aggregator.from_directory(directory=Path("output"), completed_only=True)
+agg = Aggregator.from_directory(directory=Path("output"), completed_only=True, unzip_temporary=True)
 
 """
 Use a query on the aggregator to only get results for the `mass_total[1]` model-fit, which contains the final lens

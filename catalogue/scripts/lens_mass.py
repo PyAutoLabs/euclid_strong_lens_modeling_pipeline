@@ -119,7 +119,7 @@ def main():
     """
     # One aggregator over the whole sample. completed_only filters out lenses
     # whose search has not produced a `.completed` marker.
-    agg = Aggregator.from_directory(directory=sample_root, completed_only=True)
+    agg = Aggregator.from_directory(directory=sample_root, completed_only=True, unzip_temporary=True)
 
     """
     __Query: Pipeline Stage And Search__

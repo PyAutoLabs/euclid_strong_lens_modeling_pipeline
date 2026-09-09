@@ -183,6 +183,8 @@ def fit(
         gaussian_per_basis=2,
         centre_prior_is_uniform=True,
         centre=d.dataset_centre,
+        ell_comps_limit=0.5,
+        order_bases=True,
     )
 
     model = af.Collection(

@@ -120,7 +120,7 @@ def main():
         print(f"no sample directory at {sample_root}; nothing to do")
         return
 
-    agg = Aggregator.from_directory(directory=sample_root, completed_only=True)
+    agg = Aggregator.from_directory(directory=sample_root, completed_only=True, unzip_temporary=True)
 
     agg_query = agg.query(agg.unique_tag == args.unique_tag)
     agg_query = agg_query.query(agg_query.search.name == args.search_name)

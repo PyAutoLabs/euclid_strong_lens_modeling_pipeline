@@ -181,7 +181,7 @@ def main():
         print(dataset_name)
 
         agg = Aggregator.from_directory(
-            directory=sample_root / dataset_name, completed_only=True
+            directory=sample_root / dataset_name, completed_only=True, unzip_temporary=True
         )
 
         agg_query = agg.query(agg.unique_tag == args.unique_tag)

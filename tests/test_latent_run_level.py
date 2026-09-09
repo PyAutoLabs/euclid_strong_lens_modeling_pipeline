@@ -42,6 +42,7 @@ the 100x100 masked simulated VIS image, non-JAX).
 import inspect
 import json
 import shutil
+import zipfile
 import sys
 from pathlib import Path
 
@@ -224,6 +225,22 @@ def _fit(tmp_path, monkeypatch):
         search.fit(model=model, analysis=analysis)
 
         summaries = list((tmp_path / "output").rglob("latent/latent_summary.json"))
+
+        if not summaries:
+            # `config/general.yaml` sets `hpc.hpc_mode: true`, which forces
+            # PyAutoFit's `remove_files` (paths/abstract.py): the search zips its
+            # output and deletes the unzipped tree, so the summary survives only
+            # inside `<identifier>.zip`. Read it from there rather than turning
+            # HPC mode off, so this test keeps exercising the production config.
+            zips = list((tmp_path / "output").rglob("*.zip"))
+            assert len(zips) == 1, (
+                "a real-mode fit must leave exactly one search output zip; "
+                f"found {zips}"
+            )
+            extracted = tmp_path / "extracted"
+            with zipfile.ZipFile(zips[0]) as archive:
+                archive.extractall(extracted)
+            summaries = list(extracted.rglob("latent/latent_summary.json"))
 
         assert len(summaries) == 1, (
             "a real-mode fit must write exactly one "
