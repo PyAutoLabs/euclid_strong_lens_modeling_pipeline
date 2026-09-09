@@ -111,6 +111,20 @@ LOG_DIRS=(
 # A directory that does not exist on the HPC is skipped rather than failing.
 PULL_DIRS=(output output_sed inspect)
 
+# Extra roots the caller asks for, space-separated — the Cortex check-in passes
+# the `output*` roots its tasks declare, so a run written to a custom
+# PYAUTO_OUTPUT_DIR is pulled without this list being edited by hand. The
+# expansion is deliberately unquoted: word-splitting is how the list is parsed,
+# which is why only `output*` names are ever passed. Appended, never replacing —
+# this project's own roots always pull, and an unset variable leaves the pull
+# exactly as it was.
+if [[ -n "${PYAUTO_PULL_DIRS:-}" ]]; then
+    for _extra in ${PYAUTO_PULL_DIRS}; do
+        [[ " ${PULL_DIRS[*]} " == *" ${_extra} "* ]] || PULL_DIRS+=("${_extra}")
+    done
+    unset _extra
+fi
+
 # ---------------------------------------------------------------------------
 # rsync options
 #   -a          archive (timestamps, permissions, symlinks)
