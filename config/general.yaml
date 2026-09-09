@@ -15,8 +15,8 @@ inversion:
   use_border_relocator: true          # If True, by default a pixelization's border is used to relocate all pixels outside its border to the border.
   reconstruction_vmax_factor: 0.5   # Plots of an Inversion's reconstruction use the reconstructed data's bright value multiplied by this factor.
 hpc:
-  hpc_mode: false                   # If True, use HPC mode, which disables GUI visualization, logging to screen and other settings which are not suited to running on a super computer.
-  iterations_per_quick_update: 10000 #  Non-linear search iterations between every quick update, which just displays the maximum likelihood model fit.  
+  hpc_mode: true                    # If True, use HPC mode, which disables GUI visualization, logging to screen and other settings which are not suited to running on a super computer. Also forces `remove_files`, so a search's unzipped output is deleted once it has been zipped.
+  iterations_per_quick_update: 1e99  # Non-linear search iterations between every quick update, which just displays the maximum likelihood model fit. 1e99 disables on-the-fly quick updates: HPC mode swaps this whole `hpc:` block in, so this is the value that applies, not the one under `updates:`.
   iterations_per_full_update: 1e99  # Non-linear search iterations between every full update, which outputs all visuals and result fits (e.g. model.result, search.summary), this exits the search and can be slow.
 adapt:
   adapt_minimum_percent: 0.01

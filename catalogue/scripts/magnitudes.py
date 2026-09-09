@@ -108,16 +108,29 @@ def latest_result_per_lens_band(aggregator, sample_root: Path):
 
     __How The Key Is Built__
 
-    The result's directory is taken relative to the sample root, which makes its
-    parts ``<lens>/<stage>/<band>/<hash>/...``; the first three are the key and
-    the fourth is what varies between duplicates. A path with fewer than four
-    parts is not a per-band result folder and is skipped.
+    The key is the last four parts of the result's directory,
+    ``<lens>/<stage>/<band>/<hash>``; the first three are the key and the fourth
+    is what varies between duplicates. A path with fewer than four parts is not
+    a per-band result folder and is skipped.
 
-    Recency is the zipped result's timestamp where one exists — PyAutoFit writes
-    the zip when the search finishes, so it dates the *completion* rather than
-    any later touch of the directory — and the directory's own timestamp
-    otherwise, which is the unzipped case (an interrupted run, or a test-mode
-    one). The full directory string breaks ties, so the selection is
+    The tail is used rather than ``relative_to(sample_root)`` because the
+    aggregator is opened with ``unzip_temporary=True``, and under
+    ``config/general.yaml``'s ``hpc.hpc_mode: true`` a completed search leaves
+    only its zip: with no extracted directory beside it the aggregator extracts
+    to a temporary root instead (``autofit/aggregator/aggregator.py``), so
+    ``result.directory`` is no longer under ``sample_root`` at all and
+    ``relative_to`` would raise. That temporary root mirrors the scanned layout,
+    so the trailing four parts are the same in both cases.
+
+    Recency is the timestamp of the result's zip **under the sample root**,
+    reconstructed from that same tail. PyAutoFit writes the zip when the search
+    finishes, so it dates the *completion*. It must not be read from
+    ``result.directory``: in the temporary-extraction case there is no zip
+    beside it, and the extracted directory's own mtime is the time this process
+    unpacked it — identical for every result, which would make the choice
+    between duplicates arbitrary. Where no zip is found (an interrupted or
+    test-mode run, which stays unzipped in place) the directory's own timestamp
+    is used. The full directory string breaks ties, so the selection is
     deterministic rather than dependent on iteration order.
 
     The survivors are wrapped back into an ``Aggregator``, so everything
@@ -128,12 +141,21 @@ def latest_result_per_lens_band(aggregator, sample_root: Path):
 
     selected = {}
     for result in aggregator:
-        relative = result.directory.relative_to(sample_root)
-        if len(relative.parts) < 4:
+        try:
+            tail = result.directory.relative_to(sample_root).parts
+        except ValueError:
+            # A temporary extraction: outside `sample_root` entirely. The
+            # temporary root mirrors the scanned layout, so the trailing four
+            # parts are the same `<lens>/<stage>/<band>/<hash>` they would be
+            # in place. The short-path guard below is left to the branch above,
+            # where a stray directory really does yield fewer than four parts;
+            # taking the tail of an absolute path would always yield four.
+            tail = result.directory.parts[-4:]
+        if len(tail) < 4:
             continue
-        lens_name, stage, band = relative.parts[:3]
+        lens_name, stage, band = tail[:3]
         key = (lens_name, stage, band)
-        zip_path = Path(f"{result.directory}.zip")
+        zip_path = Path(f"{Path(sample_root).joinpath(*tail)}.zip")
         timestamp = (
             zip_path.stat().st_mtime
             if zip_path.exists()
@@ -184,7 +206,7 @@ def main():
         print(f"no sample directory at {sample_root}; nothing to do")
         return
 
-    agg = Aggregator.from_directory(directory=sample_root, completed_only=True)
+    agg = Aggregator.from_directory(directory=sample_root, completed_only=True, unzip_temporary=True)
     agg_query = agg.query(agg.unique_tag == args.unique_tag)
     agg_query = latest_result_per_lens_band(agg_query, sample_root=sample_root)
 

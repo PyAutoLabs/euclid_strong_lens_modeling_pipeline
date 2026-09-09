@@ -670,6 +670,8 @@ def fit(
         gaussian_per_basis=2,
         centre_prior_is_uniform=True,
         centre=d.dataset_centre,
+        ell_comps_limit=0.5,
+        order_bases=True,
     )
 
     mass = af.Model(al.mp.Isothermal)
@@ -687,7 +689,10 @@ def fit(
         mass=mass,
         shear=af.Model(al.mp.ExternalShear),
         source_bulge=al.model_util.mge_model_from(
-            mask_radius=d.mask_radius, total_gaussians=20, centre_prior_is_uniform=False
+            mask_radius=d.mask_radius,
+            total_gaussians=20,
+            centre_prior_is_uniform=False,
+            ell_comps_limit=0.7,
         ),
         redshift_lens=redshift_lens,
         redshift_source=redshift_source,
@@ -900,6 +905,8 @@ def fit(
             gaussian_per_basis=2,
             centre_prior_is_uniform=True,
             centre=d.dataset_centre,
+            ell_comps_limit=0.5,
+            order_bases=True,
         ),
         lens_disk=None,
         iterations_per_quick_update=iterations_per_quick_update,

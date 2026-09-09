@@ -14,7 +14,7 @@ default: true # If true then files which are not explicitly listed here are outp
 # the `samples_summary.json` file. However, without a `samples.csv` file these types of tasks cannot be performed
 # after the fit is complete, for example via the database.
 
-samples: true
+samples: false
 
 # The `samples.csv` file contains every accepted sampled value of every free parameter with its log likelihood and
 # weight. For certain searches, the majority of samples have a very low weight and have no numerical impact on the
