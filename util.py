@@ -507,13 +507,26 @@ class LatentEuclid(al.LatentLens):
         the dataset, or naming a band not in the cut-out) the four values are
         NaN and are dropped from the written latent summary; the fit itself is
         unaffected.
+
+        The instance is built with ``latent_instance_from`` rather than
+        ``model.instance_from_vector``, because this method overrides
+        ``LatentLens.variables`` and so must build its own: the latent engine
+        evaluates it inside a per-sample ``jax.jit``, where checking the
+        ``vis_lp`` ordered-MGE-bases assertion applies a Python ``not`` to a
+        traced boolean and raises ``TracerBoolConversionError``, which the
+        engine turns into a NaN row for every sample — no latent output at all
+        (PyAutoLens#732).
         """
-        from autolens.analysis.latent import LATENT_FUNCTIONS, latent_keys_enabled
+        from autolens.analysis.latent import (
+            LATENT_FUNCTIONS,
+            latent_instance_from,
+            latent_keys_enabled,
+        )
 
         xp = analysis._xp
         magzero = analysis.kwargs.get("magzero", None)
 
-        instance = model.instance_from_vector(vector=parameters)
+        instance = latent_instance_from(model=model, parameters=parameters, xp=xp)
         fit = analysis.fit_from(instance=instance)
         context = {"fit": fit, "magzero": magzero, "xp": xp}
 
@@ -620,8 +633,14 @@ class LatentEuclid(al.LatentLens):
 
         try:
             tracer = fit.tracer_linear_light_profiles_to_light_profiles
+            # The reference grid is built on NumPy, without ``xp``: the mask is
+            # static, and under JAX ``Grid2D.from_mask`` reaches ``jnp.nonzero``,
+            # which needs a size known at trace time -> ``ConcretizationTypeError``
+            # inside the latent engine's per-sample ``jax.jit`` (PyAutoLens#732).
+            # The traced quantity is the source image evaluated on it, so ``xp``
+            # stays on ``image_2d_from`` below.
             grid_uniform = al.Grid2D.from_mask(
-                mask=fit.dataset.grids.lp.mask, over_sample_size=4, xp=xp
+                mask=fit.dataset.grids.lp.mask, over_sample_size=4
             )
             source_image = tracer.galaxies[-1].image_2d_from(grid=grid_uniform, xp=xp)
         except (AttributeError, IndexError):
