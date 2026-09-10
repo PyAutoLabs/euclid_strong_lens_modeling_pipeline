@@ -276,8 +276,12 @@ def main():
     None of the eight variables below is a model parameter. Each is a latent
     variable: recomputed from the model on every sample by ``util.LatentEuclid``,
     so each arrives with a posterior rather than as a number derived once from a
-    best fit. The ``latent.`` prefix is what tells ``add_variable`` to read the
-    latent summary rather than the samples.
+    best fit. Nothing in the arguments below marks that out. ``add_variable``
+    looks each one up in a single merged dictionary — the model paths of the
+    samples summary together with the keys of the latent summary written beside
+    them — so a latent is named exactly as ``util.LatentEuclid`` writes it, with
+    no prefix. An argument matching neither side is not raised, it is written
+    blank, so a wrong name here empties a column silently.
 
     They come in two groups, which is why the argument names look inconsistent.
     The first are library latents that ``config/latent.yaml`` enables — the total
@@ -286,7 +290,7 @@ def main():
     ``util.LatentEuclid.APERTURE_LATENT_KEYS`` rather than in the library,
     because they need PSF arguments that only this pipeline supplies. ``name``
     shortens every header to the DR1 catalogue's form, so the CSV says
-    ``lens_flux`` where the argument says ``latent.total_lens_flux_mujy``.
+    ``lens_flux`` where the argument says ``total_lens_flux_mujy``.
 
     The units matter more than anything else here. A fitted flux is in the
     image's own units, which differ from band to band and are useless for an SED.
@@ -317,14 +321,14 @@ def main():
     # latents enabled in config/latent.yaml, then the four Euclid-only FWHM
     # aperture-flux latents. Column names keep the shorter DR1 catalogue form.
     latent_args = [
-        ("latent.total_lens_flux_mujy", "lens_flux"),
-        ("latent.total_lens_flux_1_fwhm_mujy", "lens_flux_1_fwhm"),
-        ("latent.total_lens_flux_2_fwhm_mujy", "lens_flux_2_fwhm"),
-        ("latent.total_lens_flux_3_fwhm_mujy", "lens_flux_3_fwhm"),
-        ("latent.total_lens_flux_4_fwhm_mujy", "lens_flux_4_fwhm"),
-        ("latent.total_lensed_source_flux_mujy", "lensed_source_flux"),
-        ("latent.total_source_flux_mujy", "source_flux"),
-        ("latent.magnification", "magnification"),
+        ("total_lens_flux_mujy", "lens_flux"),
+        ("total_lens_flux_1_fwhm_mujy", "lens_flux_1_fwhm"),
+        ("total_lens_flux_2_fwhm_mujy", "lens_flux_2_fwhm"),
+        ("total_lens_flux_3_fwhm_mujy", "lens_flux_3_fwhm"),
+        ("total_lens_flux_4_fwhm_mujy", "lens_flux_4_fwhm"),
+        ("total_lensed_source_flux_mujy", "lensed_source_flux"),
+        ("total_source_flux_mujy", "source_flux"),
+        ("magnification", "magnification"),
     ]
     for argument, name in latent_args:
         agg_csv.add_variable(argument=argument, name=name, value_types=value_types)
