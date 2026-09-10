@@ -48,12 +48,18 @@ class _EmptyRow:
     whether the lookup hits or misses, so an empty row yields exactly the
     suffixes — in exactly the order — that ``AggregateCSV`` would write, with no
     aggregator, no results and no disk access.
+
+    ``known_paths`` is the keyspace ``Column._check_argument`` consults before
+    it reads the four kwargs dicts (PyAutoFit#1598): empty, every argument
+    misses cleanly and the non-strict column logs one warning and emits its
+    columns with empty values, which is exactly the miss this stub wants.
     """
 
     median_pdf_sample_kwargs: dict = {}
     max_likelihood_kwargs: dict = {}
     values_at_sigma_1_kwargs: dict = {}
     values_at_sigma_3_kwargs: dict = {}
+    known_paths: frozenset = frozenset()
 
 
 def _column_names_from(name, value_type_names):
