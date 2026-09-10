@@ -332,6 +332,7 @@ submit_usage() {
     echo "    $(basename "$0") ${verb} cpu submit_initial_lens_model_two_stage"
     echo "    $(basename "$0") ${verb} cpu submit_initial_lens_model_vis_lp"
     echo "    $(basename "$0") ${verb} cpu submit_initial_lens_model_vis_pix"
+    echo "    $(basename "$0") ${verb} cpu submit_build_inspection_bundle"
 }
 
 submit() {
@@ -568,6 +569,7 @@ print_help() {
     echo "                                    submit_initial_lens_model_two_stage"
     echo "                                    submit_initial_lens_model_vis_lp"
     echo "                                    submit_initial_lens_model_vis_pix"
+    echo "                                    submit_build_inspection_bundle"
     echo "                                  GPU scripts:"
     echo "                                    submit_initial_lens_model"
     echo "                                    submit_full_model"
