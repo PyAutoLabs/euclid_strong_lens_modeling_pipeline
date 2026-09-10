@@ -227,13 +227,17 @@ def main():
     full posterior instead of one number carried over from a best fit. That is
     why it takes the same five value flavours as everything above.
 
-    The ``latent.`` prefix is what selects it. ``add_variable`` reads a plain
-    ``galaxies...`` argument out of the samples and a ``latent.<name>`` argument
-    out of the latent summary the fit wrote beside them. The name has to match a
-    key of ``util.LatentEuclid``, whose catalogue "__Latent Variables__" in
-    ``start_here.py`` describes and ``config/latent.yaml`` enables —
-    ``effective_einstein_radius`` is one of the library latents that file turns
-    on.
+    Nothing in the argument marks it out as a latent, and nothing needs to.
+    ``add_variable`` looks its argument up in one merged dictionary: the model
+    paths read out of the samples summary, together with the keys of the latent
+    summary the fit wrote beside them, under exactly the names
+    ``util.LatentEuclid`` gave them. A latent is therefore selected by naming it
+    bare — ``effective_einstein_radius``, one of the library latents
+    ``config/latent.yaml`` enables and the "__Latent Variables__" catalogue in
+    ``start_here.py`` describes. There is no prefix to add, and adding one is
+    the thing to avoid: an argument matching neither side of that dictionary is
+    not raised, it is written blank, so a wrong name here empties a column
+    without ever saying so.
 
     Two consequences worth knowing before you read a CSV. A fit run in test mode
     writes no latent summary at all, so these columns are present but blank; and
@@ -242,10 +246,10 @@ def main():
     ``einstein_radius`` parameter three columns to its left.
     """
     # Latent: effective Einstein radius, computed by `util.LatentEuclid` on each
-    # sample. `add_variable` pulls from latent_summary for a "latent.<name>"
-    # argument.
+    # sample. Named bare, exactly as the latent summary writes it: `add_variable`
+    # reads the samples' model paths and the latent keys from one merged dict.
     agg_csv.add_variable(
-        argument="latent.effective_einstein_radius",
+        argument="effective_einstein_radius",
         name="effective_einstein_radius",
         value_types=value_types_all,
     )

@@ -190,12 +190,12 @@ The external shear field is parameterized by two components `gamma_1` and `gamma
 See the **PyAutoLens** API docs for a full description of the External Shear model.
 """
 agg_csv.add_variable(
-    argument="galaxies.lens.shear.gamma_0",
-    name="mass_ell_comps_0",
+    argument="galaxies.lens.shear.gamma_1",
+    name="mass_shear_gamma_1",
 )
 agg_csv.add_variable(
-    argument="galaxies.lens.shear.gamma_1",
-    name="mass_ell_comps_1",
+    argument="galaxies.lens.shear.gamma_2",
+    name="mass_shear_gamma_2",
 )
 
 agg_csv.save(path=workflow_path / "csv_q1_mass_model.csv")
