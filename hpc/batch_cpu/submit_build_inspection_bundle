@@ -1,0 +1,125 @@
+#!/bin/bash -l
+#
+# Build the inspection bundle (the catalogue) for one sample, on the cluster.
+#
+# WHAT THIS DOES
+#   Runs `scripts/build_inspection_bundle.sh` — the seven catalogue producers in
+#   dependency order — over a results tree that is already on the cluster, and
+#   leaves the bundle in `inspect/<sample>[_<run_tag>]/`. It fits nothing: every
+#   number it writes was produced by a fit that has already finished, so this is
+#   a read-and-scrape job, not a modelling job.
+#
+# WHY IT IS A CLUSTER JOB AT ALL
+#   The scrape itself is cheap per lens, but a DR1-sized sample is thousands of
+#   them and the aggregator unzips each result to read it. Doing that where the
+#   results already live avoids pulling tens of GB of `output/` down first, and
+#   the login node is the wrong place for an hours-long walk over the tree.
+#
+# RESOURCES
+#   One task, four CPUs, 8 GB, six hours, partition `ral`. The producers are
+#   serial Python and the work is dominated by unzip-and-read I/O rather than by
+#   arithmetic, so more cores buy nothing; the four are for the odd threaded
+#   numpy call and for headroom. 8 GB is comfortably above the working set — one
+#   result's samples summary at a time, plus the master CSV held in memory —
+#   and six hours covers a full DR1-prelim sample with margin.
+#
+# HOW TO SUBMIT
+#   From your machine, through the sync helper (which cds into this directory on
+#   the cluster and sbatches the basename, so `output/` and `error/` beside this
+#   script are where the logs land):
+#
+#     hpc/sync submit cpu submit_build_inspection_bundle
+#
+#   `hpc/sync push-submit cpu submit_build_inspection_bundle` pushes the code
+#   first. Do NOT push while fits are still running against the same tree.
+#
+#   Or, in a shell on the cluster, from this directory:
+#
+#     sbatch submit_build_inspection_bundle
+#
+#   Overrides go on the sbatch line, because `sbatch` does not carry your login
+#   shell's exports into the job unless you pass them:
+#
+#     sbatch --export=ALL,SAMPLE=dr1_prelim_grade_ab,RUN_TAG=run250 \
+#         submit_build_inspection_bundle
+
+#SBATCH -J euclid_build_inspection_bundle
+#SBATCH -n 1
+#SBATCH --cpus-per-task=4
+#SBATCH -o output/output.%A.out
+#SBATCH -e error/error.%A.err
+#SBATCH --partition=ral
+#SBATCH -t 06:00:00
+#SBATCH --mem=8gb
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=your.email@institution.ac.uk
+
+# -----------------------------------------------------------------------------
+# Environment
+#
+# PROJECT_PATH is the project root on the cluster (the same location as
+# $HPC_BASE/$PROJECT_NAME in hpc/sync.conf) and PYAUTO_HPC_BASE the shared
+# PyAuto virtualenv beside the library checkouts. Both carry the RAL defaults
+# and both honour a value passed in with --export, so a different cluster or a
+# different project checkout needs no edit here.
+#
+# activate.sh is sourced by build_inspection_bundle.sh itself when
+# PYAUTO_HPC_BASE names a real directory and PYAUTO_ROOT is unset; it is sourced
+# here as well so that a failure to activate is reported by this script, at the
+# top of the log, rather than silently leaving the bundle to run against a
+# system Python.
+# -----------------------------------------------------------------------------
+export PROJECT_PATH="${PROJECT_PATH:-/mnt/ral/jnightin/euclid_dr1_prelim}"
+export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
+
+source "$PROJECT_PATH/activate.sh"
+
+# Stop at the first failing stage rather than reporting success for a partial
+# bundle. build_inspection_bundle.sh runs under `set -e` itself.
+set -e
+
+# Nothing here is JAX or Numba work, but an incidental import must not reach for
+# a GPU that was not allocated, and Numba's on-disk cache is unreliable on NFS.
+export JAX_PLATFORM_NAME=cpu
+export JAX_PLATFORMS=cpu
+
+THREADS=$SLURM_CPUS_PER_TASK
+export OPENBLAS_NUM_THREADS=$THREADS
+export MKL_NUM_THREADS=$THREADS
+export OMP_NUM_THREADS=$THREADS
+export VECLIB_MAXIMUM_THREADS=$THREADS
+export NUMEXPR_NUM_THREADS=$THREADS
+
+# -----------------------------------------------------------------------------
+# What to build
+#
+# SAMPLE     the subdirectory of dataset/ (and of the results tree) to scrape.
+# RUN_TAG    an optional suffix on the bundle directory, so two builds of one
+#            sample do not overwrite each other: inspect/<sample>_<run_tag>/.
+#
+# OUTPUT_DIR / SED_OUTPUT_DIR / SKIP_SED / CREATE_ARCHIVE / DATASET_PREFIX are
+# read by build_inspection_bundle.sh straight out of the environment, so they
+# are exported here untouched rather than being re-implemented: pass any of them
+# with --export and the bundle builder honours it.
+# -----------------------------------------------------------------------------
+SAMPLE="${SAMPLE:-dr1_prelim_grade_ab}"
+RUN_TAG="${RUN_TAG:-}"
+
+export OUTPUT_DIR="${OUTPUT_DIR:-output}"
+export SED_OUTPUT_DIR="${SED_OUTPUT_DIR:-output_sed}"
+
+echo "=========================================="
+echo "Project    : $PROJECT_PATH"
+echo "Sample     : $SAMPLE"
+echo "Run tag    : ${RUN_TAG:-<none>}"
+echo "Output dir : $OUTPUT_DIR"
+echo "SED dir    : $SED_OUTPUT_DIR"
+echo "CPUs       : $THREADS"
+date
+
+cd "$PROJECT_PATH"
+bash scripts/build_inspection_bundle.sh "$SAMPLE" "$RUN_TAG"
+
+echo ""
+echo "Finished bundle: $SAMPLE ${RUN_TAG}"
+date

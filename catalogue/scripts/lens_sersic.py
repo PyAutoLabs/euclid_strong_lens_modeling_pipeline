@@ -125,7 +125,29 @@ def main():
     agg_query = agg.query(agg.unique_tag == args.unique_tag)
     agg_query = agg_query.query(agg_query.search.name == args.search_name)
 
-    agg_csv = af.AggregateCSV(aggregator=agg_query)
+    """
+    __An Empty Query Is Not An Error__
+
+    ``AggregateCSV`` raises ``ValueError("The aggregator is empty.")`` when the
+    two queries above match nothing — a results tree holding only the other
+    stage, which is the ordinary case for a ``vis_lp``-only tree scraped with
+    the default ``--search_name=vis_pix``.
+
+    That is caught and reported rather than raised, exactly as
+    ``deblending.py`` and ``magnitudes.py`` already do, because
+    ``scripts/build_inspection_bundle.sh`` runs under ``set -e``: a raised
+    ``ValueError`` here aborts every later stage of the bundle over a lens
+    stage that simply has not run yet. Returning early leaves no CSV, which is
+    the honest record of "nothing matched" and is what the later stages and the
+    per-lens split both already handle.
+    """
+    try:
+        agg_csv = af.AggregateCSV(aggregator=agg_query)
+    except ValueError as e:
+        print(
+            f"no completed {args.unique_tag}/{args.search_name} results: {e}"
+        )
+        return
 
     """
     __Row Identity And Value Flavours__

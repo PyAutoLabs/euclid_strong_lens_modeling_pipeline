@@ -16,6 +16,7 @@ Read this page once to pick a route. Everything else about the fits themselves i
 | A large sample and many CPU cores, or no GPU | **Two-stage CPU** | `batch_cpu/submit_initial_lens_model_two_stage` | One submission; `vis_lp` under JAX on the CPU backend, then `vis_pix` with the Numba sparse operator and a process pool, as two consecutive Python processes. Measured on 8 cores with the committed config: 3 h 17 min per lens (26 min `vis_lp`, 2 h 51 min `vis_pix`). |
 | As above, but you want different walltime, memory or core counts per stage, or to re-run one stage alone | **Two-stage CPU, two jobs** | `batch_cpu/submit_initial_lens_model_vis_lp` then `batch_cpu/submit_initial_lens_model_vis_pix` | The same two stages as two array jobs. Submit the second once the first has finished. |
 | A cluster where JAX is unavailable or broken | **Numba only** | `batch_cpu/submit_initial_lens_model` | Both stages in one process with JAX disabled. The `vis_lp` stage is markedly slower this way. |
+| The fits are finished and you want the catalogue built where the results already live | **Catalogue build** | `batch_cpu/submit_build_inspection_bundle` | No fitting: runs `scripts/build_inspection_bundle.sh` over an existing results tree and writes `inspect/<sample>[_<run_tag>]/`. 4 cores, 8 GB, 6 h, partition `ral`. `SAMPLE`, `RUN_TAG`, `OUTPUT_DIR` and `SED_OUTPUT_DIR` are `--export` overrides. |
 
 Both figures come from the acceptance runs recorded below, with the committed,
 laptop-friendly `config/`. The "around 10 minutes per lens" quoted in the
@@ -181,8 +182,11 @@ shell profile.
 2. **The project path.** Export `PROJECT_PATH` to the project's root on the cluster
    before submitting; the scripts read it and it is the same location as
    `$HPC_BASE/$PROJECT_NAME` in `sync.conf`.
-3. **The partition names.** The scripts use `--partition=cpu` and `--partition=gpu`.
-   Rename them to your cluster's partitions, or override on the command line:
+3. **The partition names.** The fitting scripts use `--partition=cpu` and
+   `--partition=gpu`; `batch_cpu/submit_build_inspection_bundle` uses
+   `--partition=ral`, because RAL — the cluster the DR1 catalogue is built on —
+   has no `cpu` partition. Rename them to your cluster's partitions, or override
+   on the command line:
    `sbatch --partition=<name> hpc/batch_cpu/submit_initial_lens_model_two_stage`.
 4. **Submit from the script's directory**, or via `hpc/sync submit`. The `-o` / `-e`
    directives are relative paths into `output/` and `error/` beside the script, and

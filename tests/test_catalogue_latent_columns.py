@@ -35,6 +35,13 @@ So this one runs the real thing:
   requires each one that is not a ``galaxies...`` model path to be, exactly, a
   key of ``util.LatentEuclid``. That catches a re-introduced prefix and a
   renamed latent without touching the disk.
+* ``test_producers_survive_an_empty_query`` points a producer at a results tree
+  holding only the *other* search and asserts it returns cleanly with no CSV,
+  rather than letting ``AggregateCSV``'s ``ValueError("The aggregator is
+  empty.")`` out. ``scripts/build_inspection_bundle.sh`` runs under ``set -e``,
+  so that exception aborted every later stage of the bundle over a stage that
+  simply had not run yet — the ordinary state of a ``vis_lp``-only tree scraped
+  with the default ``--search_name=vis_pix``.
 
 JAX-free and search-free, as the fast suite requires: no fit is run, the results
 are written by hand from PyAutoFit's serializers and the latent values are
@@ -330,6 +337,58 @@ def test_magnitudes_writes_no_blank_cells(tmp_path, monkeypatch, pipeline_config
     assert len(rows) == len(LENS_NAMES) * len(BANDS), (
         "magnitudes.csv carries one row per (lens, waveband); a different count "
         "means the de-duplication dropped a band"
+    )
+
+
+EMPTY_QUERY_PRODUCERS = ("lens_mass", "lens_sersic", "source_sersic")
+
+
+@pytest.mark.parametrize("producer", EMPTY_QUERY_PRODUCERS)
+def test_producers_survive_an_empty_query(producer, tmp_path, monkeypatch, pipeline_config):
+    """
+    A results tree that holds a completed ``vis_lp`` search and nothing else,
+    scraped by a producer whose default ``--search_name`` is ``vis_pix``: the
+    query matches nothing, and the producer must say so and return rather than
+    raise.
+
+    The tree is deliberately *not* empty — a missing sample directory is a
+    different, already-handled path — so what is under test is an aggregator
+    that found results and a query that excluded all of them, which is what
+    ``af.AggregateCSV`` raises ``ValueError("The aggregator is empty.")`` on.
+
+    The assertion is that no CSV is written, not that an empty one is: an absent
+    file is the honest record of "nothing matched", and ``build_inspection_bundle.sh``
+    and the per-lens split both already handle it.
+    """
+    import autofit as af
+    import autolens as al
+
+    model = af.Collection(
+        galaxies=af.Collection(
+            lens=af.Model(
+                al.Galaxy,
+                redshift=0.5,
+                mass=al.mp.Isothermal,
+                shear=al.mp.ExternalShear,
+            )
+        )
+    )
+
+    for offset, lens_name in enumerate(LENS_NAMES):
+        _write_result(
+            model,
+            path_prefix=Path(SAMPLE) / lens_name,
+            name="vis_lp",
+            unique_tag="initial_lens_model",
+            offset=1.0 + offset,
+        )
+
+    inspect_path = tmp_path / "inspect"
+    _run_producer(producer, monkeypatch, pipeline_config, inspect_path)
+
+    assert not (inspect_path / f"{producer}.csv").exists(), (
+        f"{producer}.py wrote a CSV for a query that matched nothing; an empty "
+        "query should leave no product behind"
     )
 
 
