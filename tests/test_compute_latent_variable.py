@@ -41,7 +41,12 @@ latents the source swap may and may not change; the mesh areas the integral uses
 are version-dependent, so no tolerance against ``truth.json`` is claimed there.
 
 These tests are deliberately **JAX-free** (``use_jax=False`` everywhere, as
-``AGENTS.md`` requires) and run no non-linear search. The whole module is a
+``AGENTS.md`` requires) with one deliberate exception at the end of the module:
+``test_latent_euclid_variables_traces_under_jax_jit`` evaluates
+``LatentEuclid.variables`` under ``jax.jit``, because that is the one property
+of it no NumPy test can hold — the latent engine jits the call per sample, and
+a value that cannot be traced there is silently written as NaN (PyAutoLens#732,
+issue #66). They run no non-linear search. The whole module is a
 handful of seconds: the dataset is loaded and each set of latents evaluated
 once, in session-scoped fixtures.
 """
@@ -98,6 +103,12 @@ ADAPT_IMAGE_FLOOR = 0.01
 # pixelized model's galaxies are named `lens` / `source` (as the pipeline names
 # them) rather than `galaxy_0` / `galaxy_1` (as `truth.json` does).
 SOURCE_PATH = "('galaxies', 'source')"
+
+# The redshifts the `vis_lp` model the JAX trace test builds is composed at:
+# the pipeline's own placeholders, as in `tests/test_vis_lp_model.py`. Its mask
+# radius and centre come off the loaded dataset, the way `fit` takes them.
+REDSHIFT_LENS = 0.5
+REDSHIFT_SOURCE = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +195,7 @@ def truth_model(truth):
     )
 
 
-def _analysis_from(euclid_dataset, adapt_images=None):
+def _analysis_from(euclid_dataset, adapt_images=None, use_jax=False):
     """
     The pipeline ``AnalysisImaging`` exactly as ``scripts/simulator.py`` builds
     it when it writes ``truth["latents"]`` — same kwargs, ``use_jax=False``.
@@ -193,12 +204,15 @@ def _analysis_from(euclid_dataset, adapt_images=None):
     reproduces the simulator's call byte for byte. The pixelized-source tests
     pass an ``al.AdaptImages`` here, the way ``scripts/initial_lens_model.py``
     hands the ``vis_pix`` stage its image-plane mesh grid.
+
+    ``use_jax`` defaults to ``False``, so every known-answer caller is
+    unchanged; only the JAX trace test at the end of the module flips it.
     """
     return util.AnalysisImaging(
         dataset=euclid_dataset.dataset,
         adapt_images=adapt_images,
         positions_likelihood_list=None,
-        use_jax=False,
+        use_jax=use_jax,
         dataset_main_path=euclid_dataset.dataset_main_path,
         title_prefix="VIS",
         plot_rgb=False,
@@ -218,6 +232,16 @@ def euclid_dataset():
 @pytest.fixture(scope="session")
 def analysis(euclid_dataset):
     return _analysis_from(euclid_dataset)
+
+
+@pytest.fixture(scope="session")
+def jax_analysis(euclid_dataset):
+    """
+    The same pipeline ``AnalysisImaging`` on the JAX backend, for the one trace
+    test at the end of the module. Session-scoped: the module has no conftest,
+    and building it twice would load the dataset twice.
+    """
+    return _analysis_from(euclid_dataset, use_jax=True)
 
 
 @pytest.fixture(scope="session")
@@ -699,4 +723,132 @@ def test_pixelized_source_latents_stage_invariance(pixelized_latents, latents):
             f"latent '{key}' depends on the source model and must differ "
             "between a Sersic source and a Delaunay pixelization; got "
             f"{pixelized_latents[key]!r} against {latents[key]!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# The one JAX test: the latents must survive the latent engine's jax.jit
+# ---------------------------------------------------------------------------
+
+
+JIT_VS_EAGER_REL = 1e-3
+
+
+def _vis_lp_model(euclid_dataset):
+    """
+    The ``vis_lp`` model, as ``scripts/initial_lens_model.py`` composes it at
+    this dataset's mask radius and centre.
+
+    Built here rather than from ``truth.json`` because the trace failure this
+    test pins is a property of *this* model: ``order_bases=True`` attaches an
+    ordering assertion to the two lens-light MGE bases, and it is checking that
+    assertion inside the jit that raises. The truth model has no assertion (and
+    no free parameters), so it cannot exercise it.
+    """
+    sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+    import initial_lens_model
+
+    return initial_lens_model.vis_lp_model_from(
+        mask_radius=euclid_dataset.mask_radius,
+        dataset_centre=euclid_dataset.dataset_centre,
+        redshift_lens=REDSHIFT_LENS,
+        redshift_source=REDSHIFT_SOURCE,
+    )
+
+
+def _ordered_median_vector(model):
+    """
+    A parameter vector that satisfies the ordering assertion.
+
+    The two lens bases' ``ell_comps_1`` priors are identical, so the median
+    vector puts them at the same value and the assertion ("basis 0 above basis
+    1") is not satisfied by it. The two entries are therefore separated about
+    their median, which is all the assertion asks for; every other parameter
+    stays at its prior median. The vector is not a fit — the latents it
+    produces are whatever this arbitrary model gives, and the test compares the
+    two backends on it rather than against any truth.
+    """
+    vector = list(model.physical_values_from_prior_medians)
+
+    priors = model.priors_ordered_by_id
+    profile_list = model.galaxies.lens.bulge.profile_list
+    gaussians_per_basis = len(profile_list) // 2
+
+    first = priors.index(profile_list[0].ell_comps.ell_comps_1)
+    second = priors.index(profile_list[gaussians_per_basis].ell_comps.ell_comps_1)
+
+    midpoint = 0.5 * (vector[first] + vector[second])
+    vector[first] = midpoint + 0.1
+    vector[second] = midpoint - 0.1
+
+    return vector
+
+
+def test_latent_euclid_variables_traces_under_jax_jit(
+    euclid_dataset, analysis, jax_analysis, monkeypatch
+):
+    """
+    ``LatentEuclid.variables`` must be traceable under ``jax.jit``.
+
+    The PyAutoFit latent engine evaluates the latents inside a per-sample
+    ``jax.jit`` (``LatentLens.BATCH_MODE = "jit"``), and nothing may raise
+    inside a trace: a raise is caught and written as a NaN row for **every**
+    sample, so the JAX ``vis_lp`` stage silently produced no latent output at
+    all (RAL 342398, all ten ``euclid_dr1_prelim`` tiles; PyAutoLens#732).
+    Calling ``variables`` eagerly, as every other test in this module does,
+    cannot see that: both failures are trace-time only.
+
+    The two failures this pins are ``instance_from_vector`` checking the
+    ordered-MGE-bases assertion with a Python ``not`` on a traced boolean
+    (``TracerBoolConversionError``) and ``Grid2D.from_mask`` reaching
+    ``jnp.nonzero`` with a traced size (``ConcretizationTypeError``).
+
+    ``effective_einstein_radius`` is asserted finite but not compared across
+    backends: the two paths use different solvers (the NumPy path contours the
+    tangential critical curve, the JAX path runs ``ZeroSolver``), and on this
+    deliberately unfitted median-prior mass model the curve is multi-valued, so
+    the two need not agree. Every other latent is compared, which is what
+    catches a traced value that is quietly wrong rather than merely finite.
+    """
+    monkeypatch.delenv("PYAUTO_SMALL_DATASETS", raising=False)
+
+    import jax
+    import jax.numpy as jnp
+
+    model = _vis_lp_model(euclid_dataset)
+    vector = _ordered_median_vector(model)
+
+    keys = util.LatentEuclid.keys(analysis)
+
+    eager = util.LatentEuclid.variables(
+        analysis=analysis, parameters=vector, model=model
+    )
+
+    traced = jax.jit(
+        lambda parameters: util.LatentEuclid.variables(
+            analysis=jax_analysis, parameters=parameters, model=model
+        )
+    )(jnp.asarray(vector))
+
+    values = dict(zip(keys, [float(value) for value in traced]))
+
+    assert len(values) == len(keys) == 12, (
+        "the jitted call must return one value per latent key; got "
+        f"{len(values)} against {len(keys)}"
+    )
+
+    for key, value in values.items():
+        assert np.isfinite(value), (
+            f"latent '{key}' is {value!r} under jax.jit — a raise inside the "
+            "trace is written as NaN for every sample, which is how the JAX "
+            "vis_lp stage came back with no latents at all (PyAutoLens#732)"
+        )
+
+    for key, eager_value in zip(keys, [float(value) for value in eager]):
+        if key == "effective_einstein_radius":
+            continue
+        assert values[key] == pytest.approx(eager_value, rel=JIT_VS_EAGER_REL), (
+            f"latent '{key}' traced to {values[key]!r} under jax.jit but "
+            f"evaluates to {eager_value!r} eagerly on NumPy (rel="
+            f"{JIT_VS_EAGER_REL})"
         )
