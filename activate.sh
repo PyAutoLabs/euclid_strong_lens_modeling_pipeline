@@ -38,3 +38,6 @@ fi
 #   $SRC/PyAutoArray:\
 #   $SRC/PyAutoGalaxy:\
 #   $SRC/PyAutoLens
+
+# The assistant clone this project refers back to (skills + reference wiki).
+export AUTOLENS_ASSISTANT=/home/jammy/Code/PyAutoLabs/autolens_assistant
