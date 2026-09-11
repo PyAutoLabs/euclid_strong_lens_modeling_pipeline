@@ -1,9 +1,13 @@
 # Running the pipeline on a cluster
 
 This directory holds everything needed to run `scripts/initial_lens_model.py` (and the
-other fitting pipelines) under SLURM: example submission scripts for a GPU route and a
-CPU route in `batch_gpu/` and `batch_cpu/`, and the `sync` script that moves code,
+other fitting pipelines) under SLURM: example submission scripts for a CPU route and a
+GPU route in `batch_cpu/` and `batch_gpu/`, and the `sync` script that moves code,
 datasets, logs and results between your machine and the cluster.
+
+The initial lens model has both routes and the GPU one is the faster per lens. The
+SED chain runs on **CPU by default** (`batch_cpu/submit_sersic_waveband`), with the
+GPU script kept as an option; see the route table below.
 
 Read this page once to pick a route. Everything else about the fits themselves is in
 `start_here.py`; the submission scripts only decide *where* and *how* that script runs.
@@ -16,6 +20,8 @@ Read this page once to pick a route. Everything else about the fits themselves i
 | A large sample and many CPU cores, or no GPU | **Two-stage CPU** | `batch_cpu/submit_initial_lens_model_two_stage` | One submission; `vis_lp` under JAX on the CPU backend, then `vis_pix` with the Numba sparse operator and a process pool, as two consecutive Python processes. Measured on 8 cores with the committed config: 3 h 17 min per lens (26 min `vis_lp`, 2 h 51 min `vis_pix`). |
 | As above, but you want different walltime, memory or core counts per stage, or to re-run one stage alone | **Two-stage CPU, two jobs** | `batch_cpu/submit_initial_lens_model_vis_lp` then `batch_cpu/submit_initial_lens_model_vis_pix` | The same two stages as two array jobs. Submit the second once the first has finished. |
 | A cluster where JAX is unavailable or broken | **Numba only** | `batch_cpu/submit_initial_lens_model` | Both stages in one process with JAX disabled. The `vis_lp` stage is markedly slower this way. |
+| The VIS fits are done and you want the multi-band SED chain (Sersic VIS fit + every other waveband) | **SED chain, CPU** (default) | `batch_cpu/submit_sersic_waveband` | `vis_lp` (short-circuited from its cached zip) then the VIS Sersic fit then one Sersic fit per non-VIS band, in one process with JAX pinned to the CPU backend. 8 cores, 64 GB, 12 h, partition `ral`, writes to `output_sed/` via `PYAUTO_OUTPUT_DIR`. |
+| As above, but a GPU node is free and the sample is small | **SED chain, GPU** (optional) | `batch_gpu/submit_sersic_waveband` | The identical chain on a GPU node. Both SED analyses are `use_jax=True`, so the only difference from the CPU default is which backend the same JAX likelihood runs on. |
 | The fits are finished and you want the catalogue built where the results already live | **Catalogue build** | `batch_cpu/submit_build_inspection_bundle` | No fitting: runs `scripts/build_inspection_bundle.sh` over an existing results tree and writes `inspect/<sample>[_<run_tag>]/`. 4 cores, 8 GB, 6 h, partition `ral`. `SAMPLE`, `RUN_TAG`, `OUTPUT_DIR` and `SED_OUTPUT_DIR` are `--export` overrides. |
 
 Both figures come from the acceptance runs recorded below, with the committed,
@@ -72,6 +78,14 @@ is `--number_of_cores` pool processes and giving each worker a full set of BLAS
 threads oversubscribes the node. The scripts set these per stage; the two-job scripts
 carry one block each, and the single-submission script applies each block with `env`
 on its own command line so nothing leaks between the stages.
+
+The SED chain has no such split, which is why `batch_cpu/submit_sersic_waveband` is a
+single process with a single environment block. Both of its stages —
+`scripts/sersic_lens_model.py` and `scripts/lens_model_waveband.py` — build their
+analysis with `use_jax=True`, so the whole chain is one JAX likelihood with the CPU
+backend pinned, exactly like `vis_lp` above: no Numba stage, no pool, no fork boundary
+to preserve. It must therefore *not* be passed `--use_cpu`, which sets
+`use_jax = not use_cpu` and would swap both SED likelihoods to Numba.
 
 The stages also run in separate Python processes. This is a conservative default rather
 than a measured necessity. PyAutoFit documents that a forked worker whose *likelihood*
@@ -182,11 +196,11 @@ shell profile.
 2. **The project path.** Export `PROJECT_PATH` to the project's root on the cluster
    before submitting; the scripts read it and it is the same location as
    `$HPC_BASE/$PROJECT_NAME` in `sync.conf`.
-3. **The partition names.** The fitting scripts use `--partition=cpu` and
-   `--partition=gpu`; `batch_cpu/submit_build_inspection_bundle` uses
-   `--partition=ral`, because RAL — the cluster the DR1 catalogue is built on —
-   has no `cpu` partition. Rename them to your cluster's partitions, or override
-   on the command line:
+3. **The partition names.** The initial-lens-model fitting scripts use
+   `--partition=cpu` and `--partition=gpu`; `batch_cpu/submit_build_inspection_bundle`
+   and `batch_cpu/submit_sersic_waveband` use `--partition=ral`, because RAL — the
+   cluster the DR1 catalogue is built on — has no `cpu` partition. Rename them to your
+   cluster's partitions, or override on the command line:
    `sbatch --partition=<name> hpc/batch_cpu/submit_initial_lens_model_two_stage`.
 4. **Submit from the script's directory**, or via `hpc/sync submit`. The `-o` / `-e`
    directives are relative paths into `output/` and `error/` beside the script, and

@@ -104,8 +104,9 @@ LOG_DIRS=(
 #
 # `output/`      the main VIS results tree.
 # `output_sed/`  the multi-band SED tree written by
-#                hpc/batch_gpu/submit_sersic_waveband (PYAUTO_OUTPUT_DIR), which
-#                the catalogue's stages 6-7 read.
+#                hpc/batch_cpu/submit_sersic_waveband (PYAUTO_OUTPUT_DIR) - or by
+#                hpc/batch_gpu/submit_sersic_waveband, the optional GPU route -
+#                which the catalogue's stages 6-7 read.
 # `inspect/`     the per-lens inspection bundles built by
 #                scripts/build_inspection_bundle.sh.
 # A directory that does not exist on the HPC is skipped rather than failing.
@@ -570,6 +571,7 @@ print_help() {
     echo "                                    submit_initial_lens_model_vis_lp"
     echo "                                    submit_initial_lens_model_vis_pix"
     echo "                                    submit_build_inspection_bundle"
+    echo "                                    submit_sersic_waveband"
     echo "                                  GPU scripts:"
     echo "                                    submit_initial_lens_model"
     echo "                                    submit_full_model"

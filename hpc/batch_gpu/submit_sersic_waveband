@@ -1,4 +1,11 @@
 #!/bin/bash -l
+#
+# SED chain (Sersic VIS fit + every other waveband) on a GPU node -- the
+# OPTIONAL route. The default is `batch_cpu/submit_sersic_waveband`, which runs
+# the identical chain with JAX pinned to the CPU backend; both SED analyses are
+# `use_jax=True`, so the only difference between the two scripts is which
+# backend the same JAX likelihood lands on. Prefer this one when a GPU node is
+# free and the sample is small; prefer the CPU default otherwise.
 
 #SBATCH -J euclid_sersic_waveband
 #SBATCH --partition=gpu
