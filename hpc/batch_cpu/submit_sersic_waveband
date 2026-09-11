@@ -1,0 +1,158 @@
+#!/bin/bash -l
+#
+# SED chain (Sersic VIS fit + every other waveband) on CPU -- the default route.
+#
+# WHAT THIS DOES
+#   Runs `scripts/sersic_lens_model_waveband.py` with JAX pinned to the CPU
+#   backend: `vis_lp` (short-circuited if its result zip is already in the tree)
+#   -> the VIS Sersic fit -> one Sersic fit per non-VIS band, all in one Python
+#   process inside a single SLURM allocation.
+#
+# WHY CPU IS THE DEFAULT
+#   Both SED stages are already JAX likelihoods -- `scripts/sersic_lens_model.py`
+#   and `scripts/lens_model_waveband.py` build their analysis with `use_jax=True`
+#   ("JAX is always on for this search"). Nothing in the model code is
+#   GPU-specific; the backend is chosen by the environment. So the CPU route is
+#   the *same* JAX likelihood with the backend pinned to CPU -- exactly what
+#   stage 1 of `batch_cpu/submit_initial_lens_model_two_stage` does for `vis_lp`,
+#   and the `env` line below is that stage's line with a different driver.
+#
+#   `batch_gpu/submit_sersic_waveband` runs the identical chain on a GPU node
+#   and remains available; it is the optional route, for when a GPU is free and
+#   the sample is small.
+#
+# DO NOT PASS `--use_cpu`
+#   That flag sets `use_jax = not use_cpu` on the analyses, which is what the
+#   `vis_pix` stage of the initial lens model wants (Numba sparse operator,
+#   forked pool) and is wrong here: it would swap both SED likelihoods from JAX
+#   to Numba and lose the reason this route is fast. Pinning the *backend* is the
+#   whole of what "run on CPU" means for this chain.
+#
+# WHY THE `vis_lp` HASH IS UNCHANGED
+#   `number_of_cores` never reaches the `vis_lp` search dictionary (only
+#   `vis_pix` reads it, `scripts/initial_lens_model.py`), so passing
+#   `--number_of_cores` here does not perturb the `vis_lp` search settings and
+#   the seeded result zip still resolves to the same hash -- the chain
+#   short-circuits with "Fit Already Completed: skipping non-linear search"
+#   rather than re-fitting.
+#
+# CPU COUNT AND WALLTIME
+#   The parallelism here is JAX/BLAS *threads*, not a process pool, so
+#   `--cpus-per-task` is spent the way stage 1 of the two-stage script spends it;
+#   8 is a sensible starting point and the threaded speed-up flattens off beyond
+#   it. Walltime is sized from the euclid precedent on 4 cores -- 5-12 min for
+#   the Sersic fit and 5-30 min per band, with up to 8 bands per tile, so a worst
+#   case near 4 h; 12 h leaves headroom for a slow node.
+
+#SBATCH -J euclid_sersic_waveband
+#SBATCH -n 1
+#SBATCH --cpus-per-task=8
+#SBATCH -o output/output.%A_%a.out
+#SBATCH -e error/error.%A_%a.err
+#SBATCH --partition=ral
+#SBATCH -t 12:00:00
+#SBATCH --mem=64gb
+#SBATCH --array=0-9
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=your.email@institution.ac.uk
+
+# -----------------------------------------------------------------------------
+# Environment
+#
+# Set PROJECT_PATH to this project on the HPC before submitting:
+#
+#   export PROJECT_PATH=/PATH/TO/LARGE_STORAGE/YOUR_USERNAME/euclid_strong_lens_modeling_pipeline
+#   sbatch hpc/batch_cpu/submit_sersic_waveband
+#
+# This is the same location as $HPC_BASE/$PROJECT_NAME in hpc/sync.conf.
+#
+# Nothing JAX-related and no thread counts are exported here: the run below
+# carries its own on its `env` line.
+# -----------------------------------------------------------------------------
+source $PROJECT_PATH/activate.sh
+
+# Stop the job the moment something fails, rather than carrying on.
+set -e
+
+THREADS=$SLURM_CPUS_PER_TASK
+
+# -------------------------------
+# Output directory
+#
+# The SED chain fits every waveband, so it produces many more result folders
+# than a VIS-only run. `PYAUTO_OUTPUT_DIR` sends them to their own tree, keeping
+# `output/` (the initial lens model results) readable. The catalogue's stages 6
+# and 7 - `catalogue/scripts/multi_wavelength.py` and
+# `catalogue/scripts/magnitudes.py` - read this tree by name.
+#
+# Both upstream stages cache-short-circuit if their result zips already exist
+# at $PYAUTO_OUTPUT_DIR/<sample>/<dataset>/initial_lens_model/vis_lp/<hash>.zip
+# and .../sersic_lens_model/vis/<hash>.zip, so copying existing results into
+# this tree before submitting skips straight to the wavebands.
+# -------------------------------
+export PYAUTO_OUTPUT_DIR=output_sed
+
+# -------------------------------
+# Sample
+# -------------------------------
+sample=q1_walsmley
+
+# -------------------------------
+# Dataset list
+# -------------------------------
+datasets=(
+102018665_NEG570040238507752998
+)
+
+INDEX=$SLURM_ARRAY_TASK_ID
+dataset="${datasets[$INDEX]}"
+
+echo "=========================================="
+echo "Array task : $INDEX / ${#datasets[@]}"
+echo "Sample     : $sample"
+echo "Dataset    : $dataset"
+echo "CPUs       : $THREADS"
+echo "Output dir : $PYAUTO_OUTPUT_DIR"
+date
+
+# Fail fast if JAX is not actually on the CPU backend. This is the mirror of the
+# guard in `batch_gpu/submit_sersic_waveband`, and it exists for the same reason:
+# a chain that silently runs on the wrong backend looks alive and burns its whole
+# walltime. Here the wrong backend would be a GPU this job never allocated (an
+# inherited JAX_PLATFORMS, or a node whose CUDA JAX build picks a device), which
+# would either fail on a device it may not use or take resources the CPU
+# partition did not grant. The guard also trips when `activate.sh` found no
+# environment at all, because then JAX is not importable -- read the `.err` file
+# before blaming the backend.
+env JAX_PLATFORM_NAME=cpu JAX_PLATFORMS=cpu \
+    python3 -c 'import jax; b = jax.default_backend(); print(f"JAX backend: {b}"); raise SystemExit(0 if b == "cpu" else 1)' || {
+    echo "ERROR: JAX is not on the CPU backend on $(hostname); refusing to run. Check that the environment activated and that no JAX_PLATFORMS/CUDA_VISIBLE_DEVICES is inherited from your shell." >&2
+    exit 1
+}
+
+# -----------------------------------------------------------------------------
+# The SED chain: vis_lp (forced --stage=vis_lp inside the driver) -> Sersic VIS
+# -> every other waveband. JAX on the CPU backend.
+#
+# JAX_PLATFORM_NAME / JAX_PLATFORMS keep JAX off any GPU that was not allocated.
+# Every linear algebra library gets the full allocation, because this run's
+# parallelism is threads: the searches evaluate a batch of models on the device
+# rather than through a pool.
+# -----------------------------------------------------------------------------
+echo ""
+echo "---- SED chain (JAX on CPU) ----"
+date
+
+env JAX_PLATFORM_NAME=cpu \
+    JAX_PLATFORMS=cpu \
+    OPENBLAS_NUM_THREADS=$THREADS \
+    MKL_NUM_THREADS=$THREADS \
+    OMP_NUM_THREADS=$THREADS \
+    VECLIB_MAXIMUM_THREADS=$THREADS \
+    NUMEXPR_NUM_THREADS=$THREADS \
+    NPROC=$THREADS \
+    python3 $PROJECT_PATH/scripts/sersic_lens_model_waveband.py --sample=$sample --dataset=$dataset \
+        --number_of_cores=$THREADS
+
+echo "Finished: $dataset"
+date

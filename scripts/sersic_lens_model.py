@@ -250,7 +250,9 @@ def fit_sersic(
     Nautilus settles this twelve-parameter space with a much smaller live-point set
     than the ``vis_lp`` fit needs (``n_live=100`` against 750), and ``n_like_max``
     caps a runaway fit. ``batch_size`` controls how many models are evaluated
-    simultaneously on the GPU; JAX is always on for this search.
+    simultaneously on the JAX backend (CPU by default on RAL, via
+    ``hpc/batch_cpu/submit_sersic_waveband``; GPU optional); JAX is always on for
+    this search.
     """
     analysis = util.AnalysisImaging(
         dataset=dataset,
