@@ -27,7 +27,7 @@ beyond ten tiles.
 the sep1 delivery. It is an outer zip holding three **STORED** (uncompressed, and therefore
 seekable in place) inner zips,
 `Segmentation/eclipse_catalogue_fits_sep1-segmentation_batch{1,2,3}.zip`, carrying
-**15026** tile folders between them (batch1 3451, batch2 5788, batch3 5789). Each tile folder
+**15032** tile folders between them (batch1 3452, batch2 5790, batch3 5790). Each tile folder
 is already in the pipeline's dataset layout: `<Tile>.fits`, `<Tile>.png`, `info.json`,
 `positions.json`, `segmentation.png`, and `segmentation/{lens,source,artefact}_{flux,binary}.fits`.
 

@@ -49,7 +49,7 @@ tile folder. Result: **10 directories, 11 files each** — `<Tile>.fits`, `<Tile
 `info.json`, `positions.json`, `segmentation.png`, and six `segmentation/*.fits`. The tree is
 untracked (`.gitignore` carries `*.fits`), as in prelim.
 
-The delivery holds **15026** tile folders in total (batch1 3451, batch2 5788, batch3 5789),
+The delivery holds **15032** tile folders in total (batch1 3452, batch2 5790, batch3 5790),
 counted from the member listings — the figure carried into this project as "about 15000".
 
 **The mapping.** Seven of the ten prelim tiles arrive under a *different* name: the cut-out
