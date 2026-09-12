@@ -74,6 +74,13 @@ This script can be run as a black-box, with key output being generated, includin
 - A SIE plus shear lens mass model.
 - Deblended images of the lens and source galaxies.
 - Lens light and source models using a multi Gaussian Expansion.
+- A `files/wcs.json` record beside every fit: the lens light centre on the sky
+  (RA / Dec), the source light centre in the source plane, and the lensed
+  source's multiple images — the lens equation solved for that centre with
+  `al.PointSolver` — in the image plane (arcsec) and on the sky (RA / Dec).
+  Written by `util.AnalysisImaging.save_results` (`util.wcs_dict_from` documents
+  every key); a pixelized source (`vis_pix`) has no light centre, so its source
+  keys are `null`.
 
 Here is an example of the output, which shows the lens and source galaxies debelended and a source reconstruction
 in the source-plane:
