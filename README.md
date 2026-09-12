@@ -225,8 +225,8 @@ sentinel.
 ## Testing and Continuous Integration
 
 ```bash
-python -m pytest -q -m "not slow"      # 58 tests, ~4 s, JAX-free, no fit — the local default
-python -m pytest -q -m slow            # 3 tests, 10-20 s, one real (non-test-mode) fit
+python -m pytest -q -m "not slow"      # 120 tests, ~40 s, JAX-free, no fit — the local default
+python -m pytest -q -m slow            # 6 tests, ~30 s, two real (non-test-mode) fits
 python -m pytest -q                    # both
 python3 .github/scripts/run_smoke.py   # every script in smoke_tests.txt, under PYAUTO_TEST_MODE
 ```

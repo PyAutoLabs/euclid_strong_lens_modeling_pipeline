@@ -51,6 +51,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import util  # noqa: E402
+from pixelized_model import pixelized_model_and_adapt_images_from  # noqa: E402
 
 
 SIMULATED_SAMPLE = "simulated"
@@ -108,14 +109,6 @@ SOLVER_FROM_PEAK_ABS = 0.1
 # to within the mesh spacing there: measured 0.004".
 PEAK_ABS = 0.05
 
-# The `vis_pix` mesh, mirrored from `scripts/initial_lens_model.py` at the size
-# `test_compute_latent_variable.py` uses for the fast suite.
-HILBERT_PIXELS = 150
-EDGE_PIXELS_TOTAL = 30
-HILBERT_WEIGHT_POWER = 3.5
-HILBERT_WEIGHT_FLOOR = 0.01
-ADAPT_IMAGE_FLOOR = 0.01
-SOURCE_PATH = "('galaxies', 'source')"
 
 
 # ---------------------------------------------------------------------------
@@ -219,59 +212,15 @@ def _analysis_from(euclid_dataset, adapt_images=None):
 def pixelized_fit(truth_galaxies, euclid_dataset):
     """
     The ``vis_pix`` stage fitted once at zero free parameters: the truth lens
-    as an instance, the source a ``Delaunay`` ``Pixelization`` whose mesh is a
-    ``Hilbert`` grid drawn from the truth source's lensed image plus the
-    circle-edge ring, exactly as ``test_compute_latent_variable.py``'s
-    ``pixelized_source_model`` fixture builds it (see there for why the mesh
-    travels in ``AdaptImages``).
+    as an instance, the source a ``Delaunay`` ``Pixelization`` (the builder in
+    ``tests/pixelized_model.py``, which says why the mesh travels in
+    ``AdaptImages``).
     """
-    import autofit as af
-    import autolens as al
-
-    lens, sersic_source = truth_galaxies[0], truth_galaxies[-1]
-    dataset = euclid_dataset.dataset
-
-    adapt_data = al.Tracer(
-        galaxies=[lens, sersic_source]
-    ).galaxy_image_2d_dict_from(grid=dataset.grids.lp)[sersic_source]
-    adapt_data = adapt_data + np.max(adapt_data) * ADAPT_IMAGE_FLOOR
-
-    image_plane_mesh_grid = al.image_mesh.Hilbert(
-        pixels=HILBERT_PIXELS,
-        weight_power=HILBERT_WEIGHT_POWER,
-        weight_floor=HILBERT_WEIGHT_FLOOR,
-    ).image_plane_mesh_grid_from(mask=dataset.mask, adapt_data=adapt_data)
-
-    image_plane_mesh_grid = al.image_mesh.append_with_circle_edge_points(
-        image_plane_mesh_grid=image_plane_mesh_grid,
-        centre=dataset.mask.mask_centre,
-        radius=euclid_dataset.mask_radius + dataset.mask.pixel_scale / 2.0,
-        n_points=EDGE_PIXELS_TOTAL,
+    model, adapt_images = pixelized_model_and_adapt_images_from(
+        lens=truth_galaxies[0],
+        sersic_source=truth_galaxies[-1],
+        euclid_dataset=euclid_dataset,
     )
-
-    adapt_images = al.AdaptImages(
-        galaxy_name_image_dict={SOURCE_PATH: adapt_data},
-        galaxy_name_image_plane_mesh_grid_dict={SOURCE_PATH: image_plane_mesh_grid},
-    )
-
-    model = af.Collection(
-        galaxies=af.Collection(
-            lens=af.Model.from_instance(lens),
-            source=af.Model(
-                al.Galaxy,
-                redshift=sersic_source.redshift,
-                pixelization=af.Model(
-                    al.Pixelization,
-                    mesh=al.mesh.Delaunay(
-                        pixels=image_plane_mesh_grid.shape[0],
-                        zeroed_pixels=EDGE_PIXELS_TOTAL,
-                    ),
-                    regularization=al.reg.AdaptSplit(),
-                ),
-            ),
-        )
-    )
-    assert model.prior_count == 0
 
     analysis = _analysis_from(euclid_dataset, adapt_images=adapt_images)
 

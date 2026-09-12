@@ -53,6 +53,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import util  # noqa: E402
+from pixelized_model import pixelized_model_and_adapt_images_from  # noqa: E402
 
 
 SIMULATED_SAMPLE = "simulated"
@@ -61,6 +62,11 @@ SIMULATED_PATH = PROJECT_ROOT / "dataset" / SIMULATED_SAMPLE / SIMULATED_DATASET
 
 TOTAL_DRAWS = 10
 LATENT_DRAW_VIA_PDF_SIZE = 5
+
+# The pixelized fit's latents integrate an inversion on every draw and are
+# several times dearer than the light-profile fit's; three draws are enough to
+# prove the write path without doubling the job's wall time.
+PIXELIZED_TOTAL_DRAWS = 3
 
 # The einstein_radius prior is this fraction either side of the true value, so
 # every draw is a physically sensible lens and every latent is computable.
@@ -117,12 +123,13 @@ def _latent_kwargs_from(summary_path):
 
 
 @pytest.fixture(scope="module")
-def latent_summary(tmp_path_factory):
+def run_level(tmp_path_factory):
     """
-    Run a tiny real-mode fit on the committed simulated dataset and return the
-    path of the ``latent_summary.json`` it wrote.
+    Run two tiny real-mode fits on the committed simulated dataset — a
+    light-profile source and the ``vis_pix`` pixelized source — under one
+    pushed config, and return where their output landed.
 
-    Module-scoped so the fit runs once for the three assertions below;
+    Module-scoped so the fits run once for every assertion below;
     ``pytest.MonkeyPatch`` is the supported way to use ``monkeypatch``'s
     undo semantics outside function scope.
     """
@@ -130,6 +137,12 @@ def latent_summary(tmp_path_factory):
 
     with pytest.MonkeyPatch.context() as monkeypatch:
         yield from _fit(tmp_path, monkeypatch)
+
+
+@pytest.fixture(scope="module")
+def latent_summary(run_level):
+    """The light-profile fit's ``latent_summary.json`` path and the latent keys."""
+    return run_level["light_profile"] / "latent" / "latent_summary.json", run_level["keys"]
 
 
 def _fit(tmp_path, monkeypatch):
@@ -203,51 +216,92 @@ def _fit(tmp_path, monkeypatch):
             SIMULATED_DATASET, sample_name=SIMULATED_SAMPLE
         )
 
-        analysis = util.AnalysisImaging(
-            dataset=euclid_dataset.dataset,
-            positions_likelihood_list=None,
-            use_jax=False,
-            dataset_main_path=euclid_dataset.dataset_main_path,
-            title_prefix="VIS",
-            plot_rgb=False,
-            skip_rgb_plot=True,
-            psf_lowest_resolution=euclid_dataset.psf_lowest_resolution,
-            psf_lowest_resolution_fwhm=euclid_dataset.psf_lowest_resolution_fwhm,
-            pixel_wcs=euclid_dataset.pixel_wcs,
-            magzero=euclid_dataset.magzero,
+        # The `vis_pix` model: the same truth lens with the same one free
+        # parameter, and a Delaunay pixelized source (tests/pixelized_model.py).
+        # It is the stage that writes `source_clumps` into wcs.json, which no
+        # light-profile fit can exercise.
+        pixelized_model, adapt_images = pixelized_model_and_adapt_images_from(
+            lens=galaxies[lens_name],
+            sersic_source=galaxies[list(truth["model"])[-1]],
+            euclid_dataset=euclid_dataset,
         )
-
-        search = af.Drawer(
-            path_prefix="latent_run_level",
-            name="drawer",
-            total_draws=TOTAL_DRAWS,
+        pixelized_model.galaxies.lens.mass.einstein_radius = af.UniformPrior(
+            lower_limit=einstein_radius * (1.0 - EINSTEIN_RADIUS_PRIOR_WIDTH),
+            upper_limit=einstein_radius * (1.0 + EINSTEIN_RADIUS_PRIOR_WIDTH),
         )
-        search.fit(model=model, analysis=analysis)
+        assert pixelized_model.total_free_parameters == 1
 
-        summaries = list((tmp_path / "output").rglob("latent/latent_summary.json"))
-
-        if not summaries:
-            # `config/general.yaml` sets `hpc.hpc_mode: true`, which forces
-            # PyAutoFit's `remove_files` (paths/abstract.py): the search zips its
-            # output and deletes the unzipped tree, so the summary survives only
-            # inside `<identifier>.zip`. Read it from there rather than turning
-            # HPC mode off, so this test keeps exercising the production config.
-            zips = list((tmp_path / "output").rglob("*.zip"))
-            assert len(zips) == 1, (
-                "a real-mode fit must leave exactly one search output zip; "
-                f"found {zips}"
+        def analysis_from(adapt_images=None):
+            return util.AnalysisImaging(
+                dataset=euclid_dataset.dataset,
+                adapt_images=adapt_images,
+                positions_likelihood_list=None,
+                use_jax=False,
+                dataset_main_path=euclid_dataset.dataset_main_path,
+                title_prefix="VIS",
+                plot_rgb=False,
+                skip_rgb_plot=True,
+                psf_lowest_resolution=euclid_dataset.psf_lowest_resolution,
+                psf_lowest_resolution_fwhm=euclid_dataset.psf_lowest_resolution_fwhm,
+                pixel_wcs=euclid_dataset.pixel_wcs,
+                magzero=euclid_dataset.magzero,
             )
-            extracted = tmp_path / "extracted"
-            with zipfile.ZipFile(zips[0]) as archive:
-                archive.extractall(extracted)
-            summaries = list(extracted.rglob("latent/latent_summary.json"))
 
-        assert len(summaries) == 1, (
-            "a real-mode fit must write exactly one "
-            f"files/latent/latent_summary.json; found {summaries}"
-        )
+        analysis = analysis_from()
 
-        yield summaries[0], util.LatentEuclid.keys(analysis)
+        output_path = tmp_path / "output"
+        files = {}
+
+        for name, search_model, search_analysis, total_draws in (
+            ("drawer", model, analysis, TOTAL_DRAWS),
+            (
+                "drawer_pix",
+                pixelized_model,
+                analysis_from(adapt_images=adapt_images),
+                PIXELIZED_TOTAL_DRAWS,
+            ),
+        ):
+            search = af.Drawer(
+                path_prefix="latent_run_level",
+                name=name,
+                total_draws=total_draws,
+            )
+            search.fit(model=search_model, analysis=search_analysis)
+
+            search_output = output_path / "latent_run_level" / name
+            summaries = list(search_output.rglob("latent/latent_summary.json"))
+
+            if not summaries:
+                # `config/general.yaml` sets `hpc.hpc_mode: true`, which forces
+                # PyAutoFit's `remove_files` (paths/abstract.py): the search zips
+                # its output and deletes the unzipped tree, so the files survive
+                # only inside `<identifier>.zip`. Read them from there rather
+                # than turning HPC mode off, so this test keeps exercising the
+                # production config. The zip is extracted *outside* `output/`
+                # so the aggregator read below sees the zip, not a sibling dir.
+                zips = list(search_output.rglob("*.zip"))
+                assert len(zips) == 1, (
+                    f"the real-mode fit `{name}` must leave exactly one search "
+                    f"output zip; found {zips}"
+                )
+                extracted = tmp_path / "extracted" / name
+                with zipfile.ZipFile(zips[0]) as archive:
+                    archive.extractall(extracted)
+                summaries = list(extracted.rglob("latent/latent_summary.json"))
+
+            assert len(summaries) == 1, (
+                f"the real-mode fit `{name}` must write exactly one "
+                f"files/latent/latent_summary.json; found {summaries}"
+            )
+            files[name] = summaries[0].parent.parent
+            assert files[name].name == "files"
+
+        yield {
+            "light_profile": files["drawer"],
+            "pixelized": files["drawer_pix"],
+            "output": output_path,
+            "keys": util.LatentEuclid.keys(analysis),
+        }
     finally:
         # Restore the repository config for any test module that runs after
         # this one in the same session (`conf.instance` has no pop).
@@ -306,7 +360,40 @@ def test_no_latent_is_none_nan_or_exactly_zero(latent_summary):
     assert not bad, f"latent values must be finite and non-zero; got {bad}"
 
 
-def test_a_real_mode_fit_writes_the_lensed_source_images_to_wcs_json(latent_summary):
+WCS_IMAGE_KEYS = (
+    "lensed_source_image_y_arcsec",
+    "lensed_source_image_x_arcsec",
+    "lensed_source_image_ra_deg",
+    "lensed_source_image_dec_deg",
+)
+CLUMP_IMAGE_KEYS = ("image_y_arcsec", "image_x_arcsec", "image_ra_deg", "image_dec_deg")
+
+
+def _wcs_dict_from(files_path):
+    """
+    ``files/wcs.json`` read back the way the aggregator hands it to
+    ``catalogue/scripts/magnitudes.py``: `output_to_json` writes PyAutoFit's
+    dictable envelope ({"type": "dict", "arguments": ...}, lists as
+    {"type": "list", "values": ...}), and `from_json` undoes it.
+    """
+    import autolens as al
+
+    wcs_path = files_path / "wcs.json"
+    assert wcs_path.is_file(), f"save_results must write {wcs_path}"
+
+    return al.from_json(file_path=wcs_path)
+
+
+def _assert_images(wcs_dict, keys, n_images):
+    lengths = {key: len(wcs_dict[key]) for key in keys}
+    assert set(lengths.values()) == {n_images}, (
+        f"one entry per image in each of the four lists, got {lengths}"
+    )
+    for key in keys:
+        assert np.all(np.isfinite(wcs_dict[key])), f"{key} must be finite"
+
+
+def test_a_real_mode_fit_writes_the_lensed_source_images_to_wcs_json(run_level):
     """
     ``util.AnalysisImaging.save_results`` writes ``files/wcs.json`` beside the
     latent summary, and since the model here has a light-profile source it
@@ -317,17 +404,7 @@ def test_a_real_mode_fit_writes_the_lensed_source_images_to_wcs_json(latent_summ
     imaged at a max-likelihood Einstein radius drawn within 10 per cent of the
     truth's.
     """
-    summary_path, _ = latent_summary
-
-    import autolens as al
-
-    wcs_path = summary_path.parent.parent / "wcs.json"
-    assert wcs_path.is_file(), f"save_results must write {wcs_path}"
-
-    # `output_to_json` writes PyAutoFit's dictable envelope ({"type": "dict",
-    # "arguments": ...}, lists as {"type": "list", "values": ...}); read it back
-    # the way the aggregator hands it to `catalogue/scripts/magnitudes.py`.
-    wcs_dict = al.from_json(file_path=wcs_path)
+    wcs_dict = _wcs_dict_from(run_level["light_profile"])
 
     for key in ("crval_ra_deg", "crval_dec_deg"):
         assert np.isfinite(wcs_dict[key])
@@ -338,17 +415,64 @@ def test_a_real_mode_fit_writes_the_lensed_source_images_to_wcs_json(latent_summ
     for key in ("source_centre_y_arcsec", "source_centre_x_arcsec"):
         assert np.isfinite(wcs_dict[key])
 
-    image_keys = (
-        "lensed_source_image_y_arcsec",
-        "lensed_source_image_x_arcsec",
-        "lensed_source_image_ra_deg",
-        "lensed_source_image_dec_deg",
-    )
-    lengths = {key: len(wcs_dict[key]) for key in image_keys}
+    _assert_images(wcs_dict, WCS_IMAGE_KEYS, n_images=4)
 
-    assert set(lengths.values()) == {4}, (
-        "the simulated source is quadruply imaged; wcs.json must carry one "
-        f"entry per image in each of the four lists, got {lengths}"
+
+def test_a_pixelized_real_mode_fit_writes_its_clumps_to_wcs_json(run_level):
+    """
+    The ``vis_pix`` leg: at the end of a real pixelized fit ``save_results``
+    reads the clumps off the max-likelihood fit's mapper and writes
+    ``source_clumps``, then solves the lens equation for the brightest clump's
+    peak into the same solver keys the light-profile fit writes. Values are
+    checked in ``test_wcs_dict.py``; this proves the write happens on the
+    production path — through ``result.max_log_likelihood_fit``, under
+    ``hpc_mode``'s zip-and-remove — and that nothing is lost to the envelope.
+    """
+    wcs_dict = _wcs_dict_from(run_level["pixelized"])
+
+    assert wcs_dict["source_model"] == "pixelized"
+
+    clumps = wcs_dict["source_clumps"]
+    assert isinstance(clumps, list) and len(clumps) >= 1, (
+        f"a pixelized fit must record at least one clump; got {clumps!r}"
     )
-    for key in image_keys:
-        assert np.all(np.isfinite(wcs_dict[key])), f"{key} must be finite"
+    assert len(clumps) == 1, (
+        "the simulated source is one smooth Sersic, which the default threshold "
+        f"isolates as one clump; got {len(clumps)}"
+    )
+
+    clump = clumps[0]
+    assert clump["mesh_pixels"] >= util.SOURCE_CLUMP_MIN_PIXELS
+    assert clump["peak_value"] > 0.0
+    _assert_images(clump, CLUMP_IMAGE_KEYS, n_images=4)
+
+    assert wcs_dict["source_centre_y_arcsec"] == clump["peak_y_arcsec"]
+    assert wcs_dict["source_centre_x_arcsec"] == clump["peak_x_arcsec"]
+    _assert_images(wcs_dict, WCS_IMAGE_KEYS, n_images=4)
+
+
+def test_the_aggregator_reads_both_records_back(run_level):
+    """
+    The consumer path: ``catalogue/scripts/magnitudes.py`` reads
+    ``wcs.json`` as ``agg.values("wcs")`` over an ``Aggregator.from_directory``
+    of the output tree, exactly as ``lens_mass.py`` opens it (``completed_only``
+    and, under ``remove_files``, ``unzip_temporary``). Both fits' records must
+    come back decoded, the nested clump list included, so a producer can add a
+    column from them without touching the envelope.
+    """
+    from autofit.aggregator import Aggregator
+
+    agg = Aggregator.from_directory(
+        directory=run_level["output"], completed_only=True, unzip_temporary=True
+    )
+    wcs_list = list(agg.values("wcs"))
+
+    assert len(wcs_list) == 2, f"two completed fits, got {len(wcs_list)} wcs records"
+    by_model = {wcs_dict["source_model"]: wcs_dict for wcs_dict in wcs_list}
+    assert set(by_model) == {"light_profile", "pixelized"}
+
+    pixelized = by_model["pixelized"]
+    assert isinstance(pixelized["source_clumps"], list)
+    assert isinstance(pixelized["source_clumps"][0], dict)
+    assert isinstance(pixelized["source_clumps"][0]["image_ra_deg"], list)
+    assert isinstance(by_model["light_profile"]["lensed_source_image_ra_deg"], list)
