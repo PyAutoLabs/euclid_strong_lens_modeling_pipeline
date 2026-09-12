@@ -130,6 +130,11 @@ PYAUTO_OUTPUT_DIR=output_sed python scripts/sersic_lens_model_waveband.py \
 
 plus `preprocess/segmentation.py` for `segmentation.png`.
 
+A Sersic fit run with `--variant=<v>` writes to `sersic_lens_model_<v>` instead,
+so `lens_sersic.py --unique_tag sersic_lens_model_<v>` scrapes that variant's rows
+without any other change. The default `sersic_lens_model` tag, and therefore every
+row in the table above, is unaffected.
+
 ### Environment
 
 | Variable | Default | Effect |

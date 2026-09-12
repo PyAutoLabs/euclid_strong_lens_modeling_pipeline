@@ -22,6 +22,10 @@ All fitting pipelines share one argument parser (`util.parse_fit_args`) —
   to the initial fit, giving more accurate photometry for SED fitting. Chains off
   `initial_lens_model.fit(..., stage="vis_lp")` — `vis_pix` replaces the source
   bulge with a pixelization, so its instance cannot seed a Sersic source prior.
+  `--variant {baseline,wide_n,central_noise,sersic_point}` runs one of the four
+  alternative fits that probe the `n = 5` Sersic-index prior edge, writing to
+  `sersic_lens_model_<variant>` instead; omitting it leaves the fit, the model and
+  the output path exactly as they were.
 - `lens_model_waveband.py`: After modeling the high resolution VIS imaging, model
   the lower resolution NIR / EXT imaging with the lens model held fixed.
 - `sersic_lens_model_waveband.py`: The **SED chain** driver — runs

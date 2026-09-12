@@ -1084,10 +1084,82 @@ class EuclidDataset:
     positions_likelihood_list: object  # list[al.PositionsLH] or None
 
 
+def inflate_noise_map_gaussian(
+    dataset: "al.Imaging",
+    centre: Tuple[float, float],
+    amplitude: float,
+    sigma_arcsec: float,
+) -> "al.Imaging":
+    """
+    Multiply a dataset's noise map by a circular Gaussian bowl centred on
+    ``centre``, returning a new ``al.Imaging``.
+
+    The noise map is scaled by ``1 + amplitude * exp(-r^2 / (2 sigma^2))``, where
+    ``r`` is the distance in arcseconds from ``centre``. The data and the PSF are
+    returned untouched: this down-weights a region in the likelihood without
+    changing a single flux value.
+
+    It exists for the ``central_noise`` Sersic variant, which asks whether the
+    lens-light Sersic index is being driven to the prior edge by the handful of
+    pixels at the galaxy's centre. Inflating the noise there answers that without
+    altering the model or the data.
+
+    ``Imaging.apply_noise_scaling`` cannot be used for this. That method *replaces*
+    the noise values inside a mask with a single large number — a top hat, not a
+    profile — so it can zero a region out of the fit but cannot taper one. The
+    rebuild below is copied from it.
+
+    Call this **before** the analysis mask is applied: the multiplication is done
+    on the native, unmasked noise map, and the coordinate grid is the full frame's.
+
+    Parameters
+    ----------
+    dataset
+        The imaging dataset whose noise map is inflated.
+    centre
+        The (y, x) centre of the bowl in arcseconds.
+    amplitude
+        ``A`` above: the peak *additional* fraction of noise at the centre, so
+        ``A = 9`` makes the central noise ten times its original value.
+    sigma_arcsec
+        The Gaussian width of the bowl in arcseconds.
+
+    Returns
+    -------
+    al.Imaging
+        The dataset with its noise map inflated.
+    """
+    grid = al.Grid2D.uniform(
+        shape_native=dataset.data.shape_native,
+        pixel_scales=dataset.data.pixel_scales,
+    ).native
+
+    radii_squared = (grid[:, :, 0] - centre[0]) ** 2 + (grid[:, :, 1] - centre[1]) ** 2
+
+    inflation = 1.0 + amplitude * np.exp(-radii_squared / (2.0 * sigma_arcsec**2))
+
+    noise_map = al.Array2D(
+        values=np.asarray(dataset.noise_map.native) * inflation,
+        mask=dataset.data.mask,
+    )
+
+    return al.Imaging(
+        data=dataset.data,
+        noise_map=noise_map,
+        psf=dataset.psf,
+        noise_covariance_matrix=dataset.noise_covariance_matrix,
+        over_sample_size_lp=dataset.over_sample_size_lp,
+        over_sample_size_pixelization=dataset.over_sample_size_pixelization,
+        check_noise_map=False,
+    )
+
+
 def load_vis_dataset(
     dataset_name: str,
     image_tag: str = "_BGSUB",
     sample_name: str = None,
+    *,
+    noise_inflation: Optional[dict] = None,
 ) -> EuclidDataset:
     """
     Load and prepare a Euclid VIS imaging dataset for lens modeling.
@@ -1106,6 +1178,12 @@ def load_vis_dataset(
     image_tag
         Tag appended to instrument names in the FITS HDU headers to identify
         image HDUs (default ``"_BGSUB"``).
+    noise_inflation
+        Keyword-only. When given, a ``dict`` of ``centre``, ``amplitude`` and
+        ``sigma_arcsec`` passed to `inflate_noise_map_gaussian`, which multiplies
+        the noise map by a Gaussian bowl at ``centre``. Applied after the artefact
+        noise scaling and before the analysis mask. ``None`` (the default) leaves
+        the noise map exactly as it is loaded.
 
     Returns
     -------
@@ -1223,6 +1301,12 @@ def load_vis_dataset(
         if mask_extra_galaxies.shape_native == dataset.shape_native:
             dataset = dataset.apply_noise_scaling(mask=mask_extra_galaxies)
         break
+
+    # The `central_noise` Sersic variant's only intervention. It comes after the
+    # artefact noise scaling, so a pixel already scaled out of the fit stays out,
+    # and before the mask, so the bowl is computed on the full frame.
+    if noise_inflation is not None:
+        dataset = inflate_noise_map_gaussian(dataset=dataset, **noise_inflation)
 
     mask_radius = info["mask_radius"]
 
@@ -1372,7 +1456,20 @@ def load_vis_dataset(
 # ---------------------------------------------------------------------------
 
 
-def parse_fit_args(with_seed: bool = False):
+# The Sersic-stage variants `scripts/sersic_lens_model.py` implements. They live
+# here rather than in that script because `parse_fit_args` below is what validates
+# the `--variant` the user types, and util.py must not import a script.
+#
+# - `baseline`      the unmodified model, re-run so the others have a like-for-like
+#                   comparison on the same data.
+# - `wide_n`        the lens Sersic index prior widened past the config edge.
+# - `central_noise` the noise map inflated in a bowl at the lens light centre; the
+#                   data and the model are untouched.
+# - `sersic_point`  a compact MGE point component added to the lens galaxy.
+VARIANTS = ("baseline", "wide_n", "central_noise", "sersic_point")
+
+
+def parse_fit_args(with_seed: bool = False, with_variant: bool = False):
     """
     Parse the standard command-line arguments shared by all pipeline scripts.
 
@@ -1382,6 +1479,10 @@ def parse_fit_args(with_seed: bool = False):
         If True, also parse ``--seed`` and return it as a seventh tuple element.
         Off by default so that every script which does not take a seed keeps the
         six-tuple it already unpacks; ``scripts/initial_lens_model.py`` is the one
+        caller that passes True.
+    with_variant
+        If True, also parse ``--variant`` and append it to the returned tuple, the
+        same way ``with_seed`` does. ``scripts/sersic_lens_model.py`` is the one
         caller that passes True.
 
     Returns
@@ -1396,6 +1497,9 @@ def parse_fit_args(with_seed: bool = False):
 
         ``seed`` is the Nautilus random seed, an ``int`` or ``None`` when the
         flag is not given (unseeded, the default).
+
+        ``variant`` is one of ``VARIANTS`` or ``None`` when the flag is not given,
+        which is the unmodified Sersic fit.
 
         The six-tuple's last element used to be the boolean ``skip_pix``.
         ``--skip_pix`` is still accepted as a deprecated alias for
@@ -1459,6 +1563,20 @@ def parse_fit_args(with_seed: bool = False):
         default=False,
         help="Deprecated alias for --stage vis_lp.",
     )
+    if with_variant:
+        parser.add_argument(
+            "--variant",
+            metavar="name",
+            required=False,
+            choices=list(VARIANTS),
+            default=None,
+            help=(
+                "Which Sersic-stage variant to run. Omitted (the default) runs "
+                "the unmodified fit and writes to `sersic_lens_model`; a named "
+                "variant writes to `sersic_lens_model_<variant>` instead, so the "
+                "variants sit beside each other under one dataset."
+            ),
+        )
     if with_seed:
         parser.add_argument(
             "--seed",
@@ -1499,6 +1617,9 @@ def parse_fit_args(with_seed: bool = False):
     )
 
     if with_seed:
-        return parsed + (args.seed,)
+        parsed = parsed + (args.seed,)
+
+    if with_variant:
+        parsed = parsed + (args.variant,)
 
     return parsed

@@ -46,14 +46,39 @@ bulge with a ``Pixelization`` — there is no bulge left in that result to seed 
 prior from. A pixelized source reconstruction is also not a Sersic and cannot be
 converted into one.
 
+__Variants__
+
+``--variant`` runs one of four alternative fits, added to find out why the
+lens-light Sersic index piles up at the ``n = 5`` prior edge in the DR1 catalogue.
+They are meant to be run over the same lenses and compared:
+
+- ``baseline`` — the unmodified model, so the others have a like-for-like
+  comparison on the same data.
+- ``wide_n`` — the lens Sersic index prior widened to ``Uniform(0.5, 10.0)``, past
+  the config edge. The source Sersic is untouched. Separates "the prior stopped it"
+  from "the data want a high ``n``".
+- ``central_noise`` — the noise map multiplied by a Gaussian bowl at the lens light
+  centre (``1 + 9 exp(-r^2 / 2 * 0.17"^2)``). The data and the model are identical
+  to ``baseline``; only the weight of the central pixels changes. Answers whether a
+  handful of pixels at the centre are driving the index.
+- ``sersic_point`` — the lens galaxy gains a compact MGE ``point`` component (five
+  linear Gaussians, shared free centre), so an unresolved nucleus has somewhere to
+  go other than the Sersic's cusp. Sixteen parameters rather than twelve.
+
+Each writes to ``sersic_lens_model_<variant>/vis``, beside the others under the
+same dataset. **Without ``--variant`` nothing changes**: the fit, the model and the
+output path are exactly what they were before variants existed.
+
 __Running It__
 
 Run as a script, it does the ``vis_lp`` fit and then the Sersic fit::
 
     python scripts/sersic_lens_model.py --sample=<sample> --dataset=<name>
+    python scripts/sersic_lens_model.py --dataset=<name> --variant=wide_n
 
-Results are written to ``sersic_lens_model/vis`` inside the dataset's output
-folder. The multi-waveband follow-on is deliberately not run from here; use
+Results are written to ``sersic_lens_model/vis`` (or
+``sersic_lens_model_<variant>/vis``) inside the dataset's output folder. The
+multi-waveband follow-on is deliberately not run from here; use
 ``scripts/sersic_lens_model_waveband.py``, the SED chain driver, which runs the
 same two stages and then ``fit_waveband`` over every remaining band.
 
@@ -78,11 +103,173 @@ import util
 from scripts.initial_lens_model import fit
 
 
+# The `central_noise` variant's single setting: the noise map is multiplied by
+# `1 + 9 exp(-r^2 / 2 * 0.17"^2)` at the lens light centre, so the central pixels
+# enter the likelihood at a tenth of their weight and the Sersic cusp is no longer
+# pinned by them. One setting, not a ladder — a ladder was considered and dropped.
+CENTRAL_NOISE_AMPLITUDE = 9.0
+CENTRAL_NOISE_SIGMA_ARCSEC = 0.17
+
+# The `wide_n` variant's lens Sersic index prior. The config prior is
+# `Uniform(0.8, 5.0)` (`config/priors/light/linear/sersic.yaml`), and 5.0 is the
+# edge the June catalogue piles up against; 10.0 is past any physical value, so a
+# fit that still lands at 5 is telling us about the data rather than the prior.
+WIDE_N_LOWER_LIMIT = 0.5
+WIDE_N_UPPER_LIMIT = 10.0
+
+# The `sersic_point` variant's nucleus: five linear Gaussians with a shared free
+# centre and shared ell_comps, sigma log-spaced from 0.01" to twice the pixel
+# scale. Four free parameters, so the model goes from twelve to sixteen.
+POINT_TOTAL_GAUSSIANS = 5
+POINT_SIGMA_MIN = 0.01
+
+
+def unique_tag_from(variant: str = None) -> str:
+    """
+    The ``unique_tag`` a Sersic fit writes under.
+
+    Without a variant this is ``"sersic_lens_model"``, unchanged from before
+    variants existed — that is the whole contract: an existing run, an existing
+    result directory and every other project that calls `fit_sersic` are untouched.
+    A variant appends its name, so the variants sit beside each other under one
+    dataset and ``catalogue/scripts/lens_sersic.py --unique_tag`` scrapes each.
+
+    Parameters
+    ----------
+    variant
+        One of ``util.VARIANTS``, or ``None``.
+    """
+    if variant is None:
+        return "sersic_lens_model"
+
+    if variant not in util.VARIANTS:
+        raise ValueError(
+            f"unique_tag_from: unknown variant {variant!r}; "
+            f"expected one of {util.VARIANTS} or None."
+        )
+
+    return f"sersic_lens_model_{variant}"
+
+
+def sersic_model_from(
+    lens_centre,
+    source_centre,
+    mass,
+    shear,
+    variant: str = None,
+    pixel_scales: float = None,
+    point_centre=None,
+) -> "af.Collection":
+    """
+    Compose the Sersic model: a linear ``Sersic`` for the lens and one for the
+    source, with the lens mass and external shear fixed.
+
+    This is the model `fit_sersic` hands to its search, split out of it so that the
+    four variants can be built and their priors inspected without loading a dataset
+    or running a search — the same split `scripts/initial_lens_model.py` makes with
+    ``vis_lp_model_from``. ``tests/test_sersic_variants.py`` is the caller that does
+    that.
+
+    - Lens light: ``lp_linear.Sersic`` [6 free parameters — centre, elliptical
+      components, effective radius, Sersic index].
+    - Source light: ``lp_linear.Sersic`` [6 free parameters].
+    - Lens mass: ``Isothermal`` + ``ExternalShear``, both passed as instances of the
+      ``vis_lp`` result [0 free parameters].
+
+    Twelve non-linear parameters in total (sixteen for ``sersic_point``). Each
+    profile's ``intensity`` is absent from that count by design: ``lp_linear``
+    profiles solve intensity by linear algebra at every likelihood evaluation, so
+    brightness costs the sampler nothing and is never a prior that can be got wrong.
+
+    The redshifts below are the same dimensionless placeholders the initial fit
+    uses: for a single-plane lens they do not affect the model.
+
+    Parameters
+    ----------
+    lens_centre
+        The lens light's ``(centre_0, centre_1)`` priors, taken from
+        ``vis_result.model_centred``.
+    source_centre
+        The source light's ``(centre_0, centre_1)`` priors, from the same place.
+    mass
+        The lens mass, an instance of the ``vis_lp`` result — not a model.
+    shear
+        The external shear, likewise an instance.
+    variant
+        One of ``util.VARIANTS``, or ``None`` for the unmodified model. ``baseline``
+        and ``central_noise`` also return the unmodified model: ``baseline`` is the
+        re-run of it on the new data, and ``central_noise`` changes the *noise map*
+        rather than the model.
+    pixel_scales
+        The dataset's pixel scale in arcseconds. Required by ``sersic_point`` only,
+        which sizes its Gaussians against it.
+    point_centre
+        The ``(y, x)`` centre the point component's shared centre prior is placed
+        on, ±0.1". Required by ``sersic_point`` only.
+
+    Returns
+    -------
+    af.Collection
+        The lens and source galaxies, ready to fit.
+    """
+    import autofit as af
+    import autolens as al
+
+    if variant is not None and variant not in util.VARIANTS:
+        raise ValueError(
+            f"sersic_model_from: unknown variant {variant!r}; "
+            f"expected one of {util.VARIANTS} or None."
+        )
+
+    lens_bulge = af.Model(al.lp_linear.Sersic)
+    lens_bulge.centre.centre_0 = lens_centre[0]
+    lens_bulge.centre.centre_1 = lens_centre[1]
+
+    if variant == "wide_n":
+        lens_bulge.sersic_index = af.UniformPrior(
+            lower_limit=WIDE_N_LOWER_LIMIT, upper_limit=WIDE_N_UPPER_LIMIT
+        )
+
+    source_bulge = af.Model(al.lp_linear.Sersic)
+    source_bulge.centre.centre_0 = source_centre[0]
+    source_bulge.centre.centre_1 = source_centre[1]
+
+    lens_kwargs = {}
+
+    if variant == "sersic_point":
+        if pixel_scales is None or point_centre is None:
+            raise ValueError(
+                "sersic_model_from: variant 'sersic_point' needs both "
+                "`pixel_scales` and `point_centre`."
+            )
+        lens_kwargs["point"] = al.model_util.mge_point_model_from(
+            pixel_scales=pixel_scales,
+            total_gaussians=POINT_TOTAL_GAUSSIANS,
+            centre=point_centre,
+            sigma_min=POINT_SIGMA_MIN,
+        )
+
+    return af.Collection(
+        galaxies=af.Collection(
+            lens=af.Model(
+                al.Galaxy,
+                redshift=0.5,
+                bulge=lens_bulge,
+                mass=mass,
+                shear=shear,
+                **lens_kwargs,
+            ),
+            source=af.Model(al.Galaxy, redshift=1.0, bulge=source_bulge),
+        )
+    )
+
+
 def fit_sersic(
     dataset_name: str,
     vis_result,
     sample_name: str = None,
     iterations_per_quick_update: int = 5000,
+    variant: str = None,
 ):
     from autolens import conf
 
@@ -105,7 +292,21 @@ def fit_sersic(
     ``scripts/initial_lens_model.py``, and the dataset contract it reads is described
     in ``start_here.py``.
     """
-    d = util.load_vis_dataset(dataset_name, sample_name=sample_name)
+    if variant == "central_noise":
+        # All the MGE Gaussians of the `vis_lp` lens bulge share one centre, so the
+        # first profile's carries it. This is the lens light centre the fit found,
+        # not the brightest pixel: the bowl has to sit where the Sersic cusp is.
+        noise_inflation = {
+            "centre": vis_result.instance.galaxies.lens.bulge.profile_list[0].centre,
+            "amplitude": CENTRAL_NOISE_AMPLITUDE,
+            "sigma_arcsec": CENTRAL_NOISE_SIGMA_ARCSEC,
+        }
+    else:
+        noise_inflation = None
+
+    d = util.load_vis_dataset(
+        dataset_name, sample_name=sample_name, noise_inflation=noise_inflation
+    )
 
     """
     __Over Sampling (Sersic)__
@@ -167,14 +368,22 @@ def fit_sersic(
     below, results land in
     ``output/<sample>/<dataset>/sersic_lens_model/vis/`` — the path the catalogue
     Sersic scrapers look for.
+
+    A variant appends its name, so the four sit beside each other under one dataset
+    in ``sersic_lens_model_<variant>/vis/`` and
+    ``catalogue/scripts/lens_sersic.py --unique_tag`` scrapes each of them with no
+    change. Without ``--variant`` the tag is exactly what it has always been, so
+    every existing result and every other project is untouched.
     """
+    unique_tag = unique_tag_from(variant)
+
     settings_search = af.SettingsSearch(
         path_prefix=(
             Path(sample_name) / dataset_name
             if sample_name is not None
             else Path(dataset_name)
         ),
-        unique_tag="sersic_lens_model",
+        unique_tag=unique_tag,
         info={"magzero": d.magzero},
         session=None,
     )
@@ -182,61 +391,32 @@ def fit_sersic(
     """
     __Model__
 
-    A linear ``Sersic`` for the lens and a linear ``Sersic`` for the source, with the
-    lens mass and external shear fixed:
-
-     - Lens light: ``lp_linear.Sersic`` [6 free parameters — centre, elliptical
-       components, effective radius, Sersic index].
-     - Source light: ``lp_linear.Sersic`` [6 free parameters].
-     - Lens mass: ``Isothermal`` + ``ExternalShear``, both passed as instances of the
-       ``vis_lp`` result [0 free parameters].
-
-    Twelve non-linear parameters in total. Each profile's ``intensity`` is absent from
-    that count by design: ``lp_linear`` profiles solve intensity by linear algebra at
-    every likelihood evaluation, so brightness costs the sampler nothing and is never
-    a prior that can be got wrong.
-
-    The two centres are not fixed, but neither do they start from the broad config
-    default. ``vis_result.model_centred`` is the ``vis_lp`` model with its priors
-    re-centred on that fit's maximum likelihood values, so taking ``centre_0`` and
-    ``centre_1`` from it anchors each Sersic on the position the MGE already found
-    for that galaxy — the lens's on the image-plane centre, the source's on its
-    source-plane centre — while leaving them free to move.
-
-    This is also the reason a pixelized result cannot be used here: the source's two
-    centre priors are read from ``galaxies.source.bulge``, which the ``vis_pix``
-    search replaces with a ``Pixelization``.
-
-    The redshifts below are the same dimensionless placeholders the initial fit uses:
-    for a single-plane lens they do not affect the model.
+    Composed by `sersic_model_from`, which is this block split out so the four
+    variants' models can be built and inspected without a dataset or a search.
+    The centre priors come from ``vis_result.model_centred`` — the ``vis_lp`` model
+    with its priors re-centred on that fit's maximum likelihood values — so each
+    Sersic starts on the position the MGE already found for that galaxy while
+    staying free to move.
     """
-    lens_bulge = af.Model(al.lp_linear.Sersic)
-    lens_bulge.centre.centre_0 = (
-        vis_result.model_centred.galaxies.lens.bulge.profile_list[0].centre.centre_0
-    )
-    lens_bulge.centre.centre_1 = (
-        vis_result.model_centred.galaxies.lens.bulge.profile_list[0].centre.centre_1
-    )
+    lens_model_centred = vis_result.model_centred.galaxies.lens.bulge.profile_list[0]
+    source_model_centred = vis_result.model_centred.galaxies.source.bulge.profile_list[
+        0
+    ]
 
-    source_bulge = af.Model(al.lp_linear.Sersic)
-    source_bulge.centre.centre_0 = (
-        vis_result.model_centred.galaxies.source.bulge.profile_list[0].centre.centre_0
-    )
-    source_bulge.centre.centre_1 = (
-        vis_result.model_centred.galaxies.source.bulge.profile_list[0].centre.centre_1
-    )
-
-    model = af.Collection(
-        galaxies=af.Collection(
-            lens=af.Model(
-                al.Galaxy,
-                redshift=0.5,
-                bulge=lens_bulge,
-                mass=vis_result.instance.galaxies.lens.mass,
-                shear=vis_result.instance.galaxies.lens.shear,
-            ),
-            source=af.Model(al.Galaxy, redshift=1.0, bulge=source_bulge),
-        )
+    model = sersic_model_from(
+        lens_centre=(
+            lens_model_centred.centre.centre_0,
+            lens_model_centred.centre.centre_1,
+        ),
+        source_centre=(
+            source_model_centred.centre.centre_0,
+            source_model_centred.centre.centre_1,
+        ),
+        mass=vis_result.instance.galaxies.lens.mass,
+        shear=vis_result.instance.galaxies.lens.shear,
+        variant=variant,
+        pixel_scales=d.dataset.pixel_scales[0],
+        point_centre=d.dataset_centre,
     )
 
     """
@@ -283,7 +463,8 @@ if __name__ == "__main__":
         number_of_cores,
         use_cpu,
         stage,
-    ) = util.parse_fit_args()
+        variant,
+    ) = util.parse_fit_args(with_variant=True)
 
     # Bypass vis_pix — the Sersic fit only needs vis_lp (which has the MGE
     # source.bulge, SIE mass and shear). vis_pix replaces source.bulge with a
@@ -302,6 +483,7 @@ if __name__ == "__main__":
         vis_result=vis_lp_result,
         sample_name=sample_name,
         iterations_per_quick_update=iterations_per_quick_update,
+        variant=variant,
     )
 
     # Multi-waveband follow-on intentionally disabled — this run extends vis_lp

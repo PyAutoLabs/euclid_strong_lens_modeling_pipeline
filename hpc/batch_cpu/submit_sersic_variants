@@ -1,0 +1,150 @@
+#!/bin/bash -l
+#
+# The four Sersic-stage variants, on CPU, one array task per lens.
+#
+# WHAT THIS DOES
+#   For each lens in the array, runs `scripts/sersic_lens_model.py` four times --
+#   `--variant=baseline`, `wide_n`, `central_noise`, `sersic_point` -- one after
+#   another in the same allocation. Each writes to
+#   `output/<sample>/<lens>/sersic_lens_model_<variant>/vis/`, so the four sit
+#   beside each other under one dataset and
+#   `catalogue/scripts/lens_sersic.py --unique_tag sersic_lens_model_<variant>`
+#   scrapes each of them.
+#
+#   The upstream `vis_lp` fit is expected to be on disk already, at
+#   `output/<sample>/<lens>/initial_lens_model/vis_lp/<hash>.zip`. Every variant
+#   short-circuits it ("Fit Already Completed") and goes straight to the Sersic
+#   fit. If it is not there, the first variant will run `vis_lp` from scratch,
+#   which is hours of work this script is not sized for -- run
+#   `submit_initial_lens_model_two_stage` (or its `vis_lp` half) first.
+#
+# WHY THE VARIANTS RUN SEQUENTIALLY, NOT AS A 4N-WIDE ARRAY
+#   All four restore the *same* `vis_lp` zip, and PyAutoFit's `restore()` unzips
+#   that archive and then deletes it. Four concurrent processes on one result
+#   directory therefore race: whichever unzips first deletes the zip out from
+#   under the others. Running them one after another inside the task removes the
+#   race, and costs nothing in wall-clock across the sample -- the whole 4N fits
+#   still run in parallel, N tasks wide.
+#
+# WHY `set -e` IS NOT USED ACROSS THE VARIANTS
+#   A variant that fails must not take the other three with it: they are separate
+#   measurements, and three of four is a usable answer. Each call is run with its
+#   exit status captured and reported in the log, and the task exits non-zero at
+#   the end if any variant failed, so a failure is still visible in `sacct`.
+#
+# RESOURCES
+#   Four cores, 14 GB, 18 hours, partition `ral`. Sized from the June DR1 Sersic
+#   runs: about 7 minutes per fit typically with a tail out to 3 hours on 4 cores,
+#   so four variants fit inside 18 h with a wide margin. JAX is pinned to the CPU
+#   backend, as it is for `vis_lp` in `submit_initial_lens_model_two_stage`; the
+#   Sersic search is a JAX likelihood and `--use_cpu` would flip it to Numba, so
+#   it is deliberately not passed.
+#
+# HOW TO SUBMIT
+#
+#     hpc/sync submit cpu submit_sersic_variants
+#
+#   `hpc/sync push-submit cpu submit_sersic_variants` pushes the code first. Do
+#   NOT push while fits are still running against the same tree.
+
+#SBATCH -J euclid_sersic_variants
+#SBATCH -n 1
+#SBATCH --cpus-per-task=4
+#SBATCH -o output/output.%A_%a.out
+#SBATCH -e error/error.%A_%a.err
+#SBATCH --partition=ral
+#SBATCH -t 18:00:00
+#SBATCH --mem=14gb
+#SBATCH --array=0-0
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=your.email@institution.ac.uk
+
+# -----------------------------------------------------------------------------
+# Environment
+#
+# Set PROJECT_PATH to this project on the HPC before submitting:
+#
+#   export PROJECT_PATH=/PATH/TO/LARGE_STORAGE/YOUR_USERNAME/euclid_strong_lens_modeling_pipeline
+#   sbatch hpc/batch_cpu/submit_sersic_variants
+#
+# This is the same location as $HPC_BASE/$PROJECT_NAME in hpc/sync.conf.
+# -----------------------------------------------------------------------------
+source $PROJECT_PATH/activate.sh
+
+# JAX on the CPU backend: it must never reach for a GPU this partition has not
+# allocated. The Sersic likelihood is JAX, so this is the backend it runs on.
+export JAX_PLATFORM_NAME=cpu
+export JAX_PLATFORMS=cpu
+
+# Pin every linear algebra library to the CPUs SLURM actually allocated. This
+# stage's parallelism is threads, not a process pool, so it gets all of them.
+THREADS=$SLURM_CPUS_PER_TASK
+export OPENBLAS_NUM_THREADS=$THREADS
+export MKL_NUM_THREADS=$THREADS
+export OMP_NUM_THREADS=$THREADS
+export VECLIB_MAXIMUM_THREADS=$THREADS
+export NUMEXPR_NUM_THREADS=$THREADS
+export NPROC=$THREADS
+
+# -----------------------------------------------------------------------------
+# Sample and dataset list
+#
+# The dataset list is read from the sample directory itself, so adding lenses to
+# `dataset/$sample/` is all it takes; widen `--array` above to match the count.
+# -----------------------------------------------------------------------------
+sample=q1_walsmley
+
+mapfile -t datasets < <(ls $PROJECT_PATH/dataset/$sample/ | sort)
+
+INDEX=$SLURM_ARRAY_TASK_ID
+
+# A task index past the end of the list means the --array directive and the
+# sample disagree. Say so and stop, rather than fitting an empty dataset name.
+if [ "$INDEX" -ge "${#datasets[@]}" ]; then
+    echo "ERROR: array task $INDEX but only ${#datasets[@]} datasets in $sample."
+    echo "       Narrow --array, or add the missing datasets to dataset/$sample/."
+    exit 1
+fi
+
+dataset="${datasets[$INDEX]}"
+
+variants=(baseline wide_n central_noise sersic_point)
+
+echo "=========================================="
+echo "Array task : $INDEX / ${#datasets[@]}"
+echo "Sample     : $sample"
+echo "Dataset    : $dataset"
+echo "Variants   : ${variants[*]}"
+echo "CPUs       : $THREADS"
+date
+
+failed=()
+
+for variant in "${variants[@]}"; do
+    echo ""
+    echo "---- Variant: $variant ----"
+    date
+
+    python3 $PROJECT_PATH/scripts/sersic_lens_model.py --sample=$sample --dataset=$dataset \
+        --variant=$variant --number_of_cores=$THREADS --iterations_per_quick_update=1000
+
+    status=$?
+
+    if [ $status -ne 0 ]; then
+        echo "FAILED variant $variant (exit $status) — continuing with the rest."
+        failed+=("$variant")
+    else
+        echo "Finished variant $variant: $dataset"
+    fi
+    date
+done
+
+echo ""
+if [ ${#failed[@]} -ne 0 ]; then
+    echo "Finished $dataset with ${#failed[@]} failed variant(s): ${failed[*]}"
+    date
+    exit 1
+fi
+
+echo "Finished all ${#variants[@]} variants: $dataset"
+date
