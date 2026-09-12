@@ -332,6 +332,9 @@ def test_a_real_mode_fit_writes_the_lensed_source_images_to_wcs_json(latent_summ
     for key in ("crval_ra_deg", "crval_dec_deg"):
         assert np.isfinite(wcs_dict[key])
 
+    assert wcs_dict["source_model"] == "light_profile"
+    assert "source_clumps" not in wcs_dict
+
     for key in ("source_centre_y_arcsec", "source_centre_x_arcsec"):
         assert np.isfinite(wcs_dict[key])
 
