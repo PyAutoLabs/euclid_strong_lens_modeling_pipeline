@@ -162,6 +162,13 @@ Every producer can also be run on its own; each takes `--sample`,
 - **Master CSVs are split per lens.** `catalogue_util.write_per_tile_csv` drops
   each lens's rows into its own folder so a single lens folder is
   self-contained and can be shipped on its own.
+- **Sky positions come from `files/wcs.json`**, which `util.AnalysisImaging`
+  writes beside every fit: the max-likelihood lens light centre as
+  `crval_ra_deg` / `crval_dec_deg` (the RA is `magnitudes.py`'s label column),
+  the source light centre in the source plane, and the lensed source's multiple
+  images in arcsec and RA / Dec (`util.wcs_dict_from`). Read it through the
+  aggregator (`agg.values("wcs")`), which decodes PyAutoFit's JSON envelope.
+  No producer publishes the image positions yet.
 
 ---
 

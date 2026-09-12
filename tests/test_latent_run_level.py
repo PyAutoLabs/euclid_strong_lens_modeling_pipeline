@@ -304,3 +304,48 @@ def test_no_latent_is_none_nan_or_exactly_zero(latent_summary):
     }
 
     assert not bad, f"latent values must be finite and non-zero; got {bad}"
+
+
+def test_a_real_mode_fit_writes_the_lensed_source_images_to_wcs_json(latent_summary):
+    """
+    ``util.AnalysisImaging.save_results`` writes ``files/wcs.json`` beside the
+    latent summary, and since the model here has a light-profile source it
+    must carry the lensed source's multiple images: the run-level proof that
+    the point solver runs at the end of a real fit and its record survives the
+    zip. The values are checked in ``test_wcs_dict.py``; this asserts they are
+    written, finite, one per image, and that the source is still quadruply
+    imaged at a max-likelihood Einstein radius drawn within 10 per cent of the
+    truth's.
+    """
+    summary_path, _ = latent_summary
+
+    import autolens as al
+
+    wcs_path = summary_path.parent.parent / "wcs.json"
+    assert wcs_path.is_file(), f"save_results must write {wcs_path}"
+
+    # `output_to_json` writes PyAutoFit's dictable envelope ({"type": "dict",
+    # "arguments": ...}, lists as {"type": "list", "values": ...}); read it back
+    # the way the aggregator hands it to `catalogue/scripts/magnitudes.py`.
+    wcs_dict = al.from_json(file_path=wcs_path)
+
+    for key in ("crval_ra_deg", "crval_dec_deg"):
+        assert np.isfinite(wcs_dict[key])
+
+    for key in ("source_centre_y_arcsec", "source_centre_x_arcsec"):
+        assert np.isfinite(wcs_dict[key])
+
+    image_keys = (
+        "lensed_source_image_y_arcsec",
+        "lensed_source_image_x_arcsec",
+        "lensed_source_image_ra_deg",
+        "lensed_source_image_dec_deg",
+    )
+    lengths = {key: len(wcs_dict[key]) for key in image_keys}
+
+    assert set(lengths.values()) == {4}, (
+        "the simulated source is quadruply imaged; wcs.json must carry one "
+        f"entry per image in each of the four lists, got {lengths}"
+    )
+    for key in image_keys:
+        assert np.all(np.isfinite(wcs_dict[key])), f"{key} must be finite"

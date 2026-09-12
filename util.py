@@ -4,7 +4,8 @@ import json
 import numpy as np
 from pathlib import Path
 from PIL import Image
-from typing import List, Optional
+from typing import List, Optional, Tuple
+import logging
 
 import matplotlib.pyplot as plt
 from autolens import conf as _conf
@@ -711,8 +712,8 @@ class AnalysisImaging(al.AnalysisImaging):
         For this analysis it outputs the following:
 
         - The maximum log likelihood tracer of the fit.
-        - The World Coordinate System (WCS) information of the dataset, which is used to convert between pixel and
-          world coordinates.
+        - ``wcs.json``: where the fitted lens sits on the sky and where its lensed source's multiple
+          images fall in the image plane — the record ``wcs_dict_from`` builds.
 
         Parameters
         ----------
@@ -724,39 +725,185 @@ class AnalysisImaging(al.AnalysisImaging):
         """
         super().save_results(paths=paths, result=result)
 
-        lens_light_centre = result.max_log_likelihood_tracer.galaxies[0].bulge.centre
-
-        lens_light_centre_wcs_pix = (
-            self.dataset.data.geometry.pixel_coordinates_wcs_2d_from(
-                scaled_coordinates_2d=lens_light_centre
-            )
+        wcs_dict = wcs_dict_from(
+            tracer=result.max_log_likelihood_tracer,
+            data=self.dataset.data,
+            pixel_wcs=self.kwargs["pixel_wcs"],
         )
-        lens_light_centre_wcs_pix_y = lens_light_centre_wcs_pix[0]
-        lens_light_centre_wcs_pix_x = lens_light_centre_wcs_pix[1]
-
-        pixel_wcs = self.kwargs["pixel_wcs"]
-
-        ra_c_deg, dec_c_deg = pixel_wcs.wcs_pix2world(
-            lens_light_centre_wcs_pix_x, lens_light_centre_wcs_pix_y, 1
-        )
-
-        data_centre_wcs_pix = self.dataset.data.geometry.pixel_coordinates_wcs_2d_from(
-            scaled_coordinates_2d=(0.0, 0.0)
-        )
-        data_centre_wcs_pix_y = data_centre_wcs_pix[0]
-        data_centre_wcs_pix_x = data_centre_wcs_pix[1]
-
-        wcs_dict = {
-            "crpix_x": data_centre_wcs_pix_x,
-            "crpix_y": data_centre_wcs_pix_y,
-            "crval_ra_deg": float(ra_c_deg),
-            "crval_dec_deg": float(dec_c_deg),
-        }
 
         output_to_json(
             obj=wcs_dict,
             file_path=paths._files_path / "wcs.json",
         )
+
+
+# ---------------------------------------------------------------------------
+# The WCS record (files/wcs.json)
+# ---------------------------------------------------------------------------
+
+# The `al.PointSolver` settings the lensed source's image-plane positions are
+# solved with. They are `scripts/simulator.py`'s (`positions_from_tracer`), so
+# the images a fit records for a tracer and the `positions.json` the simulator
+# solves for the same tracer agree to `pixel_scale_precision`.
+LENSED_SOURCE_PIXEL_SCALE_PRECISION = 0.005
+LENSED_SOURCE_MAGNIFICATION_THRESHOLD = 0.1
+
+
+def source_centre_from(tracer) -> Optional[Tuple[float, float]]:
+    """
+    The source-plane (y, x) centre of the source galaxy's light, in arcsec, or
+    ``None`` when the source carries no light profile with a centre.
+
+    The source galaxy is the tracer's last — the order every pipeline model and
+    ``truth.json`` use, and the one ``LatentLens`` indexes by. Its light is the
+    first light profile the galaxy holds: a single MGE ``Basis`` in ``vis_lp``,
+    whose ``centre`` is the centre its Gaussians share, or a ``Sersic`` in the
+    SED chain. A pixelized source (``vis_pix`` and the Delaunay stages) has no
+    light profile and so no centre — there is nothing to solve for.
+    """
+    source_galaxy = tracer.galaxies[-1]
+
+    for profile in source_galaxy.cls_list_from(cls=al.LightProfile):
+        centre = getattr(profile, "centre", None)
+        if centre is not None:
+            return float(centre[0]), float(centre[1])
+
+    return None
+
+
+def lensed_source_image_positions_from(
+    tracer, data, source_centre: Tuple[float, float]
+) -> al.Grid2DIrregular:
+    """
+    The image-plane (y, x) positions, in arcsec, that the tracer maps onto
+    ``source_centre``: the lens equation solved with ``al.PointSolver`` on a
+    uniform grid spanning the cut-out, exactly as ``scripts/simulator.py``
+    solves a mock's ``positions.json``.
+
+    The solver tiles the image plane with triangles, keeps those which trace
+    onto the source-plane point and subdivides them down to
+    ``LENSED_SOURCE_PIXEL_SCALE_PRECISION`` arcsec, then drops images whose
+    magnification is below ``LENSED_SOURCE_MAGNIFICATION_THRESHOLD``. A source
+    that is not multiply imaged returns fewer than two positions.
+    """
+    grid = al.Grid2D.uniform(
+        shape_native=data.shape_native,
+        pixel_scales=data.pixel_scales,
+        origin=data.origin,
+    )
+
+    solver = al.PointSolver.for_grid(
+        grid=grid,
+        pixel_scale_precision=LENSED_SOURCE_PIXEL_SCALE_PRECISION,
+        magnification_threshold=LENSED_SOURCE_MAGNIFICATION_THRESHOLD,
+    )
+
+    return solver.solve(tracer=tracer, source_plane_coordinate=source_centre)
+
+
+def wcs_dict_from(tracer, data, pixel_wcs) -> dict:
+    """
+    The record ``AnalysisImaging.save_results`` writes to ``files/wcs.json``:
+    where the fitted lens sits on the sky, and where its lensed source's
+    multiple images fall.
+
+    ``crval_ra_deg`` / ``crval_dec_deg`` are the maximum-likelihood lens light
+    centre converted to RA / Dec through ``pixel_wcs`` — despite the FITS-style
+    name, not the cut-out's reference pixel; ``catalogue/scripts/magnitudes.py``
+    reads the RA back as its ``crval_ra_deg`` label column — and ``crpix_x`` /
+    ``crpix_y`` the 1-based WCS pixel of the image-plane origin ``(0, 0)``.
+
+    ``source_centre_y_arcsec`` / ``source_centre_x_arcsec`` is the source
+    galaxy's light centre in the source plane (``source_centre_from``), and
+    ``lensed_source_image_y_arcsec`` / ``lensed_source_image_x_arcsec`` and
+    ``lensed_source_image_ra_deg`` / ``lensed_source_image_dec_deg`` are its
+    multiple images in the image plane, in arcsec and on the sky, one entry
+    per image (``lensed_source_image_positions_from``). All six are ``null``
+    for a source with no light centre — a pixelized source — and the four
+    image lists are ``null`` if the solver raises: a search that has finished
+    must not be lost to a post-fit record, so that failure is logged, never
+    raised. Every other key is always present, so a reader has one schema.
+
+    Parameters
+    ----------
+    tracer
+        The maximum log likelihood tracer of the fit; its first galaxy is the
+        lens, its last the source.
+    data
+        The fitted image, whose geometry converts image-plane arcsec to WCS
+        pixels and whose extent bounds the solver's grid.
+    pixel_wcs
+        The dataset's celestial ``astropy.wcs.WCS``, converting those pixels to
+        RA / Dec.
+
+    Notes
+    -----
+    Every sky value goes through the FITS pixel the light sits in, so it is
+    right whichever way the cut-out is oriented. The array is loaded from the
+    FITS without a row flip (``autonerves.fitsable``), so its native row 0 is
+    FITS row 1 — the bottom row of a standard north-up image — and PyAutoLens's
+    positive ``y`` (native row 0 upward on its own plots) is therefore the FITS
+    row-1 direction: south, for a north-up ``CD`` matrix. Do not read a
+    ``lensed_source_image_y_arcsec`` as "north of the lens"; read the
+    ``_dec_deg`` beside it.
+    """
+
+    def sky_from(scaled_coordinates_2d):
+        pixel_y, pixel_x = data.geometry.pixel_coordinates_wcs_2d_from(
+            scaled_coordinates_2d=scaled_coordinates_2d
+        )
+        ra_deg, dec_deg = pixel_wcs.wcs_pix2world(pixel_x, pixel_y, 1)
+        return float(ra_deg), float(dec_deg)
+
+    lens_light_centre = tracer.galaxies[0].bulge.centre
+    lens_ra_deg, lens_dec_deg = sky_from(lens_light_centre)
+
+    data_centre_wcs_pix_y, data_centre_wcs_pix_x = (
+        data.geometry.pixel_coordinates_wcs_2d_from(scaled_coordinates_2d=(0.0, 0.0))
+    )
+
+    wcs_dict = {
+        "crpix_x": data_centre_wcs_pix_x,
+        "crpix_y": data_centre_wcs_pix_y,
+        "crval_ra_deg": lens_ra_deg,
+        "crval_dec_deg": lens_dec_deg,
+        "source_centre_y_arcsec": None,
+        "source_centre_x_arcsec": None,
+        "lensed_source_image_y_arcsec": None,
+        "lensed_source_image_x_arcsec": None,
+        "lensed_source_image_ra_deg": None,
+        "lensed_source_image_dec_deg": None,
+    }
+
+    source_centre = source_centre_from(tracer=tracer)
+
+    if source_centre is None:
+        return wcs_dict
+
+    wcs_dict["source_centre_y_arcsec"] = source_centre[0]
+    wcs_dict["source_centre_x_arcsec"] = source_centre[1]
+
+    try:
+        positions = lensed_source_image_positions_from(
+            tracer=tracer, data=data, source_centre=source_centre
+        )
+    except Exception as e:  # noqa: BLE001 — a finished search outlives its record
+        logging.getLogger(__name__).warning(
+            "wcs.json: the point solver raised for the source centre "
+            f"{source_centre}; the lensed-source image positions are written "
+            f"as null ({type(e).__name__}: {e})"
+        )
+        return wcs_dict
+
+    positions = [(float(y), float(x)) for y, x in np.asarray(positions).reshape(-1, 2)]
+    sky = [sky_from(position) for position in positions]
+
+    wcs_dict["lensed_source_image_y_arcsec"] = [y for y, _ in positions]
+    wcs_dict["lensed_source_image_x_arcsec"] = [x for _, x in positions]
+    wcs_dict["lensed_source_image_ra_deg"] = [ra for ra, _ in sky]
+    wcs_dict["lensed_source_image_dec_deg"] = [dec for _, dec in sky]
+
+    return wcs_dict
 
 
 # ---------------------------------------------------------------------------
