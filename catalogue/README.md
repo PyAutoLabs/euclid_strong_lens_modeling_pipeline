@@ -165,10 +165,14 @@ Every producer can also be run on its own; each takes `--sample`,
 - **Sky positions come from `files/wcs.json`**, which `util.AnalysisImaging`
   writes beside every fit: the max-likelihood lens light centre as
   `crval_ra_deg` / `crval_dec_deg` (the RA is `magnitudes.py`'s label column),
-  the source light centre in the source plane, and the lensed source's multiple
-  images in arcsec and RA / Dec (`util.wcs_dict_from`). Read it through the
-  aggregator (`agg.values("wcs")`), which decodes PyAutoFit's JSON envelope.
-  No producer publishes the image positions yet.
+  the source position in the source plane (a light centre, or the brightest
+  clump's peak for a pixelized source), and its multiple images in arcsec and
+  RA / Dec solved with `al.PointSolver`; a pixelized source also carries
+  `source_clumps`, every clump's peak and images read off the fit's mapper
+  (`util.wcs_dict_from` documents the keys). Read it through the aggregator
+  (`agg.values("wcs")`), which decodes PyAutoFit's JSON envelope; that envelope
+  drops `None` values, so an unavailable value is an absent key and
+  `source_model` says why. No producer publishes the image positions yet.
 
 ---
 

@@ -20,6 +20,18 @@ records are independent known answers here:
   hand — the small-angle offsets from the header's ``CRVAL``, not a round trip
   through the code under test.
 
+The pixelized leg builds the ``vis_pix`` stage as a zero-free-parameter model
+on the same dataset (the ``Delaunay`` mesh mirrored from
+``test_compute_latent_variable.py``'s ``pixelized_source_model`` fixture, at the
+same quarter size) and fits it once, so the clumps read off the mapper have the
+truth source and the truth images to be checked against.
+
+The on-disk shape is asserted through ``al.output_to_json`` + ``al.from_json``,
+the pair ``save_results`` and the aggregator actually use — never ``json.dumps``:
+PyAutoFit's envelope drops ``None``-valued keys, which is why the record's
+contract is *absent when unavailable* and every test here asserts absence, not
+``None``.
+
 These tests are deliberately **JAX-free** (``use_jax=False`` everywhere, as
 ``AGENTS.md`` requires) and run no non-linear search; the one real-mode fit
 that proves ``save_results`` actually *writes* the record is
@@ -56,20 +68,54 @@ POSITION_ABS = 2.0 * util.LENSED_SOURCE_PIXEL_SCALE_PRECISION
 SKY_ABS_DEG = 1e-8
 
 # The keys `wcs_dict_from` always writes, in the order it writes them.
-WCS_KEYS = (
-    "crpix_x",
-    "crpix_y",
-    "crval_ra_deg",
-    "crval_dec_deg",
-    "source_centre_y_arcsec",
-    "source_centre_x_arcsec",
+LENS_KEYS = ("crpix_x", "crpix_y", "crval_ra_deg", "crval_dec_deg", "source_model")
+
+# The keys present once the source was located: the solved position and its
+# images (the `al.PointSolver` route).
+CENTRE_KEYS = ("source_centre_y_arcsec", "source_centre_x_arcsec")
+IMAGE_KEYS = (
     "lensed_source_image_y_arcsec",
     "lensed_source_image_x_arcsec",
     "lensed_source_image_ra_deg",
     "lensed_source_image_dec_deg",
 )
-SOURCE_KEYS = WCS_KEYS[4:]
-IMAGE_KEYS = WCS_KEYS[6:]
+SOURCE_KEYS = CENTRE_KEYS + IMAGE_KEYS
+
+# The keys of one `source_clumps` entry (the mapper route), in written order.
+CLUMP_KEYS = (
+    "peak_y_arcsec",
+    "peak_x_arcsec",
+    "peak_value",
+    "mesh_pixels",
+    "image_y_arcsec",
+    "image_x_arcsec",
+    "image_ra_deg",
+    "image_dec_deg",
+)
+
+# The mapper route reports the brightest *data pixel* of each image region of
+# the source's model image, so it is quantised to the 0.1" pixel grid and reads
+# the peak of an extended (PSF-convolved, mesh-smoothed) image rather than the
+# point-source position: measured 0.10-0.13" from `truth["positions"]`.
+MAPPER_IMAGE_ABS = 0.2
+
+# The solver route on the clump's peak mesh pixel, which sits a few
+# milli-arcsec from the truth source centre: measured within 0.035" of
+# `truth["positions"]`.
+SOLVER_FROM_PEAK_ABS = 0.1
+
+# The clump peak is the centre of a mesh pixel, so it is the truth source centre
+# to within the mesh spacing there: measured 0.004".
+PEAK_ABS = 0.05
+
+# The `vis_pix` mesh, mirrored from `scripts/initial_lens_model.py` at the size
+# `test_compute_latent_variable.py` uses for the fast suite.
+HILBERT_PIXELS = 150
+EDGE_PIXELS_TOTAL = 30
+HILBERT_WEIGHT_POWER = 3.5
+HILBERT_WEIGHT_FLOOR = 0.01
+ADAPT_IMAGE_FLOOR = 0.01
+SOURCE_PATH = "('galaxies', 'source')"
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +197,114 @@ def wcs_dict(truth_galaxies, euclid_dataset):
     )
 
 
+def _analysis_from(euclid_dataset, adapt_images=None):
+    """The pipeline analysis as the fits build it, NumPy, no RGB plot."""
+    return util.AnalysisImaging(
+        dataset=euclid_dataset.dataset,
+        adapt_images=adapt_images,
+        positions_likelihood_list=None,
+        use_jax=False,
+        dataset_main_path=euclid_dataset.dataset_main_path,
+        title_prefix="VIS",
+        plot_rgb=False,
+        skip_rgb_plot=True,
+        psf_lowest_resolution=euclid_dataset.psf_lowest_resolution,
+        psf_lowest_resolution_fwhm=euclid_dataset.psf_lowest_resolution_fwhm,
+        pixel_wcs=euclid_dataset.pixel_wcs,
+        magzero=euclid_dataset.magzero,
+    )
+
+
+@pytest.fixture(scope="session")
+def pixelized_fit(truth_galaxies, euclid_dataset):
+    """
+    The ``vis_pix`` stage fitted once at zero free parameters: the truth lens
+    as an instance, the source a ``Delaunay`` ``Pixelization`` whose mesh is a
+    ``Hilbert`` grid drawn from the truth source's lensed image plus the
+    circle-edge ring, exactly as ``test_compute_latent_variable.py``'s
+    ``pixelized_source_model`` fixture builds it (see there for why the mesh
+    travels in ``AdaptImages``).
+    """
+    import autofit as af
+    import autolens as al
+
+    lens, sersic_source = truth_galaxies[0], truth_galaxies[-1]
+    dataset = euclid_dataset.dataset
+
+    adapt_data = al.Tracer(
+        galaxies=[lens, sersic_source]
+    ).galaxy_image_2d_dict_from(grid=dataset.grids.lp)[sersic_source]
+    adapt_data = adapt_data + np.max(adapt_data) * ADAPT_IMAGE_FLOOR
+
+    image_plane_mesh_grid = al.image_mesh.Hilbert(
+        pixels=HILBERT_PIXELS,
+        weight_power=HILBERT_WEIGHT_POWER,
+        weight_floor=HILBERT_WEIGHT_FLOOR,
+    ).image_plane_mesh_grid_from(mask=dataset.mask, adapt_data=adapt_data)
+
+    image_plane_mesh_grid = al.image_mesh.append_with_circle_edge_points(
+        image_plane_mesh_grid=image_plane_mesh_grid,
+        centre=dataset.mask.mask_centre,
+        radius=euclid_dataset.mask_radius + dataset.mask.pixel_scale / 2.0,
+        n_points=EDGE_PIXELS_TOTAL,
+    )
+
+    adapt_images = al.AdaptImages(
+        galaxy_name_image_dict={SOURCE_PATH: adapt_data},
+        galaxy_name_image_plane_mesh_grid_dict={SOURCE_PATH: image_plane_mesh_grid},
+    )
+
+    model = af.Collection(
+        galaxies=af.Collection(
+            lens=af.Model.from_instance(lens),
+            source=af.Model(
+                al.Galaxy,
+                redshift=sersic_source.redshift,
+                pixelization=af.Model(
+                    al.Pixelization,
+                    mesh=al.mesh.Delaunay(
+                        pixels=image_plane_mesh_grid.shape[0],
+                        zeroed_pixels=EDGE_PIXELS_TOTAL,
+                    ),
+                    regularization=al.reg.AdaptSplit(),
+                ),
+            ),
+        )
+    )
+    assert model.prior_count == 0
+
+    analysis = _analysis_from(euclid_dataset, adapt_images=adapt_images)
+
+    return analysis.fit_from(instance=model.instance_from_vector([]))
+
+
+@pytest.fixture(scope="session")
+def pixelized_wcs_dict(pixelized_fit, euclid_dataset):
+    """The record for the pixelized fit — clumps read and solved once for the module."""
+    return util.wcs_dict_from(
+        tracer=pixelized_fit.tracer,
+        data=euclid_dataset.dataset.data,
+        pixel_wcs=euclid_dataset.pixel_wcs,
+        fit=pixelized_fit,
+    )
+
+
+def _on_disk(wcs_dict, tmp_path):
+    """
+    The record as it comes back off disk: written by ``al.output_to_json`` and
+    read by ``al.from_json``, the pair ``save_results`` and the aggregator use.
+    """
+    import autolens as al
+
+    path = tmp_path / "wcs.json"
+    al.output_to_json(obj=wcs_dict, file_path=path)
+    return al.from_json(file_path=path)
+
+
+def _sorted_positions(ys, xs):
+    return sorted(zip(ys, xs))
+
+
 def _header_crval(euclid_dataset):
     return (
         float(euclid_dataset.header["CRVAL1"]),
@@ -163,18 +317,38 @@ def _header_crval(euclid_dataset):
 # ---------------------------------------------------------------------------
 
 
-def test_the_record_has_one_schema(wcs_dict):
-    assert tuple(wcs_dict) == WCS_KEYS
+def test_a_light_profile_source_writes_the_solver_keys(wcs_dict):
+    assert tuple(wcs_dict) == LENS_KEYS + SOURCE_KEYS
+    assert wcs_dict["source_model"] == "light_profile"
+    assert "source_clumps" not in wcs_dict
 
 
-def test_the_record_is_json_serialisable(wcs_dict):
+def test_the_record_survives_the_json_envelope(wcs_dict, pixelized_wcs_dict, tmp_path):
     """
-    ``save_results`` hands the dict to ``output_to_json``; a NumPy scalar or
-    array left inside would raise there, after the search has finished.
+    ``save_results`` writes with ``output_to_json`` and the aggregator reads
+    with ``from_json``. PyAutoFit's envelope drops ``None`` values and would
+    raise on a NumPy scalar, so the record must contain neither: both records
+    must come back off disk equal to what was written, nested clump list
+    included.
     """
-    round_trip = json.loads(json.dumps(wcs_dict))
+    assert _on_disk(wcs_dict, tmp_path / "lp") == wcs_dict
+    assert _on_disk(pixelized_wcs_dict, tmp_path / "pix") == pixelized_wcs_dict
 
-    assert round_trip == wcs_dict
+
+def test_nothing_is_written_as_null(wcs_dict, pixelized_wcs_dict):
+    """A ``None`` would silently vanish on disk; the contract is an absent key."""
+
+    def has_none(value):
+        if value is None:
+            return True
+        if isinstance(value, dict):
+            return any(has_none(v) for v in value.values())
+        if isinstance(value, list):
+            return any(has_none(v) for v in value)
+        return False
+
+    assert not has_none(wcs_dict)
+    assert not has_none(pixelized_wcs_dict)
 
 
 # ---------------------------------------------------------------------------
@@ -282,11 +456,13 @@ def test_the_source_centre_reads_an_mge_basis(truth_galaxies):
     assert util.source_centre_from(tracer=tracer) == (0.08, 0.12)
 
 
-def test_a_source_without_a_light_centre_writes_null(truth_galaxies, euclid_dataset):
+def test_a_source_with_neither_light_nor_fit_writes_no_source_keys(
+    truth_galaxies, euclid_dataset
+):
     """
-    A pixelized source (``vis_pix``, the Delaunay stages) has no light profile,
-    so there is no centre to solve for: the six source keys are ``null`` and
-    the four lens keys are written exactly as before.
+    A bare source galaxy has no light centre, and without a ``fit`` a pixelized
+    one has no reconstruction to read: ``source_model`` says ``"none"`` and
+    no source key is written — never ``null``.
     """
     import autolens as al
 
@@ -298,19 +474,33 @@ def test_a_source_without_a_light_centre_writes_null(truth_galaxies, euclid_data
         pixel_wcs=euclid_dataset.pixel_wcs,
     )
 
-    assert tuple(wcs_dict) == WCS_KEYS
-    assert all(wcs_dict[key] is None for key in SOURCE_KEYS)
+    assert tuple(wcs_dict) == LENS_KEYS
+    assert wcs_dict["source_model"] == "none"
     assert wcs_dict["crval_ra_deg"] == pytest.approx(
         _header_crval(euclid_dataset)[0], abs=SKY_ABS_DEG
     )
 
 
-def test_a_solver_failure_is_logged_and_written_as_null(
+def test_a_pixelized_source_without_a_fit_writes_no_source_keys(
+    pixelized_fit, euclid_dataset
+):
+    wcs_dict = util.wcs_dict_from(
+        tracer=pixelized_fit.tracer,
+        data=euclid_dataset.dataset.data,
+        pixel_wcs=euclid_dataset.pixel_wcs,
+        fit=None,
+    )
+
+    assert tuple(wcs_dict) == LENS_KEYS
+    assert wcs_dict["source_model"] == "none"
+
+
+def test_a_solver_failure_is_logged_and_its_keys_left_absent(
     truth_galaxies, euclid_dataset, monkeypatch, caplog
 ):
     """
     ``save_results`` runs after the search has finished; a raise there would
-    lose the fit to its own record. The four image keys are ``null``, the
+    lose the fit to its own record. The four image keys are absent, the
     source centre and the lens keys are still written, and the failure is on
     the log.
     """
@@ -328,7 +518,123 @@ def test_a_solver_failure_is_logged_and_written_as_null(
             pixel_wcs=euclid_dataset.pixel_wcs,
         )
 
-    assert tuple(wcs_dict) == WCS_KEYS
-    assert all(wcs_dict[key] is None for key in IMAGE_KEYS)
+    assert tuple(wcs_dict) == LENS_KEYS + CENTRE_KEYS
     assert wcs_dict["source_centre_y_arcsec"] == pytest.approx(0.08)
     assert "no triangles" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# The pixelized source (vis_pix): clumps read off the mapper
+# ---------------------------------------------------------------------------
+
+
+def test_a_pixelized_source_writes_its_clumps_and_the_solver_keys(pixelized_wcs_dict):
+    assert tuple(pixelized_wcs_dict) == LENS_KEYS + ("source_clumps",) + SOURCE_KEYS
+    assert pixelized_wcs_dict["source_model"] == "pixelized"
+
+    clumps = pixelized_wcs_dict["source_clumps"]
+
+    assert len(clumps) == 1, (
+        "the simulated source is one smooth Sersic, which the default threshold "
+        f"isolates as one clump; got {len(clumps)}"
+    )
+    assert tuple(clumps[0]) == CLUMP_KEYS
+    assert clumps[0]["mesh_pixels"] >= util.SOURCE_CLUMP_MIN_PIXELS
+    assert clumps[0]["peak_value"] > 0.0
+
+
+def test_the_clump_peak_is_the_truth_source_centre(pixelized_wcs_dict, truth):
+    """
+    The clump's peak mesh pixel sits on the truth source centre to within the
+    mesh spacing there, and it is the position the solver keys are solved for.
+    """
+    source = list(truth["model"].values())[-1]
+    centre_y, centre_x = source["profiles"]["bulge"]["parameters"]["centre"]
+
+    clump = pixelized_wcs_dict["source_clumps"][0]
+
+    assert clump["peak_y_arcsec"] == pytest.approx(centre_y, abs=PEAK_ABS)
+    assert clump["peak_x_arcsec"] == pytest.approx(centre_x, abs=PEAK_ABS)
+    assert pixelized_wcs_dict["source_centre_y_arcsec"] == clump["peak_y_arcsec"]
+    assert pixelized_wcs_dict["source_centre_x_arcsec"] == clump["peak_x_arcsec"]
+
+
+def test_the_clump_images_off_the_mapper_are_the_truth_images(pixelized_wcs_dict, truth):
+    """
+    Each of the four image regions the mapper attributes to the clump has its
+    brightest model pixel within two pixels of a distinct truth image.
+    """
+    clump = pixelized_wcs_dict["source_clumps"][0]
+    recorded = _sorted_positions(clump["image_y_arcsec"], clump["image_x_arcsec"])
+    expected = sorted((y, x) for y, x in truth["positions"])
+
+    assert len(recorded) == 4, (
+        "the simulated source is quadruply imaged and the mapper must find "
+        f"four image regions; got {len(recorded)}"
+    )
+    assert np.asarray(recorded) == pytest.approx(np.asarray(expected), abs=MAPPER_IMAGE_ABS)
+    assert len(clump["image_ra_deg"]) == len(clump["image_dec_deg"]) == 4
+
+
+def test_the_solver_keys_for_a_pixelized_source_are_the_truth_images(
+    pixelized_wcs_dict, truth
+):
+    """
+    The solver route on the clump peak lands on the truth images to a few
+    hundredths of an arcsecond — closer than the mapper route, which is
+    quantised to data pixels — so the two routes are checked separately, at
+    their own tolerances.
+    """
+    recorded = _sorted_positions(
+        pixelized_wcs_dict["lensed_source_image_y_arcsec"],
+        pixelized_wcs_dict["lensed_source_image_x_arcsec"],
+    )
+    expected = sorted((y, x) for y, x in truth["positions"])
+
+    assert len(recorded) == 4
+    assert np.asarray(recorded) == pytest.approx(
+        np.asarray(expected), abs=SOLVER_FROM_PEAK_ABS
+    )
+
+
+def test_the_clump_sky_positions_follow_the_header(pixelized_wcs_dict, euclid_dataset):
+    """The mapper-route images get the same by-hand sky check as the solver route."""
+    crval_ra_deg, crval_dec_deg = _header_crval(euclid_dataset)
+    clump = pixelized_wcs_dict["source_clumps"][0]
+
+    for y, x, ra, dec in zip(
+        clump["image_y_arcsec"],
+        clump["image_x_arcsec"],
+        clump["image_ra_deg"],
+        clump["image_dec_deg"],
+    ):
+        assert dec == pytest.approx(crval_dec_deg - y / 3600.0, abs=SKY_ABS_DEG)
+        assert (ra - crval_ra_deg) * np.cos(np.radians(dec)) == pytest.approx(
+            -x / 3600.0, abs=SKY_ABS_DEG
+        )
+
+
+def test_a_clump_finder_failure_is_logged_and_leaves_only_the_lens_keys(
+    pixelized_fit, euclid_dataset, monkeypatch, caplog
+):
+    """
+    With no clumps there is no peak to solve for either, so the record is the
+    lens keys plus ``source_model == "pixelized"``, and the failure is logged.
+    """
+
+    def raise_(**kwargs):
+        raise RuntimeError("no mapper")
+
+    monkeypatch.setattr(util, "pixelized_source_clumps_from", raise_)
+
+    with caplog.at_level(logging.WARNING, logger="util"):
+        wcs_dict = util.wcs_dict_from(
+            tracer=pixelized_fit.tracer,
+            data=euclid_dataset.dataset.data,
+            pixel_wcs=euclid_dataset.pixel_wcs,
+            fit=pixelized_fit,
+        )
+
+    assert tuple(wcs_dict) == LENS_KEYS
+    assert wcs_dict["source_model"] == "pixelized"
+    assert "no mapper" in caplog.text

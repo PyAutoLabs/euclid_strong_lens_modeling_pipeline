@@ -75,12 +75,16 @@ This script can be run as a black-box, with key output being generated, includin
 - Deblended images of the lens and source galaxies.
 - Lens light and source models using a multi Gaussian Expansion.
 - A `files/wcs.json` record beside every fit: the lens light centre on the sky
-  (RA / Dec), the source light centre in the source plane, and the lensed
-  source's multiple images — the lens equation solved for that centre with
-  `al.PointSolver` — in the image plane (arcsec) and on the sky (RA / Dec).
-  Written by `util.AnalysisImaging.save_results` (`util.wcs_dict_from` documents
-  every key); a pixelized source (`vis_pix`) has no light centre, so its source
-  keys are `null`.
+  (RA / Dec), the source position in the source plane, and the lensed source's
+  multiple images — the lens equation solved for that position with
+  `al.PointSolver` — in the image plane (arcsec) and on the sky (RA / Dec). For
+  a light-profile source (`vis_lp`, the SED chain) the position is the light
+  centre; for a pixelized source (`vis_pix`, the Delaunay stages) it is the peak
+  of the brightest clump of the reconstruction, and `source_clumps` lists every
+  clump with its multiple images read off the fit's mapper (the brightest model
+  pixel of each image region). Written by `util.AnalysisImaging.save_results`;
+  `util.wcs_dict_from` documents every key. An unavailable value is an absent
+  key, never `null`, and `source_model` says which case applied.
 
 Here is an example of the output, which shows the lens and source galaxies debelended and a source reconstruction
 in the source-plane:
