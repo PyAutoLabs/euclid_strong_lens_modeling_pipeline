@@ -256,6 +256,9 @@ rather than PyAutoLens's.
 
 - ``json_number`` is the guard on everything written into ``truth.json``. A truth file is only
   useful if it can be read back by any JSON parser, and a non-finite float cannot be.
+- ``simulated_image_from`` is the only route from a model image to a simulated band. It runs the
+  PSF convolution, clips the round-off negatives it produces, and hands the result back to
+  ``SimulatorImaging`` — which otherwise dies drawing Poisson noise it was told not to add.
 - ``gaussian_psf_from`` is the idealised PSF of ``--from-params``: a circular Gaussian of the
   right FWHM, unit-normalised, returned as a ``Convolver`` so the same object can both blur the
   simulated band and, later, degrade the lens light to the worst band's seeing for the aperture
@@ -277,6 +280,98 @@ def json_number(value):
     """
     value = float(value)
     return value if np.isfinite(value) else None
+
+
+def band_simulator_from(psf, noise_sigma):
+    """
+    The ``SimulatorImaging`` every band is simulated with.
+
+    Poisson noise is switched off in both the data and the noise-map, and a constant noise-map of
+    ``noise_sigma`` requested instead (``noise_if_add_noise_false``); :func:`simulate` then adds
+    Gaussian noise at exactly that sigma. Euclid MER cut-outs are background-subtracted mosaics
+    whose RMS maps are near-constant, so constant Gaussian noise is both the closer match and the
+    cleanly-known truth — hence ``background_sky_level=0.0`` as well.
+
+    It is a function rather than four lines inside the band loop so that
+    :func:`simulated_image_from`'s guard can be tested against the *real* simulator this pipeline
+    builds, and so that ``tests/test_repo_invariants.py``'s "only the simulator script simulates"
+    invariant keeps holding over a single construction site.
+    """
+    import autolens as al
+
+    return al.SimulatorImaging(
+        exposure_time=EXPOSURE_TIME,
+        psf=psf,
+        background_sky_level=0.0,
+        add_poisson_noise_to_data=False,
+        include_poisson_noise_in_noise_map=False,
+        noise_if_add_noise_false=noise_sigma,
+    )
+
+
+ROUND_OFF_FRACTION = 1e-10
+
+
+def simulated_image_from(simulator, image, pixel_scale):
+    """
+    PSF-convolve ``image`` through ``simulator``, clipping the convolution's round-off away
+    before the library sees it.
+
+    Every model image this script builds is non-negative — a Sersic is — but PSF-convolving one
+    returns pixels of order ``-4e-18`` where the true value is zero: floating-point round-off,
+    about ``1e-17`` of the image peak. PyAutoArray's ``SimulatorImaging`` draws its Poisson noise
+    **before** it checks ``add_poisson_noise_to_data``
+    (``autoarray/dataset/imaging/simulator.py:246``), so ``np.random.poisson`` is handed a
+    negative lambda and raises ``ValueError: lam < 0`` — even though this script switches Poisson
+    noise off entirely. Four of the 100 ``dr1_sep1_sersics`` tiles died that way on 2026-09-13.
+
+    Clipping the *input* would not help: the negatives are made by the convolution, not carried
+    into it. So the convolution is run here (mirroring the library's own branch on
+    ``use_real_space_convolution``, so it is the same convolution it would have done), the
+    round-off is clipped, and the already-convolved image is handed back with
+    ``image_is_convolved=True``. Everything the simulator does after the convolution — the
+    background sky, the noise-map, the dataset — is unchanged.
+
+    The clip is not allowed to hide a real result: a minimum below
+    ``-ROUND_OFF_FRACTION * maximum`` is seven orders of magnitude beyond round-off, so it is a
+    genuinely negative image and raises rather than being quietly zeroed.
+
+    The library-side fix is filed as
+    ``PyAutoMind/draft/bug/autoarray/simulator_imaging_poisson_drawn_before_flag_check.md``;
+    this guard is what lets the pipeline run before it lands.
+    """
+    import autolens as al
+
+    array = al.Array2D.no_mask(values=image, pixel_scales=pixel_scale)
+
+    if simulator.use_real_space_convolution:
+        convolved = simulator.psf.convolved_image_via_real_space_from(
+            image=array, blurring_image=None
+        )
+    else:
+        convolved = simulator.psf.convolved_image_from(image=array, blurring_image=None)
+
+    values = np.asarray(convolved.native, dtype=np.float64)
+
+    minimum = float(values.min())
+    maximum = float(values.max())
+
+    if minimum < -ROUND_OFF_FRACTION * maximum:
+        raise SystemExit(
+            f"ERROR: the PSF-convolved image has minimum {minimum:.3e} against maximum "
+            f"{maximum:.3e}. That is far beyond the ~1e-17 convolution round-off this clip "
+            f"exists for, so it is a genuinely negative image and is not being clipped away."
+        )
+
+    return np.asarray(
+        simulator.via_image_from(
+            image=al.Array2D.no_mask(
+                values=np.clip(values, 0.0, None), pixel_scales=pixel_scale
+            ),
+            image_is_convolved=True,
+        ).data.native,
+        dtype=np.float64,
+    )
 
 
 def gaussian_psf_from(fwhm_arcsec, shape_native, pixel_scale):
@@ -1191,28 +1286,17 @@ def simulate(args):
         Euclid MER cut-outs are background-subtracted mosaics whose RMS maps are near-constant,
         so constant Gaussian noise is both the closer match and the cleanly-known truth.
         """
-        simulator = al.SimulatorImaging(
-            exposure_time=EXPOSURE_TIME,
-            psf=psf,
-            background_sky_level=0.0,
-            add_poisson_noise_to_data=False,
-            include_poisson_noise_in_noise_map=False,
-            noise_if_add_noise_false=noise_sigma,
-        )
+        simulator = band_simulator_from(psf=psf, noise_sigma=noise_sigma)
 
-        image_convolved = np.asarray(
-            simulator.via_image_from(
-                image=al.Array2D.no_mask(
-                    values=lens_image + lensed_source_image, pixel_scales=pixel_scale
-                )
-            ).data.native,
-            dtype=np.float64,
+        image_convolved = simulated_image_from(
+            simulator=simulator,
+            image=lens_image + lensed_source_image,
+            pixel_scale=pixel_scale,
         )
-        lens_image_convolved = np.asarray(
-            simulator.via_image_from(
-                image=al.Array2D.no_mask(values=lens_image, pixel_scales=pixel_scale)
-            ).data.native,
-            dtype=np.float64,
+        lens_image_convolved = simulated_image_from(
+            simulator=simulator,
+            image=lens_image,
+            pixel_scale=pixel_scale,
         )
 
         data = image_convolved + rng.normal(
