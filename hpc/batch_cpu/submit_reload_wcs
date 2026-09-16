@@ -1,0 +1,117 @@
+#!/bin/bash -l
+#
+# wcs.json reload pass: reload both completed stages, write nothing new.
+#
+# WHAT THIS DOES
+#   For each already-fitted lens, re-runs `scripts/initial_lens_model.py` with
+#   `--stage=all` in a single process. Both searches are already complete on
+#   disk, so neither samples: PyAutoFit logs "Fit Already Completed: skipping
+#   non-linear search" and, because `config/general.yaml` sets
+#   `output.force_pickle_overwrite: true`, re-fires `AnalysisImaging.save_results`
+#   for each stage. That is the only reason this job exists: `save_results`
+#   writes `files/wcs.json`, and the results on disk predate the source-position
+#   and pixelized-clump fields the pipeline now records there.
+#
+# WHY IT IS SAFE TO RUN BOTH STAGES IN ONE PROCESS HERE
+#   The two-stage split in `submit_initial_lens_model_two_stage` exists to keep
+#   a forked Nautilus pool away from a JAX-initialised interpreter. Nothing is
+#   sampled in this pass and `--number_of_cores=1` forks no pool, so the
+#   process boundary buys nothing and one interpreter is cheaper.
+#
+# COST
+#   Measured locally at 13-19 s and under 1.2 GB per lens, hence the 30-minute
+#   walltime and 8 GB: both are slack, not estimates of the work.
+#
+# IDENTIFIERS
+#   The reload must land on the *same* output paths, so this script passes no
+#   `--seed` and changes no model or search setting. If a hash changes, the run
+#   has written a new result rather than refreshed the old one.
+#
+# ARRAY
+#   Index 1 (Tile102007299...) is excluded: its `vis_lp` never completed, so a
+#   reload there would start a fresh multi-hour fit instead of loading one.
+
+#SBATCH -J euclid_dr1_reload_wcs
+#SBATCH -n 1
+#SBATCH --cpus-per-task=1
+#SBATCH -o output/output.%A_%a.out
+#SBATCH -e error/error.%A_%a.err
+#SBATCH --partition=ral
+#SBATCH -t 00:30:00
+#SBATCH --mem=8gb
+#SBATCH --array=0,2-9
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=james.w.nightingale@durham.ac.uk
+
+# -----------------------------------------------------------------------------
+# Environment
+#
+# Set here rather than in the submitting shell, because this project is driven
+# through `hpc/sync submit`, which runs `ssh <host> "cd hpc/batch_cpu && sbatch
+# <script>"` and so carries no exports from the local machine, and the RAL
+# login profile sets neither. See submit_initial_lens_model_two_stage.
+# -----------------------------------------------------------------------------
+export PROJECT_PATH=/mnt/ral/jnightin/euclid_dr1
+export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
+
+source $PROJECT_PATH/activate.sh
+
+set -e
+
+# -----------------------------------------------------------------------------
+# Sample
+# -----------------------------------------------------------------------------
+sample=dr1_sep1
+
+# -----------------------------------------------------------------------------
+# Dataset list
+#
+# Identical to submit_initial_lens_model_two_stage, and in the same order, so
+# the array indices mean the same lens in both scripts. Index 1 is listed but
+# never launched (see the --array directive above).
+# -----------------------------------------------------------------------------
+datasets=(
+Tile102005065RA0135279431487DECNEG0701599765928
+Tile102007299RA0702283866574DECNEG0660415308762
+Tile102007899RA0631697483678DECNEG0650586413593
+Tile102007903RA0668824944366DECNEG0648906250124
+Tile102008165RA0109661927007DECNEG0642904268129
+Tile102008219RA0727857418392DECNEG0644388277074
+Tile102008468RA3567393529734DECNEG0647169093056
+Tile102008475RA0039777627054DECNEG0637715426503
+Tile102008532RA0683486015030DECNEG0642073552911
+Tile102008848RA0601371893270DECNEG0634606579714
+)
+
+INDEX=$SLURM_ARRAY_TASK_ID
+dataset="${datasets[$INDEX]}"
+
+echo "=========================================="
+echo "Array task : $INDEX / ${#datasets[@]}"
+echo "Sample     : $sample"
+echo "Dataset    : $dataset"
+echo "Purpose    : reload both stages, rewrite files/wcs.json"
+date
+
+# -----------------------------------------------------------------------------
+# Reload
+#
+# Single-threaded throughout: nothing here is a search, so threads and pool
+# workers have nothing to do. JAX is pinned to the CPU backend and `--use_cpu`
+# selects the Numba route, matching the environment the results were fitted in.
+# -----------------------------------------------------------------------------
+echo ""
+echo "---- Reload: vis_lp and vis_pix in one process ----"
+date
+
+env JAX_PLATFORM_NAME=cpu \
+    JAX_PLATFORMS=cpu \
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \
+        --stage=all --use_cpu --number_of_cores=1
+
+echo ""
+echo "Finished reload: $dataset"
+date
