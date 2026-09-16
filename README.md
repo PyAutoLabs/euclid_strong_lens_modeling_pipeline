@@ -36,7 +36,7 @@ Next, install **PyAutoLens** via pip:
 
 ```bash
 pip install --upgrade pip
-pip install autolens
+pip install autolens[coolest]
 ```
 
 Clone the pipeline repository:
@@ -85,6 +85,9 @@ This script can be run as a black-box, with key output being generated, includin
   pixel of each image region). Written by `util.AnalysisImaging.save_results`;
   `util.wcs_dict_from` documents every key. An unavailable value is an absent
   key, never `null`, and `source_model` says which case applied.
+- A `files/coolest.json` template beside it: the maximum log likelihood model in
+  the COOLEST interchange standard, for handing a fit to another lens modeling
+  code. See [COOLEST output](#coolest-output).
 
 Here is an example of the output, which shows the lens and source galaxies debelended and a source reconstruction
 in the source-plane:
@@ -265,3 +268,61 @@ That one key covers imaging data, fits, residual maps and inversion
 reconstructions. A single figure can be overridden without touching config by
 passing `colormap=` to the plot function. See
 [`config/visualize/README.md`](config/visualize/README.md) for the details.
+
+## COOLEST output
+
+Every search writes a `files/coolest.json` beside its `wcs.json`: a
+[COOLEST](https://github.com/aymgal/COOLEST) (COde-independent Organized LEns
+STandard) `MAP` template of the maximum log likelihood model, so a fitted lens
+can be handed to lenstronomy, herculens or any other COOLEST-speaking code
+without re-deriving the model by hand. Its observation block carries the fitted
+cut-out's own pixel grid.
+
+COOLEST describes analytic profiles, and these models are not wholly analytic.
+The template therefore carries:
+
+- the **full mass model** — the `Isothermal` (as COOLEST's `SIE`) and the
+  `ExternalShear` (as a COOLEST `MassField`);
+- the **Sersic light** where one was fitted, i.e. the `sersic_lens_model` stages;
+- everything COOLEST cannot represent — the MGE `Basis` of Gaussians, the
+  Delaunay `Pixelization` source — named under `meta.skipped_profiles` rather
+  than silently dropped, so a reader can never mistake the template for the
+  whole model.
+
+The inspection bundle collects both templates per lens, as `coolest.json` (from
+`initial_lens_model/vis_pix`) and `coolest_sersic.json` (from
+`sersic_lens_model/vis`) — see [`catalogue/README.md`](catalogue/README.md).
+
+The `coolest` package is an optional dependency of **PyAutoLens**, installed
+with the `[coolest]` extra used in [Getting Started](#getting-started):
+
+```bash
+pip install autolens[coolest]
+```
+
+Without it the fit still runs: the missing package is a logged
+`coolest.json: ...` warning and no template, never a failure. The same is true
+of any error in the export itself.
+
+[`scripts/guides/coolest_interop.py`](https://github.com/PyAutoLabs/autolens_workspace/blob/main/scripts/guides/coolest_interop.py)
+in the `autolens_workspace` is the guide to reading these templates back and
+writing your own.
+
+If you use a COOLEST template in your research, please cite the standard
+(Galan et al. 2023, JOSS 8(88) 5567,
+[doi:10.21105/joss.05567](https://doi.org/10.21105/joss.05567)):
+
+```bibtex
+@article{Galan2023,
+    author = {Galan, Aymeric and de Vyvere, Lyne Van and Gomer, Matthew R. and Vernardos, Georgios and Sluse, Dominique},
+    doi = {10.21105/joss.05567},
+    journal = {Journal of Open Source Software},
+    month = aug,
+    number = {88},
+    pages = {5567},
+    title = {{COOLEST: COde-independent Organized LEns STandard}},
+    url = {https://joss.theoj.org/papers/10.21105/joss.05567},
+    volume = {8},
+    year = {2023}
+}
+```

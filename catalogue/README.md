@@ -12,7 +12,7 @@ and they differ in purpose rather than in mechanism. `workflow/` holds *general
 examples* of the aggregator export API — `csv_make.py`, `png_make.py` and
 `fits_make.py` teach it step by step, and `workflow/example/` shows it applied to
 real Euclid runs. `catalogue/` holds the *production* producers: the scripts the
-bundle builder actually runs to write the 13 bundle files and the master CSVs.
+bundle builder actually runs to write the 15 bundle files and the master CSVs.
 
 The clearest way in is to read the two side by side.
 `workflow/example/csv/lens_mass.py` builds the same table as
@@ -29,7 +29,7 @@ Producers live in `catalogue/scripts/`. The two orchestration scripts live in
 
 ```
 scripts/build_inspection_bundle.sh   # runs the seven stages in order
-scripts/tools/build_inspect.py             # stage 1 — collects the 6 bundle PNGs
+scripts/tools/build_inspect.py             # stage 1 — collects 6 PNGs + 2 COOLEST templates
 catalogue/scripts/
   catalogue_util.py                  # shared path resolution + per-lens CSV split
   deblending.py                      # stage 2 — pre_psf.fits, model.fits
@@ -42,7 +42,7 @@ catalogue/scripts/
 
 ---
 
-## The 13 bundle files and what produces each
+## The 15 bundle files and what produces each
 
 Every file of a complete per-lens bundle, the script that produces it, and
 whether that script *generates* the file from the fit or *collects* an image the
@@ -63,11 +63,17 @@ fit already wrote.
 | `rgb.png` | `scripts/tools/build_inspect.py` | collects `image/rgb.png`, else copies `dataset/<sample>/<lens>/rgb_0.jpg` | `initial_lens_model/vis_lp` |
 | `segmentation.png` | `scripts/tools/build_inspect.py` | copies `dataset/<sample>/<lens>/segmentation.png` | `preprocess/segmentation.py` |
 | `fit_sersic.png` | `scripts/tools/build_inspect.py` | collects `image/fit.png` | `sersic_lens_model/vis` |
+| `coolest.json` | `scripts/tools/build_inspect.py` | collects `files/coolest.json` (best-effort) | `initial_lens_model/vis_pix` |
+| `coolest_sersic.json` | `scripts/tools/build_inspect.py` | collects `files/coolest.json` (best-effort) | `sersic_lens_model/vis` |
 
 `build_inspect.py` never re-renders: it streams the image out of the result zip
 PyAutoFit writes when a search finishes, falling back to the unzipped result
 directory's `image/` folder when a run was not zipped (an interrupted run, or a
-`PYAUTO_TEST_MODE` run).
+`PYAUTO_TEST_MODE` run). The two COOLEST templates are streamed the same way out
+of the result's `files/` folder — `util.AnalysisImaging.save_results` writes them
+(see README's "COOLEST output"), and both are best-effort: a lens fitted before
+the pipeline started writing them, or one fitted without the optional `coolest`
+package installed, simply has no template to collect.
 
 ### Building a bundle off a test-mode run
 
@@ -100,7 +106,7 @@ bash scripts/build_inspection_bundle.sh dr1_prelim_grade_ab run250
 
 | Stage | Script | Reads | Writes |
 |---|---|---|---|
-| 1/7 | `scripts/tools/build_inspect.py` | `output/<sample>/` | the 6 collected PNGs |
+| 1/7 | `scripts/tools/build_inspect.py` | `output/<sample>/` | the 6 collected PNGs + 2 COOLEST templates |
 | 2/7 | `catalogue/scripts/deblending.py` | `output/<sample>/` | `pre_psf.fits`, `model.fits` |
 | 3/7 | `catalogue/scripts/lens_mass.py` | `output/<sample>/` | `lens_mass.csv` |
 | 4/7 | `catalogue/scripts/lens_sersic.py` | `output/<sample>/` | `lens_sersic.csv` |
@@ -119,7 +125,7 @@ deliberately while SED jobs are still running.
 
 ### Fits the bundle expects
 
-Producing all 13 files needs three pipeline runs per lens:
+Producing all 15 files needs three pipeline runs per lens:
 
 ```bash
 python scripts/initial_lens_model.py --dataset=<lens> --sample=<sample>
@@ -187,7 +193,7 @@ Every producer can also be run on its own; each takes `--sample`,
 The DR1 science tree (`Science/euclid/catalogue/scripts/`) holds 21 further
 files that are deliberately **not** in this repository. They are either
 downstream consumers of a finished catalogue, superseded precursors, or
-paper-figure code — none of them produce any of the 13 bundle files.
+paper-figure code — none of them produce any of the 15 bundle files.
 
 | Not ported | Count | Why |
 |---|---|---|

@@ -509,6 +509,72 @@ def test_a_pixelized_real_mode_fit_writes_its_clumps_to_wcs_json(run_level):
     _assert_images_consistent(wcs_dict, WCS_IMAGE_KEYS)
 
 
+def _coolest_template_from(files_path):
+    """
+    ``files/coolest.json`` as plain JSON. Unlike ``wcs.json`` this is not a
+    PyAutoFit dictable envelope — the COOLEST serializer writes the standard's
+    own schema, which is what a lenstronomy or herculens reader parses.
+    """
+    coolest_path = files_path / "coolest.json"
+    assert coolest_path.is_file(), f"save_results must write {coolest_path}"
+
+    with open(coolest_path) as f:
+        return json.load(f)
+
+
+def _mass_profile_types(template):
+    """
+    Every mass profile of the template, across entities: COOLEST puts external
+    shear in its own ``MassField`` rather than on the galaxy.
+    """
+    return sorted(
+        profile["type"]
+        for entity in template["lensing_entities"]
+        for profile in entity.get("mass_model", [])
+    )
+
+
+@pytest.mark.parametrize("leg", ("light_profile", "pixelized"))
+def test_a_real_mode_fit_writes_its_coolest_template(run_level, leg):
+    """
+    ``util.AnalysisImaging.save_results`` writes ``files/coolest.json`` beside
+    ``files/wcs.json``, for a light-profile *and* a pixelized source: the
+    run-level proof that the COOLEST export runs at the end of a real fit and
+    its template survives the zip, which no test-mode smoke can show
+    (``skip_fit_output`` gates the whole of ``save_results``).
+
+    The values are checked in ``test_coolest_output.py``; this asserts the
+    template is written, is a MAP template of this pipeline, carries the full
+    ``Isothermal`` + ``ExternalShear`` mass model both legs fit, and is stamped
+    with the fitted cut-out's own pixel grid rather than a grid of zeros.
+    """
+    template = _coolest_template_from(run_level[leg])
+
+    assert template["mode"] == "MAP"
+    assert template["meta"]["pipeline"] == util.COOLEST_PIPELINE_NAME
+    assert template["meta"]["dataset"] == SIMULATED_DATASET
+
+    assert _mass_profile_types(template) == ["ExternalShear", "SIE"]
+
+    pixels = template["observation"]["pixels"]
+    assert pixels["num_pix_x"] > 0 and pixels["num_pix_y"] > 0
+    assert pixels["field_of_view_x"][1] > pixels["field_of_view_x"][0]
+
+
+def test_a_pixelized_real_mode_fit_names_its_pixelization_as_skipped(run_level):
+    """
+    COOLEST has no profile for a ``Pixelization``, so ``on_unsupported="skip"``
+    exports the mass model and names the source under ``meta.skipped_profiles``
+    — the one thing that stops a reader mistaking the template for the whole
+    model.
+    """
+    template = _coolest_template_from(run_level["pixelized"])
+
+    skipped = [entry["profile"] for entry in template["meta"]["skipped_profiles"]]
+
+    assert any(profile.startswith("Pixelization(") for profile in skipped), skipped
+
+
 def test_the_aggregator_reads_both_records_back(run_level):
     """
     The consumer path: ``catalogue/scripts/magnitudes.py`` reads

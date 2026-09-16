@@ -715,6 +715,8 @@ class AnalysisImaging(al.AnalysisImaging):
         - The maximum log likelihood tracer of the fit.
         - ``wcs.json``: where the fitted lens sits on the sky and where its lensed source's multiple
           images fall in the image plane — the record ``wcs_dict_from`` builds.
+        - ``coolest.json``: the maximum log likelihood model as a COOLEST template — the file
+          ``coolest_json_from`` writes.
 
         Parameters
         ----------
@@ -745,6 +747,18 @@ class AnalysisImaging(al.AnalysisImaging):
         output_to_json(
             obj=wcs_dict,
             file_path=paths._files_path / "wcs.json",
+        )
+
+        dataset_main_path = self.kwargs.get("dataset_main_path")
+
+        coolest_json_from(
+            tracer=result.max_log_likelihood_tracer,
+            dataset=self.dataset,
+            file_path=paths._files_path / "coolest",
+            search_name=paths.name,
+            dataset_name=(
+                Path(dataset_main_path).name if dataset_main_path is not None else None
+            ),
         )
 
 
@@ -1190,6 +1204,103 @@ def wcs_dict_from(tracer, data, pixel_wcs, fit=None) -> dict:
     wcs_dict["lensed_source_image_dec_deg"] = [dec for _, dec in sky]
 
     return wcs_dict
+
+
+# ---------------------------------------------------------------------------
+# The COOLEST record (files/coolest.json)
+# ---------------------------------------------------------------------------
+
+# Every fit writes a COOLEST (COde-independent Organized LEns STandard, Galan et
+# al. 2023) template of its maximum log likelihood model beside `wcs.json`, so a
+# DR1 lens can be handed to lenstronomy, herculens or any other COOLEST-speaking
+# code without re-deriving the model by hand.
+#
+# Two choices are forced by what this pipeline fits:
+#
+# - `on_unsupported="skip"`. COOLEST describes analytic profiles, and the models
+#   here are not wholly analytic: the lens (and, in `vis_lp`, the source) light
+#   is an MGE `Basis` of Gaussians, and the `vis_pix` source is a Delaunay
+#   `Pixelization`. Neither has a COOLEST profile, so raising would mean no
+#   template at all for the stages that matter. Skipping exports the *full* mass
+#   model (which is what a COOLEST consumer wants from DR1) plus any Sersic
+#   light, and names everything left out under the template's
+#   `meta.skipped_profiles`, so a reader can never mistake the template for the
+#   whole model.
+# - `dataset=`. Without it COOLEST writes an empty observation block; passing the
+#   fitted dataset stamps the template with the cut-out's own pixel grid (shape
+#   and pixel scale), which is what makes the exported model reproducible on the
+#   data it was fitted to.
+#
+# The whole thing is best-effort: `coolest` is an optional dependency of
+# PyAutoLens (`pip install autolens[coolest]`) and a template is a record, not a
+# result, so a missing package or a conversion that raises is logged and the fit
+# stands.
+
+COOLEST_PIPELINE_NAME = "euclid_strong_lens_modeling_pipeline"
+
+
+def coolest_json_from(
+    tracer,
+    dataset,
+    file_path,
+    search_name: Optional[str] = None,
+    dataset_name: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Write the COOLEST template ``AnalysisImaging.save_results`` puts in
+    ``files/coolest.json``, and return its path — or ``None`` when it could not
+    be written, which is never an error (see the comment block above).
+
+    Parameters
+    ----------
+    tracer
+        The maximum log likelihood tracer of the fit, whose galaxies' analytic
+        profiles are exported.
+    dataset
+        The fitted dataset, whose ``shape_native`` and ``pixel_scales`` set the
+        template's observation pixel grid.
+    file_path
+        The output path, with or without the ``.json`` extension (the COOLEST
+        serializer appends it).
+    search_name
+        The name of the search that produced the fit, stored in the template's
+        metadata (``paths.name``, e.g. ``"initial_lens_model"``).
+    dataset_name
+        The name of the lens the fit was made on, stored in the template's
+        metadata.
+
+    Returns
+    -------
+    The path of the written ``.json`` template, or ``None``.
+    """
+    metadata = {"pipeline": COOLEST_PIPELINE_NAME}
+
+    if search_name is not None:
+        metadata["search"] = search_name
+    if dataset_name is not None:
+        metadata["dataset"] = dataset_name
+
+    try:
+        return al.interop.coolest.to_coolest(
+            galaxies=tracer,
+            file_path=file_path,
+            dataset=dataset,
+            on_unsupported="skip",
+            metadata=metadata,
+        )
+    except ImportError as e:
+        logging.getLogger(__name__).warning(
+            "coolest.json: the optional `coolest` package is not installed, so no "
+            "COOLEST template is written — install it with "
+            f"`pip install autolens[coolest]` ({type(e).__name__}: {e})"
+        )
+    except Exception as e:  # noqa: BLE001 — a record must never fail a fit
+        logging.getLogger(__name__).warning(
+            "coolest.json: the COOLEST template of the maximum log likelihood "
+            f"model could not be written ({type(e).__name__}: {e})"
+        )
+
+    return None
 
 
 # ---------------------------------------------------------------------------

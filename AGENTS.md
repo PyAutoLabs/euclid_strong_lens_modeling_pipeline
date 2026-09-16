@@ -86,7 +86,11 @@ non-linear search — and a few seconds end to end.
   dropped from that file entirely, so the key count *is* the NaN check) and that
   `files/wcs.json` carries the lensed source's images for both, `source_clumps`
   for the pixelized one, and reads back through `Aggregator.from_directory` +
-  `agg.values("wcs")` the way `catalogue/scripts/magnitudes.py` consumes it.
+  `agg.values("wcs")` the way `catalogue/scripts/magnitudes.py` consumes it. It
+  also asserts `files/coolest.json` — the COOLEST template `coolest_json_from`
+  writes — is there for both legs with the full mass model and the pixelized
+  source named under `meta.skipped_profiles` (its values are the fast
+  `test_coolest_output.py`'s).
   Test-mode smokes (`smoke_tests.txt`) cannot cover any of this: `skip_fit_output`
   gates the whole of `save_results`.
 

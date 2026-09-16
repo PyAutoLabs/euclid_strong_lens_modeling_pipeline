@@ -20,6 +20,8 @@
 #       rgb.png
 #       segmentation.png
 #       fit_sersic.png
+#       coolest.json                     # COOLEST template of the vis_pix fit
+#       coolest_sersic.json              # COOLEST template of the sersic fit
 #       pre_psf.fits                     # lens light + lensed source, pre-PSF
 #       model.fits                       # the same, post-PSF convolution
 #       fit_multi_wavelength.png
