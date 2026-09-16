@@ -11,17 +11,18 @@
 # Transfer:
 #   hpc/sync push                            Push code, config and data to the HPC
 #   hpc/sync push --no-data                  Push code and config only (skip dataset/)
-#   hpc/sync pull                            Download SLURM logs, then results
+#   hpc/sync pull [dir ...]                  Download SLURM logs, then results
+#   hpc/sync pull inspect                    ... only the named result roots
 #   hpc/sync logs                            Download SLURM logs only (fast, use mid-run)
 #   hpc/sync sync                            Push, then pull  (default)
 #   hpc/sync sync --no-data                  Push code only, then pull
 #   hpc/sync push-data-init                  First-time dataset upload via a tar pipe
 #   hpc/sync pull-full                       Whole results download via a tar pipe
-#   hpc/sync status                          Dry run — show what would transfer
+#   hpc/sync status [dir ...]                Dry run — show what would transfer
 #
 # Jobs:
-#   hpc/sync submit [cpu|gpu] <script>       Submit a SLURM job from hpc/batch_<type>/
-#   hpc/sync push-submit [cpu|gpu] <script>  Push code, then submit
+#   hpc/sync submit [cpu|gpu] <script> [sbatch arg ...]      Submit a SLURM job
+#   hpc/sync push-submit [cpu|gpu] <script> [sbatch arg ...] Push code, then submit
 #   hpc/sync jobs                            Show queued/running jobs (squeue)
 #   hpc/sync sacct                           Show job history and exit codes (sacct)
 #   hpc/sync cancel <job_id>                 Cancel a job by ID (scancel)
@@ -124,6 +125,39 @@ if [[ -n "${PYAUTO_PULL_DIRS:-}" ]]; then
     done
     unset _extra
 fi
+
+# Restrict PULL_DIRS to the roots named on the command line, for this call only.
+#
+# `pull` and `status` walk every root in PULL_DIRS, which for a DR1-sized tree
+# means rsync stats tens of thousands of result files to fetch a bundle that is
+# a few hundred MB. Naming the roots — `hpc/sync pull inspect` — skips that
+# walk entirely. No argument leaves PULL_DIRS exactly as it was, so the Cortex
+# check-in path (which passes roots through PYAUTO_PULL_DIRS instead) is
+# unchanged.
+#
+# A name is validated against the list built above, PYAUTO_PULL_DIRS included,
+# rather than against a hard-coded set: a typo pulls nothing silently, which on
+# a several-hour transfer is worse than an error.
+restrict_pull_dirs() {
+    [[ $# -eq 0 ]] && return 0
+
+    local selected=()
+    for requested in "$@"; do
+        # Global flags (`--no-data`) are consumed by the dispatcher below, not
+        # by this list.
+        [[ "${requested}" == -* ]] && continue
+        if [[ " ${PULL_DIRS[*]} " == *" ${requested} "* ]]; then
+            selected+=("${requested}")
+        else
+            echo "ERROR: '${requested}' is not one of this project's result roots: ${PULL_DIRS[*]}"
+            echo "       (add one with PYAUTO_PULL_DIRS='<name> ...')"
+            exit 1
+        fi
+    done
+
+    [[ ${#selected[@]} -gt 0 ]] && PULL_DIRS=("${selected[@]}")
+    return 0
+}
 
 # ---------------------------------------------------------------------------
 # rsync options
@@ -325,7 +359,7 @@ require_batch_type() {
 
 submit_usage() {
     local verb="${1}"
-    echo "Usage: $(basename "$0") ${verb} [cpu|gpu] <script_name>"
+    echo "Usage: $(basename "$0") ${verb} [cpu|gpu] <script_name> [sbatch arg ...]"
     echo ""
     echo "  <script_name> is a file in hpc/batch_cpu/ or hpc/batch_gpu/, e.g."
     echo "    $(basename "$0") ${verb} gpu submit_initial_lens_model"
@@ -333,6 +367,12 @@ submit_usage() {
     echo "    $(basename "$0") ${verb} cpu submit_initial_lens_model_vis_lp"
     echo "    $(basename "$0") ${verb} cpu submit_initial_lens_model_vis_pix"
     echo "    $(basename "$0") ${verb} cpu submit_build_inspection_bundle"
+    echo ""
+    echo "  Anything after <script_name> is passed straight to sbatch, which is"
+    echo "  how a submit script's variables are overridden — sbatch does not"
+    echo "  carry your login shell's exports into the job:"
+    echo "    $(basename "$0") ${verb} cpu submit_build_inspection_bundle \\"
+    echo "        --export=ALL,SAMPLE=dr1_sep1"
 }
 
 submit() {
@@ -345,12 +385,24 @@ submit() {
     fi
     require_batch_type "$batch_type"
 
+    # Everything after the script name is an sbatch argument (`--export=...`,
+    # `--array=...`, a different `--time`), which is how a submit script's
+    # variables are overridden: sbatch does not carry the login shell's exports
+    # into the job. They go *before* the script name, where sbatch expects its
+    # own options, and each is shell-quoted for the remote shell ssh runs the
+    # command line through, so an argument containing spaces arrives as one.
+    local sbatch_args=""
+    local arg
+    for arg in "${@:3}"; do
+        sbatch_args+="$(printf '%q' "${arg}") "
+    done
+
     local remote_dir="${REMOTE_PATH}/hpc/batch_${batch_type}"
-    echo "==> [submit] sbatch ${script_name}  (batch_${batch_type})  @  ${HPC_HOST}"
+    echo "==> [submit] sbatch ${*:3} ${script_name}  (batch_${batch_type})  @  ${HPC_HOST}"
     echo ""
     # sbatch is run from the batch directory because the submit scripts write
     # their logs to the relative paths output/ and error/.
-    ssh "${HPC_HOST}" "cd '${remote_dir}' && sbatch '${script_name}'"
+    ssh "${HPC_HOST}" "cd '${remote_dir}' && sbatch ${sbatch_args}'${script_name}'"
 }
 
 push_submit() {
@@ -365,7 +417,7 @@ push_submit() {
 
     push
     echo ""
-    submit "$batch_type" "$script_name"
+    submit "$@"
 }
 
 jobs_cmd() {
@@ -554,16 +606,21 @@ print_help() {
     echo "Transfer:"
     echo "  push                            Upload code, config and data to the HPC"
     echo "  push --no-data                  Upload code and config only (skip dataset/)"
-    echo "  pull                            Download SLURM logs, then results"
+    echo "  pull [dir ...]                  Download SLURM logs, then results"
+    echo "                                  (name result roots to pull only those,"
+    echo "                                   e.g. 'pull inspect')"
     echo "  logs                            Download SLURM logs only (fast, use mid-run)"
     echo "  sync                            push then pull (default)"
     echo "  sync --no-data                  push --no-data then pull"
     echo "  push-data-init                  First-time dataset upload via a tar pipe"
     echo "  pull-full                       Whole results download via a tar pipe"
-    echo "  status                          Dry run — show what would transfer"
+    echo "  status [dir ...]                Dry run — show what would transfer"
     echo ""
     echo "Jobs:"
-    echo "  submit [cpu|gpu] <script>       Submit a SLURM job from hpc/batch_<type>/"
+    echo "  submit [cpu|gpu] <script> [sbatch arg ...]"
+    echo "                                  Submit a SLURM job from hpc/batch_<type>/"
+    echo "                                  Extra arguments are passed to sbatch, e.g."
+    echo "                                    --export=ALL,SAMPLE=dr1_sep1"
     echo "                                  CPU scripts:"
     echo "                                    submit_initial_lens_model"
     echo "                                    submit_initial_lens_model_two_stage"
@@ -574,7 +631,8 @@ print_help() {
     echo "                                    submit_initial_lens_model"
     echo "                                    submit_full_model"
     echo "                                    submit_sersic_waveband"
-    echo "  push-submit [cpu|gpu] <script>  Push code, then submit"
+    echo "  push-submit [cpu|gpu] <script> [sbatch arg ...]"
+    echo "                                  Push code, then submit"
     echo "  jobs                            Show queued/running jobs (squeue)"
     echo "  sacct                           Show job history and exit codes (sacct)"
     echo "  cancel <job_id>                 Cancel a job by ID (scancel)"
@@ -608,14 +666,14 @@ echo ""
 
 case "$cmd" in
     push)            push ;;
-    pull)            pull ;;
+    pull)            restrict_pull_dirs "${@:2}" && pull ;;
     logs)            pull_logs ;;
     sync)            push && echo "" && pull ;;
     push-data-init)  push_data_init ;;
     pull-full)       pull_full ;;
-    status)          status ;;
-    submit)          submit "${2:-}" "${3:-}" ;;
-    push-submit)     push_submit "${2:-}" "${3:-}" ;;
+    status)          restrict_pull_dirs "${@:2}" && status ;;
+    submit)          submit "${@:2}" ;;
+    push-submit)     push_submit "${@:2}" ;;
     jobs)            jobs_cmd ;;
     sacct)           sacct_cmd ;;
     cancel)          cancel "${2:-}" ;;

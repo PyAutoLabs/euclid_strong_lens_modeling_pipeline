@@ -3,11 +3,14 @@
 # Build the inspection bundle (the catalogue) for one sample, on the cluster.
 #
 # WHAT THIS DOES
-#   Runs `scripts/build_inspection_bundle.sh` — the seven catalogue producers in
+#   Runs `scripts/build_inspection_bundle.sh` — the eight catalogue producers in
 #   dependency order — over a results tree that is already on the cluster, and
 #   leaves the bundle in `inspect/<sample>[_<run_tag>]/`. It fits nothing: every
 #   number it writes was produced by a fit that has already finished, so this is
-#   a read-and-scrape job, not a modelling job.
+#   a read-and-scrape job, not a modelling job. That includes the three mass-map
+#   files stage 3 writes (`convergence.fits`, `potential.fits`,
+#   `deflections.fits`): they are HDUs copied out of each fit's own
+#   `image/tracer.fits`, not maps evaluated here.
 #
 # WHY IT IS A CLUSTER JOB AT ALL
 #   The scrape itself is cheap per lens, but a DR1-sized sample is thousands of
@@ -29,6 +32,12 @@
 #   script are where the logs land):
 #
 #     hpc/sync submit cpu submit_build_inspection_bundle
+#
+#   Anything after the script name is forwarded to `sbatch`, so the overrides
+#   below work from your machine too:
+#
+#     hpc/sync submit cpu submit_build_inspection_bundle \
+#         --export=ALL,SAMPLE=dr1_sep1
 #
 #   `hpc/sync push-submit cpu submit_build_inspection_bundle` pushes the code
 #   first. Do NOT push while fits are still running against the same tree.
@@ -57,11 +66,17 @@
 # -----------------------------------------------------------------------------
 # Environment
 #
-# PROJECT_PATH is the project root on the cluster (the same location as
-# $HPC_BASE/$PROJECT_NAME in hpc/sync.conf) and PYAUTO_HPC_BASE the shared
-# PyAuto virtualenv beside the library checkouts. Both carry the RAL defaults
-# and both honour a value passed in with --export, so a different cluster or a
-# different project checkout needs no edit here.
+# PROJECT_PATH is the project root on the cluster and PYAUTO_HPC_BASE the
+# shared PyAuto virtualenv beside the library checkouts. Both honour a value
+# passed in with --export, so a different cluster or a different project
+# checkout needs no edit here.
+#
+# PROJECT_PATH defaults to the project this script was submitted from rather
+# than to a hard-coded checkout: SLURM sets SLURM_SUBMIT_DIR to the directory
+# sbatch ran in, which `hpc/sync submit` makes hpc/batch_cpu/, so two levels up
+# is the project root — `euclid_dr1`, `euclid_dr1_prelim` or any other clone,
+# with no edit and no --export. $(dirname "$0") is the fallback for a run
+# outside SLURM.
 #
 # activate.sh is sourced by build_inspection_bundle.sh itself when
 # PYAUTO_HPC_BASE names a real directory and PYAUTO_ROOT is unset; it is sourced
@@ -69,7 +84,7 @@
 # top of the log, rather than silently leaving the bundle to run against a
 # system Python.
 # -----------------------------------------------------------------------------
-export PROJECT_PATH="${PROJECT_PATH:-/mnt/ral/jnightin/euclid_dr1_prelim}"
+export PROJECT_PATH="${PROJECT_PATH:-$(cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")}/../.." && pwd)}"
 export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
 
 source "$PROJECT_PATH/activate.sh"
@@ -102,7 +117,7 @@ export NUMEXPR_NUM_THREADS=$THREADS
 # are exported here untouched rather than being re-implemented: pass any of them
 # with --export and the bundle builder honours it.
 # -----------------------------------------------------------------------------
-SAMPLE="${SAMPLE:-dr1_prelim_grade_ab}"
+SAMPLE="${SAMPLE:-dr1_prelim_grade_ab}"   # --export=ALL,SAMPLE=dr1_sep1 for the DR1 September sample
 RUN_TAG="${RUN_TAG:-}"
 
 export OUTPUT_DIR="${OUTPUT_DIR:-output}"
