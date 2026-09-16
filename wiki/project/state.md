@@ -67,6 +67,12 @@ not copied here.
 
 ## Where we are now
 
+- **A `coolest.json` reload pass is prepared but NOT run (2026-09-16).** The pipeline branch
+  `feature/coolest-observation-grid` is merged in at `60133f8` (every search writes a COOLEST
+  template of its maximum log likelihood model) and `hpc/batch_cpu/submit_reload_coolest` is
+  written, but the array waits on PyAutoLens#739 merging + `HPCPullPyAuto` and on `coolest`
+  being installed in the RAL venv. `force_pickle_overwrite` is `false`. Journal:
+  `2026-09-16-coolest-json-reload-pass.md`.
 - **The nine completed sep1 fits now carry the source position in `files/wcs.json`
   (2026-09-16).** The pipeline's `main` was merged in at **`650dc2d`** (PRs #71-#73 and #79 —
   the lensed source's multiple images, the pixelized-source clumps off the mapper, and the p99
@@ -158,6 +164,8 @@ not copied here.
 
 ## Journal index
 
+- `2026-09-16-coolest-json-reload-pass.md` — the coolest.json reload pass prepared (branch
+  merged, tests green, `submit_reload_coolest` written) and deliberately not run.
 - `2026-09-16-wcs-json-reload-pass.md` — pipeline `main` merged in at `650dc2d`, and the nine
   completed lenses reloaded (array `343358`) so `files/wcs.json` carries the source centre, the
   lensed multiple images and the pixelized clumps.
