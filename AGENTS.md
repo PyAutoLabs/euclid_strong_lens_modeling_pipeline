@@ -74,14 +74,21 @@ non-linear search — and a few seconds end to end.
   `tests/data/dr1_headers/`; refresh those with `head -1` of the DR1 CSVs. Plus
   `test_util.py` (the pure helpers) and `test_repo_invariants.py` (the rules
   below).
-- `test_latent_run_level.py` (`slow`, its own CI job) — one real-mode fit proving
-  the pipeline still **writes** latents, which the fast suite cannot: it calls
-  `LatentEuclid.variables` directly, an ungated path, while the write is gated by
-  `autonerves.test_mode.skip_latents()` and nothing forces latents on under test
-  mode. It draws with `af.Drawer(total_draws=10)` on a model anchored to the truth
-  with one free parameter (over a free model a Drawer draws junk) and asserts
-  `files/latent/latent_summary.json` holds exactly the 12 keys — a NaN latent is
-  dropped from that file entirely, so the key count *is* the NaN check.
+- `test_latent_run_level.py` (`slow`, its own CI job) — two real-mode fits
+  proving the pipeline still **writes** its per-fit files, which the fast suite
+  cannot: it calls `LatentEuclid.variables` and `wcs_dict_from` directly, ungated
+  paths, while every write is gated by `autonerves.test_mode.skip_fit_output()`
+  / `skip_latents()` and nothing forces them on under test mode. It draws with
+  `af.Drawer` on models anchored to the truth with one free parameter (over a
+  free model a Drawer draws junk) — a light-profile source (10 draws) and the
+  `vis_pix` pixelized source (3 draws; `tests/pixelized_model.py`) — and asserts
+  `files/latent/latent_summary.json` holds exactly the 12 keys (a NaN latent is
+  dropped from that file entirely, so the key count *is* the NaN check) and that
+  `files/wcs.json` carries the lensed source's images for both, `source_clumps`
+  for the pixelized one, and reads back through `Aggregator.from_directory` +
+  `agg.values("wcs")` the way `catalogue/scripts/magnitudes.py` consumes it.
+  Test-mode smokes (`smoke_tests.txt`) cannot cover any of this: `skip_fit_output`
+  gates the whole of `save_results`.
 
 ### Smoke tests
 

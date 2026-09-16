@@ -74,6 +74,17 @@ This script can be run as a black-box, with key output being generated, includin
 - A SIE plus shear lens mass model.
 - Deblended images of the lens and source galaxies.
 - Lens light and source models using a multi Gaussian Expansion.
+- A `files/wcs.json` record beside every fit: the lens light centre on the sky
+  (RA / Dec), the source position in the source plane, and the lensed source's
+  multiple images — the lens equation solved for that position with
+  `al.PointSolver` — in the image plane (arcsec) and on the sky (RA / Dec). For
+  a light-profile source (`vis_lp`, the SED chain) the position is the light
+  centre; for a pixelized source (`vis_pix`, the Delaunay stages) it is the peak
+  of the brightest clump of the reconstruction, and `source_clumps` lists every
+  clump with its multiple images read off the fit's mapper (the brightest model
+  pixel of each image region). Written by `util.AnalysisImaging.save_results`;
+  `util.wcs_dict_from` documents every key. An unavailable value is an absent
+  key, never `null`, and `source_model` says which case applied.
 
 Here is an example of the output, which shows the lens and source galaxies debelended and a source reconstruction
 in the source-plane:
@@ -214,8 +225,8 @@ sentinel.
 ## Testing and Continuous Integration
 
 ```bash
-python -m pytest -q -m "not slow"      # 58 tests, ~4 s, JAX-free, no fit — the local default
-python -m pytest -q -m slow            # 3 tests, 10-20 s, one real (non-test-mode) fit
+python -m pytest -q -m "not slow"      # 120 tests, ~40 s, JAX-free, no fit — the local default
+python -m pytest -q -m slow            # 6 tests, ~30 s, two real (non-test-mode) fits
 python -m pytest -q                    # both
 python3 .github/scripts/run_smoke.py   # every script in smoke_tests.txt, under PYAUTO_TEST_MODE
 ```

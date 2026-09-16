@@ -162,6 +162,23 @@ Every producer can also be run on its own; each takes `--sample`,
 - **Master CSVs are split per lens.** `catalogue_util.write_per_tile_csv` drops
   each lens's rows into its own folder so a single lens folder is
   self-contained and can be shipped on its own.
+- **Sky positions come from `files/wcs.json`**, which `util.AnalysisImaging`
+  writes beside every fit: the max-likelihood lens light centre as
+  `crval_ra_deg` / `crval_dec_deg` (the RA is `magnitudes.py`'s label column),
+  the source position in the source plane (a light centre, or the brightest
+  clump's peak for a pixelized source), and its multiple images in arcsec and
+  RA / Dec solved with `al.PointSolver`; a pixelized source also carries
+  `source_clumps`, every clump's peak and images read off the fit's mapper
+  (`util.wcs_dict_from` documents the keys). Those clumps are thresholded
+  against the reconstruction's 99th percentile, not its maximum — on a real
+  adaptive mesh the brightest mesh pixel is an isolated spike and the maximum
+  rule finds no clump at all — and a brightest-pixel failsafe guarantees one,
+  so `source_clump_rule` says which rule produced the entries (`percentile`,
+  `brightest_pixel`) and `source_clumps: []` (rule `none`) means nothing was
+  reconstructed. Read it through the aggregator
+  (`agg.values("wcs")`), which decodes PyAutoFit's JSON envelope; that envelope
+  drops `None` values, so an unavailable value is an absent key and
+  `source_model` says why. No producer publishes the image positions yet.
 
 ---
 
