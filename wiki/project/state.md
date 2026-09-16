@@ -1,7 +1,7 @@
 ---
 title: Project state
 type: state
-last_touched: 2026-09-11
+last_touched: 2026-09-16
 ---
 
 # Project state
@@ -67,7 +67,16 @@ not copied here.
 
 ## Where we are now
 
-- **The project was born today (2026-09-11).** It is a fresh clone of
+- **The nine completed sep1 fits now carry the source position in `files/wcs.json`
+  (2026-09-16).** The pipeline's `main` was merged in at **`650dc2d`** (PRs #71-#73 and #79 —
+  the lensed source's multiple images, the pixelized-source clumps off the mapper, and the p99
+  clump threshold with a brightest-pixel failsafe), and the finished searches were **reloaded,
+  not refitted**: `output.force_pickle_overwrite: true` makes an already-complete search skip
+  its non-linear search and re-fire `save_results`, which rewrites `wcs.json` and re-zips in
+  place. SLURM array **`343358`**, nine tasks, **29-34 s each**. All 18 `<hash>` identifiers are
+  unchanged and the flag is back off. Journal:
+  `2026-09-16-wcs-json-reload-pass.md`.
+- **The project was born on 2026-09-11.** It is a fresh clone of
   `PyAutoLabs/euclid_strong_lens_modeling_pipeline` at `dbbb2a5` (main, carrying PR #68),
   with **no** local history inherited from `euclid_dr1_prelim`.
 - **The route is deliberately identical to prelim's**, so that a difference in the fits is a
@@ -86,18 +95,30 @@ not copied here.
 
 ## In flight
 
-- **SLURM array `342650`** (`euclid_dr1_two_stage`, `--array=0-9`, partition `ral`) —
-  ten tiles, two stages each, submitted 2026-09-11 from
-  `/mnt/ral/jnightin/euclid_dr1`. Output lands in `output/dr1_sep1/<tile>/`. It unblocks the
-  whole first question: without these fits there is nothing to put beside 342629. All ten
-  tasks went RUNNING immediately, all on `euclid-ral-compute-10-2`.
+- **Nothing is running on RAL.** `squeue` is empty for `jnightin`.
+- **SLURM array `342650`** (`euclid_dr1_two_stage`, `--array=0-9`) **is finished**: nine of the
+  ten tiles completed both stages (18 zips under `output/dr1_sep1/<tile>/initial_lens_model/`),
+  and `Tile102007299RA0702283866574DECNEG0660415308762` (array index 1) never completed its
+  `vis_lp`. That tile was therefore excluded from the 2026-09-16 reload pass and has no
+  `wcs.json` to regenerate.
+- **SLURM array `343358`** (`euclid_dr1_reload_wcs`, `--array=0,2-9`) **is finished** —
+  nine `COMPLETED` tasks, 29-34 s each, no traceback. It rewrote `files/wcs.json` in all 18
+  zips; the pre-reload copy is kept on RAL at
+  `/mnt/ral/jnightin/euclid_dr1/output.prezip.bak.2026-09-16` (109 MB), for the human to delete.
 
 ## Open, carried forward
 
-- **When the array finishes:** `hpc/sync pull`, then build a **per-tile side-by-side sheet**
-  — the new `vis_pix` fit PNG next to 342629's for the same lens — and report the
+- **The results are pulled; the by-eye sheet is still owed.** Local `output/` mirrors RAL
+  (18 zips, 52 MB, flat `output/<Tile>/…` layout). What remains is the **per-tile side-by-side
+  sheet** — the new `vis_pix` fit PNG next to 342629's for the same lens — and the
   **effective Einstein radius per tile against prelim's**. Then the ruling is the human's, by
-  eye: does the sep1 delivery reproduce the ten prelim lenses?
+  eye: does the sep1 delivery reproduce the ten prelim lenses? `wcs.json` now supplies the
+  source position and the image-plane pixels of every clump, so the sheet can carry markers.
+- **`Tile102008475RA0039777627054DECNEG0637715426503` is the first candidate non-reproduction.**
+  Its `vis_lp` source centre solves to only **one** lensed image (every other record gives 2-4),
+  and its `vis_pix` brightest clump sits **1.75"** away — the two stages disagree about where the
+  source is, and the light-profile solution is not multiply imaged. It also carries the sample's
+  largest `mask_radius` (6.81").
 - **The sep1 mask radii are systematically larger.** `info.json` `mask_radius` grew on 9 of 10
   tiles (only idx 4 shrank), by as much as 2.34" (idx 1, 3.32" → 5.65"). The cut-outs are
   100 × 100 at 0.1", so the loader clips the effective radius at 4.95"; several tiles are now
@@ -122,11 +143,24 @@ not copied here.
   `hpc/sync push` transfers only `dataset/`, never the repo root's big files.
 - **`origin` here is the pipeline repo, not a project remote.** This clone has local commits
   that must never be pushed.
+- **A reload deletes the zip before rewriting it.** `paths.restore()` unzips over the result
+  and removes the archive, so `cp -a output output.prezip.bak.<date>` on RAL comes *before* any
+  `force_pickle_overwrite` pass, and the flag goes back to `false` in the same session.
+- **Never pass `--seed` or change a model/search setting in a reload.** The identifier hash is
+  what makes the reload land on the existing result; a changed hash means a new fit was started,
+  not a record refreshed.
+- **`hpc/sync pull` does not match this clone's `output/` layout.** RAL writes
+  `output/dr1_sep1/<Tile>/…`, this clone is flat `output/<Tile>/…`; pull with an explicit
+  `rsync … euclid_jump:…/output/dr1_sep1/ output/` or a second nested tree appears beside the
+  flat one.
 - **Read the inner zips in place.** `zipfile.ZipFile(outer.open(inner))` works because the three
   inner zips are STORED; extracting the outer archive first costs 14.8 GB of `/mnt/c` for nothing.
 
 ## Journal index
 
+- `2026-09-16-wcs-json-reload-pass.md` — pipeline `main` merged in at `650dc2d`, and the nine
+  completed lenses reloaded (array `343358`) so `files/wcs.json` carries the source centre, the
+  lensed multiple images and the pixelized clumps.
 - `2026-09-11-birth-and-sep1-ten-lens-rerun.md` — the clone was born from pipeline `dbbb2a5`,
   the ten sep1 tiles were extracted from the nested delivery zip, the colormap went back to
   the library default, and the ten-lens array was submitted to RAL.
