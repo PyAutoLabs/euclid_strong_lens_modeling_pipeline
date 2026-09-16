@@ -1,7 +1,7 @@
 ---
 title: Project state
 type: state
-last_touched: 2026-09-16
+last_touched: 2026-09-17
 ---
 
 # Project state
@@ -67,11 +67,19 @@ not copied here.
 
 ## Where we are now
 
-- **A `coolest.json` reload pass is prepared but NOT run (2026-09-16).** The pipeline branch
-  `feature/coolest-observation-grid` is merged in at `60133f8` (every search writes a COOLEST
-  template of its maximum log likelihood model) and `hpc/batch_cpu/submit_reload_coolest` is
-  written, but the array waits on PyAutoLens#739 merging + `HPCPullPyAuto` and on `coolest`
-  being installed in the RAL venv. `force_pickle_overwrite` is `false`. Journal:
+- **The nine completed sep1 fits now carry `files/coolest.json` (2026-09-17).** The
+  `feature/coolest-observation-grid` work is merged in this clone at `60133f8` and on the RAL
+  stack (PyAutoLens `223132c0b`, PR #740), `coolest` **0.1.11** is installed in the RAL venv,
+  and the same reload lever was fired again: SLURM array **`343367`** (`--array=0,2-9`), nine
+  tasks, all `COMPLETED` in **29-35 s**, every `.out` showing `Forcing pickle overwrite` and
+  `Fit Already Completed` twice and **no** `coolest.json` warning. `files/coolest.json` is in
+  **18 of 18** zips on RAL and in the clone, and all nine `inspect/dr1_sep1/<Tile>/` folders
+  carry it after a bundle rebuild (`coolest_sersic.json` nowhere — that stage has not run).
+  Each template exports the whole mass model (`SIE` + `ExternalShear`) on a **100 × 100**
+  grid spanning **[-5.0, 5.0]"** at **0.1"/pixel**, and names the MGE `Basis(Gaussian x 40)`
+  and the Delaunay `Pixelization` under `meta.skipped_profiles`. The flag is back to `false`
+  here and on RAL; the pre-reload copy is
+  `/mnt/ral/jnightin/euclid_dr1/output.prezip.bak.2026-09-16b` (108 MB). Journal:
   `2026-09-16-coolest-json-reload-pass.md`.
 - **The nine completed sep1 fits now carry the source position in `files/wcs.json`
   (2026-09-16).** The pipeline's `main` was merged in at **`650dc2d`** (PRs #71-#73 and #79 —
@@ -107,6 +115,10 @@ not copied here.
   and `Tile102007299RA0702283866574DECNEG0660415308762` (array index 1) never completed its
   `vis_lp`. That tile was therefore excluded from the 2026-09-16 reload pass and has no
   `wcs.json` to regenerate.
+- **SLURM array `343367`** (`euclid_dr1_reload_coolest`, `--array=0,2-9`) **is finished** —
+  nine `COMPLETED` tasks, 29-35 s each, no traceback and no writer warning. It added
+  `files/coolest.json` to all 18 zips; the pre-reload copy is kept on RAL at
+  `/mnt/ral/jnightin/euclid_dr1/output.prezip.bak.2026-09-16b` (108 MB), for the human to delete.
 - **SLURM array `343358`** (`euclid_dr1_reload_wcs`, `--array=0,2-9`) **is finished** —
   nine `COMPLETED` tasks, 29-34 s each, no traceback. It rewrote `files/wcs.json` in all 18
   zips; the pre-reload copy is kept on RAL at
@@ -158,14 +170,19 @@ not copied here.
 - **`hpc/sync pull` does not match this clone's `output/` layout.** RAL writes
   `output/dr1_sep1/<Tile>/…`, this clone is flat `output/<Tile>/…`; pull with an explicit
   `rsync … euclid_jump:…/output/dr1_sep1/ output/` or a second nested tree appears beside the
-  flat one.
+  flat one. The same mismatch bites on the way out:
+  `scripts/build_inspection_bundle.sh` looks for `<OUTPUT_DIR>/<sample>` and dies with
+  `ERROR: results directory not found: …/output/dr1_sep1` against the flat tree. Build it with
+  `OUTPUT_DIR` pointing at a scratch directory holding a symlink `dr1_sep1 → …/euclid_dr1/output`
+  (the tools accept an absolute `--output_path`); do not restructure `output/`.
 - **Read the inner zips in place.** `zipfile.ZipFile(outer.open(inner))` works because the three
   inner zips are STORED; extracting the outer archive first costs 14.8 GB of `/mnt/c` for nothing.
 
 ## Journal index
 
 - `2026-09-16-coolest-json-reload-pass.md` — the coolest.json reload pass prepared (branch
-  merged, tests green, `submit_reload_coolest` written) and deliberately not run.
+  merged, tests green, `submit_reload_coolest` written) and then **run on 2026-09-17**
+  (array `343367`): all 18 zips and all nine inspect folders now carry a COOLEST template.
 - `2026-09-16-wcs-json-reload-pass.md` — pipeline `main` merged in at `650dc2d`, and the nine
   completed lenses reloaded (array `343358`) so `files/wcs.json` carries the source centre, the
   lensed multiple images and the pixelized clumps.

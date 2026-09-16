@@ -1,13 +1,15 @@
 ---
 date: 2026-09-16
-title: coolest.json reload pass prepared for the nine completed lenses — merged, tested, not run
-tags: [euclid, dr1, dr1_sep1, initial_lens_model, coolest, reload, force_pickle_overwrite, ral, prepared]
+title: coolest.json reload pass prepared, then run — the nine completed lenses now carry files/coolest.json
+tags: [euclid, dr1, dr1_sep1, initial_lens_model, coolest, reload, force_pickle_overwrite, ral, ran]
 ---
 
-# coolest.json reload pass prepared for the nine completed lenses — merged, tested, not run
+# coolest.json reload pass prepared for the nine completed lenses — and RAN 2026-09-17
 
-**Status: prepared, not run.** Nothing was submitted to RAL and
-`config/general.yaml` still carries `output.force_pickle_overwrite: false`.
+**Status: RAN 2026-09-17** (SLURM array **`343367`**, nine tasks, all `COMPLETED` in 29-35 s).
+Both preconditions were satisfied first; the flag is back to `false` on RAL and in this clone,
+and `config/general.yaml` is byte-identical to its pre-pass state. See **Result** at the foot
+of this page. The sections above are the preparation as it stood before the run.
 
 ## Context
 
@@ -48,13 +50,13 @@ make any later real DR1 fit reload an existing result instead of running it.
 
 ## Preconditions for the run day
 
-Neither is satisfied yet; both are on RAL, not here.
+**Both were satisfied on the run day (2026-09-17) and checked, not assumed** — see **Result**.
 
-- [ ] **PyAutoLens#739 merged and `HPCPullPyAuto` run.** The record is written by
+- [x] **PyAutoLens#739 merged and `HPCPullPyAuto` run.** The record is written by
       `al.interop.coolest.to_coolest(galaxies=, file_path=, dataset=, on_unsupported=,
       metadata=)`. The `dataset=` and `on_unsupported=` keywords are that PR's work and do not
       exist on RAL's `/mnt/ral/jnightin/PyAuto` until the PR merges and the stack is pulled.
-- [ ] **`coolest` installed in the RAL venv** (`pip install autolens[coolest]`) — being done in
+- [x] **`coolest` installed in the RAL venv** (0.1.11 confirmed) (`pip install autolens[coolest]`) — being done in
       this session's sibling step.
 
 Both failure modes are **silent**: `coolest_json_from` catches `ImportError` and every
@@ -104,9 +106,112 @@ have to be read, not just the exit codes.
 
 ## Next
 
-- [ ] Run the pass once PyAutoLens#739 has merged and `HPCPullPyAuto` has refreshed RAL.
-- [ ] Read one written `coolest.json` back and check `meta.skipped_profiles` names the MGE
+- [x] Run the pass once PyAutoLens#739 has merged and `HPCPullPyAuto` has refreshed RAL. **Done 2026-09-17, array `343367`.**
+- [x] Read one written `coolest.json` back and check `meta.skipped_profiles` names the MGE
       `Basis` and the Delaunay `Pixelization`, and that the observation block carries 100 × 100
-      at 0.1".
-- [ ] Delete the pre-reload backup once the reloaded results are trusted — as with
-      `/mnt/ral/jnightin/euclid_dr1/output.prezip.bak.2026-09-16`, still undeleted.
+      at 0.1". **Both confirmed on all nine.**
+- [ ] Delete the pre-reload backups once the reloaded results are trusted:
+      `/mnt/ral/jnightin/euclid_dr1/output.prezip.bak.2026-09-16b` (this pass, 108 MB) and
+      `…output.prezip.bak.2026-09-16` (the wcs pass, 109 MB), both still undeleted.
+
+## Result — RAN 2026-09-17 (SLURM array `343367`)
+
+**Preconditions, verified on RAL, not assumed.**
+
+- `coolest` **0.1.11** importable in the RAL venv under
+  `PROJECT_PATH=/mnt/ral/jnightin/euclid_dr1`, `PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto`,
+  `source $PROJECT_PATH/activate.sh`.
+- `/mnt/ral/jnightin/PyAuto/PyAutoLens` at **`223132c0b`** — "Merge pull request #740 from
+  PyAutoLabs/feature/coolest-observation-grid", i.e. the `dataset=` / `on_unsupported=`
+  observation-grid work is on the cluster stack.
+- `squeue -u jnightin` empty; partition `ral` carried 0 pending and 1 running job of anyone's,
+  so the script's own `--partition=ral` was kept (no reason to reach for the `gpu`-CPUs
+  alternative).
+
+**Backup.** `cp -a output output.prezip.bak.2026-09-16b` on RAL — **108 MB**, ten tile
+directories — taken before anything else and kept separate from the wcs pass's
+`output.prezip.bak.2026-09-16`. `df -h /mnt/ral` reported **63 T free of 171 T (64% used)**
+before and after.
+
+**The pass.** `force_pickle_overwrite: true` (clone commit `3406406`), `hpc/sync push --no-data`,
+then verified on RAL: `config/general.yaml` line 30 `true`, `grep -c coolest_json_from util.py`
+= **3**, `hpc/batch_cpu/submit_reload_coolest` present. Submitted with
+`hpc/sync submit cpu submit_reload_coolest` → **`343367`**. All nine tasks were `R` on
+`euclid-ral-compute-10-2` within 10 s and the queue was empty inside 50 s.
+
+| task | tile | state | elapsed |
+|---|---|---|---:|
+| `343367_0` | `Tile102005065RA0135279431487DECNEG0701599765928` | COMPLETED | 00:00:35 |
+| `343367_2` | `Tile102007899RA0631697483678DECNEG0650586413593` | COMPLETED | 00:00:34 |
+| `343367_3` | `Tile102007903RA0668824944366DECNEG0648906250124` | COMPLETED | 00:00:31 |
+| `343367_4` | `Tile102008165RA0109661927007DECNEG0642904268129` | COMPLETED | 00:00:32 |
+| `343367_5` | `Tile102008219RA0727857418392DECNEG0644388277074` | COMPLETED | 00:00:34 |
+| `343367_6` | `Tile102008468RA3567393529734DECNEG0647169093056` | COMPLETED | 00:00:31 |
+| `343367_7` | `Tile102008475RA0039777627054DECNEG0637715426503` | COMPLETED | 00:00:34 |
+| `343367_8` | `Tile102008532RA0683486015030DECNEG0642073552911` | COMPLETED | 00:00:32 |
+| `343367_9` | `Tile102008848RA0601371893270DECNEG0634606579714` | COMPLETED | 00:00:29 |
+
+`ExitCode 0:0` on every task and every `.batch` step.
+
+**The logs say the lever fired and the writer did not complain.** Every one of the nine `.out`
+files carries `Forcing pickle overwrite` **twice** and `Fit Already Completed` **twice** — one
+pair per stage. The only line matching `coolest.json` in any log is the script's own banner,
+`Purpose    : reload both stages, write files/coolest.json`; **no warning line was emitted**,
+which is the check that matters, because a failed conversion is a warning and never a failed
+task. No `.err` file contains a `Traceback`.
+
+**The record is in the archives, not merely unwarned-about.** On RAL,
+`unzip -l` over all 18 result zips (9 tiles × `vis_lp`, `vis_pix`) finds `files/coolest.json`
+in **18 of 18**; after the pull, the same is true of all 18 zips in this clone.
+
+**Flag off again.** `force_pickle_overwrite: false` (clone commit `6fd17ca`);
+`git diff 9803a8f -- config/general.yaml` is empty, so the file is byte-identical to its
+pre-pass state. `hpc/sync push --no-data`, and RAL re-checked: line 30 reads `false`.
+
+**Pull and bundle.** Pulled with the explicit rsync the trap calls for —
+`rsync -az --partial --exclude=search_internal euclid_jump:…/output/dr1_sep1/ output/` — so the
+clone's flat layout is preserved (10 entries under `output/`, no `output/dr1_sep1/`, 52 MB), plus
+the SLURM logs into `hpc/batch_cpu/{output,error}/`. `scripts/build_inspection_bundle.sh` was
+then run with `SKIP_SED=1 CREATE_ARCHIVE=0`. **All nine** `inspect/dr1_sep1/<Tile>/` folders now
+hold a `coolest.json` (~5.5 kB each); **no** folder holds `coolest_sersic.json`, which is
+correct — `sersic_lens_model/vis` has not run on this sample, and stages 4 and 5 reported
+"no completed sersic_lens_model/vis results" as they should.
+
+### What the templates actually contain
+
+Identical in shape across all nine (the bundle collects the **`vis_pix`** stage):
+
+- `meta.pipeline` = `euclid_strong_lens_modeling_pipeline`, `meta.search` = `vis_pix`,
+  `meta.dataset` = the tile name, `meta["coolest.__version__"]` = `0.1.11`.
+- **Mass model, whole**: `galaxy_0` (z = 0.5) carries an `SIE`
+  (`theta_E`, `q`, `phi`, `center_x`, `center_y`) and a separate `MassField` entity
+  `mass_field_0` carries `ExternalShear` (`gamma_ext`, `phi_ext`). `galaxy_1` (z = 1.0) is the
+  source and carries no exportable profile.
+- `meta.skipped_profiles` names exactly the two COOLEST has no profile for:
+  `galaxy_0: Basis(Gaussian x 40)` (the MGE lens light) and
+  `galaxy_1: Pixelization(Delaunay)` (the pixelized source). The `vis_lp` template inside the
+  zips skips `Basis(Gaussian x 40)` and `Basis(Gaussian x 20)` instead — lens light and MGE
+  source light — and exports the same `SIE` + `ExternalShear`.
+- **Observation grid, as predicted**: `observation.pixels` `num_pix_x` = `num_pix_y` = **100**,
+  `field_of_view_x` = `field_of_view_y` = **[-5.0, 5.0]** arcsec, and
+  `instrument.pixel_size` = **0.1**. `exposure_time`, `mag_zero_point`, `noise.type` and
+  `pixels.fits_file.path` are `null`, and `instrument.band` / `name` are empty strings — the
+  template carries the grid, not the data.
+- `cosmology`: `FlatLambdaCDM`, H0 67.74, Om0 0.3075.
+
+### Deviations from the recipe
+
+- **One deviation, in step 9 only.** `scripts/build_inspection_bundle.sh` resolves its results
+  tree as `<OUTPUT_DIR>/<sample>`, so against this clone's *flat* `output/` it fails with
+  `ERROR: results directory not found: …/output/dr1_sep1`. The bundle was built by pointing
+  `OUTPUT_DIR` at a scratch directory holding a single symlink `dr1_sep1 → …/euclid_dr1/output`.
+  Nothing in the repo was moved or renamed. This is the same flat-vs-nested mismatch the pull
+  trap already records, showing up on the other side of the pipeline — see **Traps** in
+  `state.md`.
+- Everything else followed the recipe as written.
+
+### Next
+
+- [ ] Delete `/mnt/ral/jnightin/euclid_dr1/output.prezip.bak.2026-09-16b` (108 MB) once the
+      reloaded results are trusted — and `…bak.2026-09-16` (109 MB) from the wcs pass with it.
+- [ ] The by-eye sheet is still the owed deliverable; `coolest.json` does not change it.
