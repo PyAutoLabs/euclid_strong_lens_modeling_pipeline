@@ -37,6 +37,12 @@ Two things shape the fit:
 
 Wall time: about 15 s (10 likelihood evaluations plus 10 latent evaluations on
 the 100x100 masked simulated VIS image, non-JAX).
+
+The last test in the module is the odd one out: it **mutates** the pixelized
+fit's output — it deletes ``files/wcs.json`` out of the search's zip and re-runs
+that search under ``force_pickle_overwrite: true``, the upgrade path by which an
+already-finished DR1 run gains a record it was fitted without. It must stay
+last, because every test above reads the output the module fixture built.
 """
 
 import inspect
@@ -248,6 +254,7 @@ def _fit(tmp_path, monkeypatch):
             )
 
         analysis = analysis_from()
+        pixelized_analysis = analysis_from(adapt_images=adapt_images)
 
         output_path = tmp_path / "output"
         files = {}
@@ -257,7 +264,7 @@ def _fit(tmp_path, monkeypatch):
             (
                 "drawer_pix",
                 pixelized_model,
-                analysis_from(adapt_images=adapt_images),
+                pixelized_analysis,
                 PIXELIZED_TOTAL_DRAWS,
             ),
         ):
@@ -301,6 +308,13 @@ def _fit(tmp_path, monkeypatch):
             "pixelized": files["drawer_pix"],
             "output": output_path,
             "keys": util.LatentEuclid.keys(analysis),
+            # The pushed config copy and the `drawer_pix` inputs, so the
+            # force_pickle_overwrite round trip below can re-run that same
+            # search — same model, same identifier, same zip — with the flag
+            # flipped in the copy rather than in the repository's config.
+            "config_path": config_path,
+            "pixelized_model": pixelized_model,
+            "pixelized_analysis": pixelized_analysis,
         }
     finally:
         # Restore the repository config for any test module that runs after
@@ -384,6 +398,26 @@ def _wcs_dict_from(files_path):
     return al.from_json(file_path=wcs_path)
 
 
+def _assert_images_consistent(record, keys):
+    """
+    One entry per image in each of the four lists, at least one image, every
+    value finite — the part of the image contract that does not depend on which
+    model the ``Drawer`` happened to draw.
+
+    The *number* of images deliberately is not asserted for the pixelized leg;
+    ``test_a_pixelized_real_mode_fit_writes_its_clumps_to_wcs_json`` says why.
+    """
+    lengths = {key: len(record[key]) for key in keys}
+
+    assert len(set(lengths.values())) == 1, (
+        f"one entry per image in each of the four lists, got {lengths}"
+    )
+    assert next(iter(lengths.values())) >= 1, f"at least one image, got {lengths}"
+
+    for key in keys:
+        assert np.all(np.isfinite(record[key])), f"{key} must be finite"
+
+
 def _assert_images(wcs_dict, keys, n_images):
     lengths = {key: len(wcs_dict[key]) for key in keys}
     assert set(lengths.values()) == {n_images}, (
@@ -427,6 +461,21 @@ def test_a_pixelized_real_mode_fit_writes_its_clumps_to_wcs_json(run_level):
     checked in ``test_wcs_dict.py``; this proves the write happens on the
     production path — through ``result.max_log_likelihood_fit``, under
     ``hpc_mode``'s zip-and-remove — and that nothing is lost to the envelope.
+
+    **Counts are not asserted here, on purpose.** The ``Drawer`` draws
+    ``einstein_radius`` at random within 10 per cent of the truth, while the
+    ``Delaunay`` mesh (and the adapt image behind it) is built once at the
+    *truth* lens, so every draw fits the data through a mesh it does not match
+    and the reconstruction rearranges itself. Swept across the prior
+    (2026-09-16, 11 values either side): the brightest clump is 3-13 mesh
+    pixels and has 3 or 4 image regions, and the count does not settle even at
+    0.5 per cent from the truth — it is chaotic in the drawn parameter, not
+    noisy around a value. So what is asserted here is what holds for any draw:
+    the record is written, it carries at least one clump, its rule is one the
+    finder can produce, and the four image lists agree with each other. The
+    exact clump — one clump of three mesh pixels, four images on the truth
+    positions — belongs to ``test_wcs_dict.py``, whose fit has zero free
+    parameters and is therefore the same fit every run.
     """
     wcs_dict = _wcs_dict_from(run_level["pixelized"])
 
@@ -436,19 +485,94 @@ def test_a_pixelized_real_mode_fit_writes_its_clumps_to_wcs_json(run_level):
     assert isinstance(clumps, list) and len(clumps) >= 1, (
         f"a pixelized fit must record at least one clump; got {clumps!r}"
     )
-    assert len(clumps) == 1, (
-        "the simulated source is one smooth Sersic, which the default threshold "
-        f"isolates as one clump; got {len(clumps)}"
+
+    rule = wcs_dict["source_clump_rule"]
+    assert rule in ("percentile", "brightest_pixel"), (
+        f"something was reconstructed, so the rule cannot be `none`; got {rule!r}"
     )
 
     clump = clumps[0]
-    assert clump["mesh_pixels"] >= util.SOURCE_CLUMP_MIN_PIXELS
     assert clump["peak_value"] > 0.0
-    _assert_images(clump, CLUMP_IMAGE_KEYS, n_images=4)
+
+    if rule == "percentile":
+        assert clump["mesh_pixels"] >= util.SOURCE_CLUMP_MIN_PIXELS
+    else:
+        assert clump["mesh_pixels"] == 1, (
+            "the brightest-pixel failsafe records exactly one mesh pixel; got "
+            f"{clump['mesh_pixels']}"
+        )
+
+    _assert_images_consistent(clump, CLUMP_IMAGE_KEYS)
 
     assert wcs_dict["source_centre_y_arcsec"] == clump["peak_y_arcsec"]
     assert wcs_dict["source_centre_x_arcsec"] == clump["peak_x_arcsec"]
-    _assert_images(wcs_dict, WCS_IMAGE_KEYS, n_images=4)
+    _assert_images_consistent(wcs_dict, WCS_IMAGE_KEYS)
+
+
+def _coolest_template_from(files_path):
+    """
+    ``files/coolest.json`` as plain JSON. Unlike ``wcs.json`` this is not a
+    PyAutoFit dictable envelope — the COOLEST serializer writes the standard's
+    own schema, which is what a lenstronomy or herculens reader parses.
+    """
+    coolest_path = files_path / "coolest.json"
+    assert coolest_path.is_file(), f"save_results must write {coolest_path}"
+
+    with open(coolest_path) as f:
+        return json.load(f)
+
+
+def _mass_profile_types(template):
+    """
+    Every mass profile of the template, across entities: COOLEST puts external
+    shear in its own ``MassField`` rather than on the galaxy.
+    """
+    return sorted(
+        profile["type"]
+        for entity in template["lensing_entities"]
+        for profile in entity.get("mass_model", [])
+    )
+
+
+@pytest.mark.parametrize("leg", ("light_profile", "pixelized"))
+def test_a_real_mode_fit_writes_its_coolest_template(run_level, leg):
+    """
+    ``util.AnalysisImaging.save_results`` writes ``files/coolest.json`` beside
+    ``files/wcs.json``, for a light-profile *and* a pixelized source: the
+    run-level proof that the COOLEST export runs at the end of a real fit and
+    its template survives the zip, which no test-mode smoke can show
+    (``skip_fit_output`` gates the whole of ``save_results``).
+
+    The values are checked in ``test_coolest_output.py``; this asserts the
+    template is written, is a MAP template of this pipeline, carries the full
+    ``Isothermal`` + ``ExternalShear`` mass model both legs fit, and is stamped
+    with the fitted cut-out's own pixel grid rather than a grid of zeros.
+    """
+    template = _coolest_template_from(run_level[leg])
+
+    assert template["mode"] == "MAP"
+    assert template["meta"]["pipeline"] == util.COOLEST_PIPELINE_NAME
+    assert template["meta"]["dataset"] == SIMULATED_DATASET
+
+    assert _mass_profile_types(template) == ["ExternalShear", "SIE"]
+
+    pixels = template["observation"]["pixels"]
+    assert pixels["num_pix_x"] > 0 and pixels["num_pix_y"] > 0
+    assert pixels["field_of_view_x"][1] > pixels["field_of_view_x"][0]
+
+
+def test_a_pixelized_real_mode_fit_names_its_pixelization_as_skipped(run_level):
+    """
+    COOLEST has no profile for a ``Pixelization``, so ``on_unsupported="skip"``
+    exports the mass model and names the source under ``meta.skipped_profiles``
+    — the one thing that stops a reader mistaking the template for the whole
+    model.
+    """
+    template = _coolest_template_from(run_level["pixelized"])
+
+    skipped = [entry["profile"] for entry in template["meta"]["skipped_profiles"]]
+
+    assert any(profile.startswith("Pixelization(") for profile in skipped), skipped
 
 
 def test_the_aggregator_reads_both_records_back(run_level):
@@ -476,3 +600,123 @@ def test_the_aggregator_reads_both_records_back(run_level):
     assert isinstance(pixelized["source_clumps"][0], dict)
     assert isinstance(pixelized["source_clumps"][0]["image_ra_deg"], list)
     assert isinstance(by_model["light_profile"]["lensed_source_image_ra_deg"], list)
+
+
+def _wcs_members_of(zip_path):
+    with zipfile.ZipFile(zip_path) as archive:
+        return [name for name in archive.namelist() if name.endswith("files/wcs.json")]
+
+
+def test_force_pickle_overwrite_rewrites_wcs_json(run_level, tmp_path):
+    """
+    The upgrade path, and the **last** test in this module because it mutates
+    the ``drawer_pix`` output: ``files/wcs.json`` is deleted out of the search's
+    zip and the same search re-run with ``force_pickle_overwrite: true``, which
+    is how an already-finished DR1 run gets a record it was fitted without.
+
+    ``AbstractSearch.result_via_completed_fit`` is the path under test: the fit
+    is complete, so no likelihood is evaluated and no sample changes — the
+    search reports "Fit Already Completed" and, on the flag, calls
+    ``analysis.save_results`` again. So the identifier (and therefore the zip
+    name) must be unchanged and the record must be back, decoded, with its
+    clumps and the solver keys.
+
+    The flag is flipped in a *second copy* of the config, never in the
+    repository's ``config/general.yaml``, and the fixture's own copy is pushed
+    back in a ``finally`` — the fixture's own ``finally`` then re-pushes the
+    repository config for whatever module runs next. It has to be a second
+    directory rather than an edit of the copy already pushed: ``Config.push``
+    returns immediately when the path handed to it is already ``configs[0]``
+    (``autonerves/conf.py``), so editing a pushed config and pushing it again
+    is a no-op and the search would read the stale ``false``.
+    """
+    import autofit as af
+    from autolens import conf
+
+    search_output = run_level["output"] / "latent_run_level" / "drawer_pix"
+    zips = list(search_output.rglob("*.zip"))
+
+    assert len(zips) == 1, f"one output zip for `drawer_pix`; found {zips}"
+    zip_path = zips[0]
+
+    assert len(_wcs_members_of(zip_path)) == 1
+
+    # Rewrite the archive without `files/wcs.json`: a zip member cannot be
+    # deleted in place, so every other member is copied into a new archive.
+    with zipfile.ZipFile(zip_path) as archive:
+        kept = [
+            (info, archive.read(info.filename))
+            for info in archive.infolist()
+            if not info.filename.endswith("files/wcs.json")
+        ]
+
+    stripped = tmp_path / zip_path.name
+    with zipfile.ZipFile(stripped, "w", zipfile.ZIP_DEFLATED) as archive:
+        for info, payload in kept:
+            archive.writestr(info.filename, payload)
+
+    shutil.move(str(stripped), str(zip_path))
+
+    assert _wcs_members_of(zip_path) == [], (
+        "the record must be gone before the re-run, or this proves nothing"
+    )
+
+    forced_config = tmp_path / "config_forced"
+    shutil.copytree(run_level["config_path"], forced_config)
+
+    general_yaml = forced_config / "general.yaml"
+    flipped = general_yaml.read_text().replace(
+        "force_pickle_overwrite: false", "force_pickle_overwrite: true", 1
+    )
+
+    assert "force_pickle_overwrite: true" in flipped, (
+        "config/general.yaml no longer carries `force_pickle_overwrite: false`; "
+        "this test flips that exact line"
+    )
+    general_yaml.write_text(flipped)
+
+    try:
+        conf.instance.push(new_path=forced_config, output_path=run_level["output"])
+
+        # `AbstractSearch.__init__` reads the flag, so the search is built after
+        # the push, not before it.
+        search = af.Drawer(
+            path_prefix="latent_run_level",
+            name="drawer_pix",
+            total_draws=PIXELIZED_TOTAL_DRAWS,
+        )
+        search.fit(
+            model=run_level["pixelized_model"], analysis=run_level["pixelized_analysis"]
+        )
+    finally:
+        conf.instance.push(
+            new_path=run_level["config_path"], output_path=run_level["output"]
+        )
+
+    zips_after = list(search_output.rglob("*.zip"))
+
+    assert [path.name for path in zips_after] == [zip_path.name], (
+        "the re-run must land on the same identifier, so the same zip is "
+        f"rewritten rather than a second one created; found {zips_after}"
+    )
+    assert len(_wcs_members_of(zip_path)) == 1, (
+        "force_pickle_overwrite must write files/wcs.json back into the search "
+        "output"
+    )
+
+    extracted = tmp_path / "rewritten"
+    with zipfile.ZipFile(zip_path) as archive:
+        archive.extractall(extracted)
+
+    files_path = next(path for path in extracted.rglob("files") if path.is_dir())
+
+    wcs_dict = _wcs_dict_from(files_path)
+
+    assert wcs_dict["source_model"] == "pixelized"
+    assert wcs_dict["source_clumps"], (
+        f"the rewritten record must carry its clumps; got {wcs_dict['source_clumps']!r}"
+    )
+    assert wcs_dict["source_clump_rule"] in ("percentile", "brightest_pixel")
+
+    _assert_images_consistent(wcs_dict, WCS_IMAGE_KEYS)
+    _assert_images_consistent(wcs_dict["source_clumps"][0], CLUMP_IMAGE_KEYS)

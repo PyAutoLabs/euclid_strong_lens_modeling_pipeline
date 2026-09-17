@@ -82,6 +82,10 @@ IMAGE_KEYS = (
 )
 SOURCE_KEYS = CENTRE_KEYS + IMAGE_KEYS
 
+# The keys a pixelized record adds, in written order: the clumps read off the
+# mapper, and the rule that found them (`util.source_clump_pix_indexes_from`).
+PIXELIZED_KEYS = ("source_clumps", "source_clump_rule")
+
 # The keys of one `source_clumps` entry (the mapper route), in written order.
 CLUMP_KEYS = (
     "peak_y_arcsec",
@@ -478,8 +482,9 @@ def test_a_solver_failure_is_logged_and_its_keys_left_absent(
 
 
 def test_a_pixelized_source_writes_its_clumps_and_the_solver_keys(pixelized_wcs_dict):
-    assert tuple(pixelized_wcs_dict) == LENS_KEYS + ("source_clumps",) + SOURCE_KEYS
+    assert tuple(pixelized_wcs_dict) == LENS_KEYS + PIXELIZED_KEYS + SOURCE_KEYS
     assert pixelized_wcs_dict["source_model"] == "pixelized"
+    assert pixelized_wcs_dict["source_clump_rule"] == "percentile"
 
     clumps = pixelized_wcs_dict["source_clumps"]
 
@@ -587,3 +592,255 @@ def test_a_clump_finder_failure_is_logged_and_leaves_only_the_lens_keys(
     assert tuple(wcs_dict) == LENS_KEYS
     assert wcs_dict["source_model"] == "pixelized"
     assert "no mapper" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# The clump scale: the 99th percentile, not the maximum
+# ---------------------------------------------------------------------------
+
+
+def _neighbors_from(rows):
+    """
+    A ``Neighbors`` from a list of neighbour lists, padded with ``-1``.
+
+    ``Neighbors`` is the mesh's adjacency: ``arr[i, :sizes[i]]`` are pixel
+    ``i``'s neighbours and the rest of the row is ``-1``
+    (``autoarray.inversion.linear_obj.neighbors``). Building one by hand is what
+    lets these tests state a mesh in three lines instead of fitting one.
+    """
+    from autoarray.inversion.linear_obj.neighbors import Neighbors
+
+    width = max(len(row) for row in rows)
+    arr = -np.ones((len(rows), width), dtype=int)
+
+    for index, row in enumerate(rows):
+        arr[index, : len(row)] = row
+
+    return Neighbors(arr=arr, sizes=np.array([len(row) for row in rows], dtype=int))
+
+
+def _spiked_mesh():
+    """
+    A 200-pixel mesh carrying the failure this module is about: a broad faint
+    source and one isolated spike a hundred times brighter.
+
+    Pixels 0-9 are a closed ring of mutually connected pixels at ~1.0 (the
+    source), pixel 10 is the spike at 50.0 whose only two neighbours are zero,
+    and pixels 11-199 are a zero chain. The numbers are the shape of the real
+    thing: on the four ``dr1_sep1`` ``vis_pix`` fits the brightest mesh pixel is
+    5-33x its own brightest neighbour.
+    """
+    reconstruction = np.zeros(200)
+    reconstruction[:10] = 1.0 + 0.01 * np.arange(10)
+    reconstruction[10] = 50.0
+
+    rows = [[(index - 1) % 10, (index + 1) % 10] for index in range(10)]
+    rows += [[11, 12], [10, 12], [10, 11]]
+    rows += [
+        [index for index in (pixel - 1, pixel + 1) if 13 <= index <= 199]
+        for pixel in range(13, 200)
+    ]
+
+    return reconstruction, _neighbors_from(rows)
+
+
+def test_the_clump_finder_ignores_an_isolated_spike():
+    """
+    The spike is not a clump and does not set the scale: the source ring is
+    found whole, and the isolated pixel a hundred times brighter than it is in
+    no clump at all.
+
+    The control is the **shipped** rule — ``Inversion.source_clumps_from``'s
+    ``reconstruction > threshold * max(reconstruction)``, reproduced inline —
+    which finds nothing here, because only the spike clears half of its own
+    value and one pixel is fewer than ``SOURCE_CLUMP_MIN_PIXELS``. That is the
+    failure measured on all four ``dr1_sep1`` tiles, and it is why this test is
+    red on the method it replaces.
+    """
+    from autoarray.inversion.mappings.mapping import connected_components_from
+
+    reconstruction, neighbors = _spiked_mesh()
+
+    clumps, rule = util.source_clump_pix_indexes_from(
+        reconstruction=reconstruction, neighbors=neighbors
+    )
+
+    assert rule == "percentile"
+    assert len(clumps) == 1
+    assert sorted(clumps[0]) == list(range(10)), (
+        f"the source ring is one clump of ten pixels; got {clumps[0]}"
+    )
+    assert 10 not in clumps[0]
+    assert clumps[0][int(np.argmax(reconstruction[clumps[0]]))] == 9
+
+    # The control: the shipped rule, scaled against the maximum.
+    indexes = np.where(
+        reconstruction > util.SOURCE_CLUMP_THRESHOLD * reconstruction.max()
+    )[0]
+    shipped = [
+        component
+        for component in connected_components_from(indexes=indexes, neighbors=neighbors)
+        if component.shape[0] >= util.SOURCE_CLUMP_MIN_PIXELS
+    ]
+
+    assert shipped == [], (
+        "the control must be empty: scaled against the maximum only the spike "
+        f"clears the threshold, and it is one pixel; got {shipped}"
+    )
+
+
+def test_the_failsafe_records_the_brightest_pixel(caplog):
+    """
+    When every pixel above the threshold is isolated, no group reaches
+    ``SOURCE_CLUMP_MIN_PIXELS`` and the record would be empty — so the finder
+    falls back to the single brightest mesh pixel, says so in the rule, and
+    logs a warning. The record then carries a clump of ``mesh_pixels: 1``,
+    which is how a reader tells the failsafe from a real clump.
+    """
+    reconstruction = np.zeros(200)
+    reconstruction[0] = 10.0
+    reconstruction[50] = 6.0
+    reconstruction[100] = 5.0
+
+    neighbors = _neighbors_from(
+        [
+            [index for index in (pixel - 1, pixel + 1) if 0 <= index <= 199]
+            for pixel in range(200)
+        ]
+    )
+
+    with caplog.at_level(logging.WARNING, logger="util"):
+        clumps, rule = util.source_clump_pix_indexes_from(
+            reconstruction=reconstruction, neighbors=neighbors
+        )
+
+    assert rule == "brightest_pixel"
+    assert len(clumps) == 1
+    assert list(clumps[0]) == [0]
+    assert "brightest_pixel" in caplog.text
+
+
+def test_an_empty_reconstruction_finds_nothing_and_says_so(caplog):
+    """
+    Nothing reconstructed is not a failsafe case: there is no brightest pixel
+    worth recording, so the rule is ``"none"``, the clump list is empty and
+    nothing is logged.
+    """
+    neighbors = _neighbors_from([[1], [0]])
+
+    with caplog.at_level(logging.WARNING, logger="util"):
+        clumps, rule = util.source_clump_pix_indexes_from(
+            reconstruction=np.zeros(2), neighbors=neighbors
+        )
+
+    assert (clumps, rule) == ([], "none")
+    assert caplog.text == ""
+
+
+class _PatchedInversion:
+    """The fit's inversion with one reconstruction swapped, everything else real."""
+
+    def __init__(self, inversion, reconstruction_dict):
+        self._inversion = inversion
+        self.reconstruction_dict = reconstruction_dict
+
+    def cls_list_from(self, cls):
+        return self._inversion.cls_list_from(cls=cls)
+
+    def mappings_from(self, **kwargs):
+        return self._inversion.mappings_from(**kwargs)
+
+
+class _PatchedFit:
+    """The fit with a ``_PatchedInversion``, everything else real."""
+
+    def __init__(self, fit, inversion):
+        self._fit = fit
+        self.inversion = inversion
+
+    def __getattr__(self, name):
+        return getattr(self._fit, name)
+
+
+def test_the_pixelized_fit_survives_a_spike(pixelized_fit, truth):
+    """
+    The end-to-end version of the same failure, on the real fitted mesh: a
+    spike thirty times the reconstruction's maximum, injected far from the
+    source at a mesh pixel whose neighbours are all dark, must not move the
+    clump off the truth source centre and must not join a clump itself.
+
+    The session fixture is not mutated. ``reconstruction_dict`` is a cached
+    property of the inversion, so rather than write to the shared object the
+    fit is wrapped: ``_PatchedFit`` exposes a ``_PatchedInversion`` carrying a
+    fresh ``{mapper: spiked}`` dict and delegating ``cls_list_from`` and
+    ``mappings_from`` to the real inversion (``mappings_from(pix_indexes=...)``
+    reads the reconstruction only for the clumps' peak values, never for the
+    finding).
+    """
+    import autolens as al
+
+    inversion = pixelized_fit.inversion
+    mapper = inversion.cls_list_from(cls=al.Mapper)[util.SOURCE_CLUMP_MAPPER_INDEX]
+
+    reconstruction = np.asarray(inversion.reconstruction_dict[mapper])
+    mesh_grid = np.asarray(mapper.source_plane_mesh_grid)
+
+    source = list(truth["model"].values())[-1]
+    centre_y, centre_x = source["profiles"]["bulge"]["parameters"]["centre"]
+
+    neighbors = np.asarray(mapper.neighbors)
+    sizes = np.asarray(mapper.neighbors.sizes, dtype=int)
+    distances = np.hypot(mesh_grid[:, 0] - centre_y, mesh_grid[:, 1] - centre_x)
+
+    def neighbors_of(pixel):
+        row = neighbors[pixel][: sizes[pixel]]
+        return row[row >= 0]
+
+    def local_spacing(pixel):
+        row = neighbors_of(pixel)
+        return float(
+            np.median(
+                np.hypot(
+                    mesh_grid[row, 0] - mesh_grid[pixel, 0],
+                    mesh_grid[row, 1] - mesh_grid[pixel, 1],
+                )
+            )
+        )
+
+    spacing_at_centre = local_spacing(int(np.argmin(distances)))
+
+    # The farthest dark mesh pixel with no bright neighbour: the spike must be
+    # somewhere the source is not, or it is not testing anything.
+    dark = [
+        pixel
+        for pixel in range(reconstruction.size)
+        if reconstruction[pixel] == 0.0
+        and np.all(reconstruction[neighbors_of(pixel)] == 0.0)
+    ]
+    spike_index = max(dark, key=lambda pixel: distances[pixel])
+
+    assert distances[spike_index] > 3.0 * spacing_at_centre
+
+    spiked = reconstruction.copy()
+    spiked[spike_index] = 30.0 * float(reconstruction.max())
+
+    clumps, rule = util.pixelized_source_clumps_from(
+        _PatchedFit(
+            pixelized_fit,
+            _PatchedInversion(inversion, {mapper: spiked}),
+        )
+    )
+
+    assert rule == "percentile"
+    assert len(clumps) >= 1
+
+    assert clumps[0]["peak_y_arcsec"] == pytest.approx(centre_y, abs=PEAK_ABS)
+    assert clumps[0]["peak_x_arcsec"] == pytest.approx(centre_x, abs=PEAK_ABS)
+
+    pix_indexes, _ = util.source_clump_pix_indexes_from(
+        reconstruction=spiked, neighbors=mapper.neighbors
+    )
+
+    assert not any(spike_index in clump for clump in pix_indexes), (
+        f"mesh pixel {spike_index} is the injected spike and must be in no clump"
+    )

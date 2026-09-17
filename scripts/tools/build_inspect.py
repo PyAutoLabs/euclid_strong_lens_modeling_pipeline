@@ -1,11 +1,11 @@
 """
-Euclid Pipeline: Inspection PNG Collector
-==========================================
+Euclid Pipeline: Inspection File Collector
+===========================================
 
-Collects the six per-lens PNGs of the inspection bundle into a flat
-``inspect/<sample>/<dataset_name>/`` layout, so a whole sample can be reviewed
-by scrolling one folder instead of clicking through ``output/`` and unpacking a
-zip per lens.
+Collects the six per-lens PNGs and the two COOLEST templates of the inspection
+bundle into a flat ``inspect/<sample>/<dataset_name>/`` layout, so a whole
+sample can be reviewed by scrolling one folder instead of clicking through
+``output/`` and unpacking a zip per lens.
 
 Six images are collected per lens (two of them best-effort):
 
@@ -19,6 +19,14 @@ Six images are collected per lens (two of them best-effort):
   present only once that pipeline has run for the lens
 - ``segmentation.png``                — copied from the dataset folder; its
   ultimate producer is ``preprocess/segmentation.py``
+
+Two COOLEST templates are collected alongside them, both best-effort — a result
+fitted before the pipeline started writing them simply has none:
+
+- ``coolest.json``                    — ``initial_lens_model/vis_pix``'s
+  ``files/coolest.json``, the COOLEST template of the pixelized-source fit
+- ``coolest_sersic.json``             — ``sersic_lens_model/vis``'s
+  ``files/coolest.json``, present only once that pipeline has run for the lens
 
 This script *collects*, it never re-renders: images come out of the result zip
 that PyAutoFit writes when a search finishes, or — when the results have not
@@ -109,9 +117,9 @@ def extract_zip_member(zip_path: Path, member: str, dest: Path) -> bool:
         return False
 
 
-def collect_image(source, member: str, dest: Path) -> bool:
+def collect_member(source, member: str, dest: Path) -> bool:
     """
-    Copy one result image to ``dest``, from a zip member or from the same
+    Copy one result file to ``dest``, from a zip member or from the same
     relative path inside an unzipped result directory.
     """
     if source is None:
@@ -139,8 +147,8 @@ def process_dataset(
     dataset_dir: Path, dataset_main_dir: Path, inspect_dir: Path
 ) -> str:
     """
-    Collect one lens's images. Returns ``built``, ``already``, ``skipped`` or
-    ``error``.
+    Collect one lens's images and COOLEST templates. Returns ``built``,
+    ``already``, ``skipped`` or ``error``.
     """
     dataset_name = dataset_dir.name
 
@@ -158,31 +166,34 @@ def process_dataset(
         "vis_lp_image_with_positions.png": out_dir / "vis_lp_image_with_positions.png",
         "rgb.png": out_dir / "rgb.png",
         "segmentation.png": out_dir / "segmentation.png",
+        "coolest.json": out_dir / "coolest.json",
     }
-    # fit_sersic.png is optional — only present once the sersic pipeline has
-    # finished for this lens. Adding it to the targets when the result exists
-    # stops the "already" check from skipping a lens that has just gained one.
+    # fit_sersic.png and coolest_sersic.json are optional — only present once
+    # the sersic pipeline has finished for this lens. Adding them to the targets
+    # when the result exists stops the "already" check from skipping a lens that
+    # has just gained one.
     if sersic_source is not None:
         targets["fit_sersic.png"] = out_dir / "fit_sersic.png"
+        targets["coolest_sersic.json"] = out_dir / "coolest_sersic.json"
 
     if all(path.exists() for path in targets.values()):
         return "already"
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    if not collect_image(vis_lp_source, "image/fit.png", targets["vis_lp_fit.png"]):
+    if not collect_member(vis_lp_source, "image/fit.png", targets["vis_lp_fit.png"]):
         return "error"
-    if not collect_image(vis_pix_source, "image/fit.png", targets["vis_pix_fit.png"]):
+    if not collect_member(vis_pix_source, "image/fit.png", targets["vis_pix_fit.png"]):
         return "error"
 
     # Best-effort: a lens without positions.json has no positions overlay.
-    collect_image(
+    collect_member(
         vis_lp_source,
         "image/image_with_positions.png",
         targets["vis_lp_image_with_positions.png"],
     )
 
-    if not collect_image(vis_lp_source, "image/rgb.png", targets["rgb.png"]):
+    if not collect_member(vis_lp_source, "image/rgb.png", targets["rgb.png"]):
         for extension in (".jpg", ".png", ".jpeg"):
             rgb_fallback = dataset_main_dir / dataset_name / f"rgb_0{extension}"
             if rgb_fallback.exists():
@@ -193,8 +204,16 @@ def process_dataset(
     if segmentation_source.exists():
         shutil.copy(segmentation_source, targets["segmentation.png"])
 
+    # Best-effort: results fitted before the pipeline wrote COOLEST templates
+    # carry no `files/coolest.json`, and a run whose `coolest` package was
+    # missing logged a warning instead of writing one.
+    collect_member(vis_pix_source, "files/coolest.json", targets["coolest.json"])
+
     if sersic_source is not None:
-        collect_image(sersic_source, "image/fit.png", targets["fit_sersic.png"])
+        collect_member(sersic_source, "image/fit.png", targets["fit_sersic.png"])
+        collect_member(
+            sersic_source, "files/coolest.json", targets["coolest_sersic.json"]
+        )
 
     return "built"
 
