@@ -2,7 +2,7 @@
 Euclid Catalogue: Shared Helpers
 =================================
 
-The six catalogue producers under ``catalogue/scripts/`` all do the same three
+The eight catalogue producers under ``catalogue/scripts/`` all do the same three
 things around their (different) aggregator queries:
 
 1. resolve ``--output_path`` / ``--inspect_dir`` against the project root and
