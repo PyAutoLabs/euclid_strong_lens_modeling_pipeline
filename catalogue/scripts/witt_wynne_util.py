@@ -129,7 +129,7 @@ __Usage__
     )
     if model.valid:
         x_image, y_image, magnification, angle = model.images()
-        verdict = n_images_from(x_image)                 # 4, 2, 1 or -1
+        verdict = n_images_from(x_image)                 # 4, 3, 2, 1 or -1
         lags = model.lags(x_image=x_image, y_image=y_image)
         write_isit_input(path=inspect_path / "witt_wynne.in", model=model)
         row = isit_csv_row(name=lens_name, model=model)
