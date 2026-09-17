@@ -157,16 +157,46 @@ finished `vis_lp`/`vis_pix`, as before.
 - Median |`grid_offset_y`| **0.026"**, median |`grid_offset_x`| **0.029"** — well inside the
   ±0.2" (two VIS pixel) uniform prior, i.e. most bands register to VIS at the few-hundredths
   of an arcsec level.
-- **Three rows sit within 0.011" of the prior edge**, which the producer's docstring calls a QA
-  flag rather than a measurement:
+- **Four rows sit within 0.03" of the prior edge** — the threshold on this table is now
+  **0.03"** (|offset| > 0.17"), not the 0.011" first used, which hid the fourth row. The
+  producer's docstring calls a row at the edge a QA flag rather than a measurement:
 
-  | lens | band | `grid_offset_y` | `grid_offset_x` |
-  |---|---|---:|---:|
-  | `Tile102008165RA0109661927007DECNEG0642904268129` | `nir_h` | 0.1787 | **0.1909** |
-  | `Tile102008165RA0109661927007DECNEG0642904268129` | `nir_j` | 0.1571 | **0.1906** |
-  | `Tile102008219RA0727857418392DECNEG0644388277074` | `decam_g` | **0.1938** | -0.1234 |
+  | lens | band | `grid_offset_y` | `grid_offset_x` | 3σ bound touching ±0.2"? |
+  |---|---|---:|---:|---|
+  | `Tile102008165RA0109661927007DECNEG0642904268129` | `nir_h` | 0.1787 | **0.1909** | x upper 0.1910, y upper 0.1788 |
+  | `Tile102008165RA0109661927007DECNEG0642904268129` | `nir_j` | 0.1571 | **0.1906** | **x upper 0.2000**, **y upper 0.1993** |
+  | `Tile102008219RA0727857418392DECNEG0644388277074` | `decam_g` | **0.1938** | -0.1234 | **y upper 0.2000** |
+  | `Tile102008475RA0039777627054DECNEG0637715426503` | `decam_i` | 0.1773 | **-0.1855** | y upper 0.1996, x lower -0.1999 |
 
   Both `Tile102008165…` NISP rows push the same way in x; `nir_y` on the same tile does not.
+  Three of the four have a 3σ bound sitting **on** a prior limit (0.2000 / -0.1999), i.e. the
+  posterior is truncated, not merely close to the edge.
+
+### Same edge in both deliveries
+
+The prelim bundle
+`/mnt/c/Users/Jammy/Science/euclid_dr1_prelim/inspect/dr1_prelim_grade_ab_342629/astrometric_offsets.csv`
+has **four** rows past the same 0.17" threshold:
+
+| prelim lens | band | `grid_offset_y` | `grid_offset_x` |
+|---|---|---:|---:|
+| `Tile102007903RA0668831429074DECNEG0648901814905` | `decam_r` | **-0.1848** | **-0.1802** |
+| `Tile102008165RA0109664211519DECNEG0642902327064` | `nir_h` | **0.1835** | **0.1836** |
+| `Tile102008165RA0109664211519DECNEG0642902327064` | `nir_j` | 0.1728 | **0.1908** |
+| `Tile102008219RA0727851454839DECNEG0644382776514` | `decam_g` | **0.1966** | -0.1735 |
+
+Cross-matched through the mapping table in `state.md`, **the same two tile/band pairs sit at the
+same prior edge in both deliveries**: `Tile102008165…` `nir_h` and `nir_j` (x ≈ +0.19 in both),
+and `Tile102008219…` `decam_g` (y ≈ +0.19 in both). They are not the same cut-out — the sep1
+cut-out centres moved by **0.79"** (idx 5) and **2.19"** (idx 6) — and the segmentation changed,
+yet the fitted offset lands on the same limit. That is the signature of a **prior clipping a real
+offset larger than 0.2"**, not of a per-delivery fluke.
+
+The ±0.2" uniform prior is two VIS pixels at 0.1"/pixel. It is **smaller than one NISP pixel
+(0.3") and smaller than one DECam pixel (~0.26")**, so a genuine one-pixel registration error in
+those instruments cannot be represented at all. The prior lives at
+`scripts/lens_model_waveband.py:492-497` in the pipeline repo. Filed as a pipeline follow-up in the
+Mind: `PyAutoMind/draft/bug/euclid/datasetmodel_grid_offset_prior_0_2_clips.md` (`36db392b`).
 
 ### `magnitudes.csv`
 
@@ -194,7 +224,70 @@ python3 catalogue/scripts/source_sersic.py --sample=dr1_sep1 --output_path=outpu
 → `lens_sersic.csv` **9 rows**, `source_sersic.csv` **9 rows**, one per-lens copy each for all
 nine tiles.
 
+## `343381_8` diagnosed at 15:03 BST
+
+`343381_8` (`Tile102008532RA0683486015030DECNEG0642073552911`, idx 9) was still `RUNNING` at
+**1 h 26 min** elapsed (15:01 BST; 1 h 36 min at 15:12), still on its **first non-VIS band,
+`nir_y`**, output dir
+`output_sed/dr1_sep1/<tile>/sersic_lens_model/nir_y/337ab77d5369c13c1a92417f9b0dd61c`.
+
+**The `.out` log is not the signal.** It stops at the Nautilus start line (13:38:30) because
+python's stdout is block-buffered when redirected — nothing has flushed since. The signal is
+`files/search_internal/checkpoint.hdf5`, which was 6.3 MB with mtime 15:02:35 and still growing.
+A copy of it was pulled and read:
+
+- Nautilus attrs: `n_dim` **2**, `n_live` **75**, `n_batch` 100, **`n_like` 40000**,
+  **`explored=False`** — still in the exploration phase — and **20 shells** built.
+- `shell_n` for the last three shells: **15935, 14596, 5610** points, against ~100-370 for the
+  earlier shells. `shell_log_l_min` is converging on **-16037.3719**
+  (last three: -16037.38033, -16037.37204, -16037.37194) and `shell_log_v` is down to
+  **-21.5, -26.3**: the bound volume keeps shrinking while the likelihood floor moves by 1e-2
+  and then 1e-4 nats.
+- Shell 19's 5610 points span a logL range of **1e-3 nats** (-16037.37288 to -16037.37194) at
+  position mean (y, x) = **(0.010338, -0.008069)"** with std **(4.1e-8, 1.3e-6)"** — a region
+  ~**1e-7 arcsec** wide.
+- **Not an fp32 floor:** all 5610 logL values are distinct, minimum spacing 2.2e-11 — fp64.
+- **Not a prior-edge case:** no point of the 40000 has |offset| > 0.19", so the sampler is not
+  pinned against the ±0.2" grid-offset prior.
+- The single **highest-likelihood point of all 40000** is logL **-16029.2254** at
+  (y, x) = **(0.004092, -0.008149)"** — **8 nats above** the shell-19 plateau and 0.006" away in
+  y. **Only one** point of 40000 lies within 0.5 nats of it.
+
+**Reading.** The likelihood surface for this band is non-smooth: a lone 8-nat spike sitting on a
+plateau that the sampler keeps sub-dividing into ever-thinner shells. Nautilus therefore never
+reaches its `f_live` stop criterion and exploration does not terminate. The fast tiles finished
+`nir_y` in about a minute at ~1600 likelihood calls and 15 bounds; this one is at 40000 calls and
+20 shells.
+
+**Consequence.** The chain runs every band **sequentially in one process**, so the tile's other
+six bands (`nir_j`, `nir_h`, `decam_g/r/i/z`) cannot start until `nir_y` ends. At the 12 h
+walltime the task will be killed at about **01:33 BST on 2026-09-18 with no band completed** —
+one slow band costs the whole tile. A pipeline follow-up to cap the search is filed in the Mind:
+`PyAutoMind/draft/bug/euclid/sed_chain_waveband_fit_can_spin_forever.md` (`36db392b`).
+
 ## To finish `343381_8`
+
+**It will not finish on its own.** On the evidence above the `nir_y` search is in an exploration
+loop with no stop criterion in reach, so the outcome without intervention is the 12 h walltime
+kill at ~01:33 BST on 2026-09-18, with zero of the tile's seven bands written. **The choice is
+the human's:**
+
+**(a) Cancel and resubmit that tile with a capped / different search.**
+
+```
+ssh euclid_jump "scancel 343381_8"
+ssh euclid_jump "sacct -j 343381_8 -X --format=JobID,State,Elapsed"
+# then resubmit just that array index once the search is capped
+ssh euclid_jump "cd /mnt/ral/jnightin/euclid_dr1/hpc/batch_cpu && sbatch --array=8 submit_sersic_waveband"
+```
+
+Note the VIS Sersic fit and the seeded `vis_lp` are already written, so a resubmit short-circuits
+straight back to the wavebands. Nothing else in array `343381` is affected.
+
+**(b) Accept 8 of 9 and let the walltime kill it.** No command; the task dies at ~01:33 BST and
+the bundle stays at 52 / 61 rows with 8 lenses in `astrometric_offsets.csv`.
+
+**On either outcome, pull and rebuild the same way** (this is the unchanged recipe):
 
 ```
 ssh euclid_jump "squeue -u jnightin -j 343381"          # or: hpc/sync jobs
@@ -208,5 +301,5 @@ CREATE_ARCHIVE=0 OUTPUT_DIR=<scratch>/outB SED_OUTPUT_DIR=output_sed \
 ```
 
 `<scratch>/outB` is any directory holding `dr1_sep1 → /mnt/c/Users/Jammy/Science/euclid_dr1/output`.
-On completion `astrometric_offsets.csv` should reach **59 rows** across **9 lenses** and
-`magnitudes.csv` **68**.
+If the tile's seven bands do complete, `astrometric_offsets.csv` reaches **59 rows** across
+**9 lenses** and `magnitudes.csv` **68**; under (b) they stay at **52** and **61**.

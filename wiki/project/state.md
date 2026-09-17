@@ -67,20 +67,43 @@ not copied here.
 
 ## Where we are now
 
-- **The multi-band SED chain has run on the sep1 sample (2026-09-17).** SLURM array
-  **`343381`** (`euclid_sersic_waveband`, `--array=0,2-9`, partition `ral`, 8 cpus, 64 GB,
-  12 h) ran `hpc/batch_cpu/submit_sersic_waveband` — new in this clone at `2c4bead`, the
+- **The multi-band SED chain has run on the sep1 sample — 8 of 9 tiles done (2026-09-17).**
+  SLURM array **`343381`** (`euclid_sersic_waveband`, `--array=0,2-9`, partition `ral`, 8 cpus,
+  64 GB, 12 h) ran `hpc/batch_cpu/submit_sersic_waveband` — new in this clone at `2c4bead`, the
   prelim copy of pipeline PR #70's script with `PROJECT_PATH`, `sample=dr1_sep1` and the sep1
-  tile list re-pointed. **Eight of nine tasks `COMPLETED` in 6-16 min**; `343381_8`
-  (`Tile102008532RA0683486015030DECNEG0642073552911`) was still running 40 min in, on its
-  first waveband, and was left alone. The chain seeded off a **copy** of each tile's
-  `initial_lens_model/vis_lp/<hash>.zip` into `output_sed/dr1_sep1/<tile>/…`, and every task's
-  `.out` shows `Fit Already Completed` on the seeded hash, so no `vis_lp` was refitted. Local
-  `output_sed/` now mirrors RAL **nested** (`output_sed/dr1_sep1/<Tile>/…`, 70 zips: 9 seeds,
-  9 `sersic_lens_model/vis`, 52 waveband fits). The bundle `inspect/dr1_sep1/` gained
+  tile list re-pointed. **Eight tasks `COMPLETED` in 6-16 min.** The chain seeded off a **copy**
+  of each tile's `initial_lens_model/vis_lp/<hash>.zip` into `output_sed/dr1_sep1/<tile>/…`, and
+  every task's `.out` shows `Fit Already Completed` on the seeded hash, so no `vis_lp` was
+  refitted. Local `output_sed/` mirrors RAL **nested** (70 zips: 9 seeds, 9
+  `sersic_lens_model/vis`, 52 waveband fits). Journal: `2026-09-17-sed-chain-sep1.md`.
+- **The ninth task, `343381_8`, is a Nautilus exploration pathology — the decision is the
+  human's (diagnosed 15:03 BST 2026-09-17).** `Tile102008532RA0683486015030DECNEG0642073552911`
+  has spent 1 h 36 min on its **first** non-VIS band (`nir_y`) where the other tiles took a
+  minute a band. Its `checkpoint.hdf5` reads `n_like` **40000**, `explored=False`, **20 shells**,
+  the last three holding 15935 / 14596 / 5610 points with `shell_log_l_min` converging on
+  **-16037.3719** and shell 19 spanning **1e-3 nats** over a region **1e-7 arcsec** wide — while
+  the single best point of the 40000 is **8 nats higher** (logL -16029.2254) and 0.006" away.
+  Not fp32 (min logL spacing 2.2e-11), not a prior edge (no point past |0.19"|): a non-smooth
+  likelihood with a lone spike on a plateau, so the `f_live` stop criterion is never reached.
+  Because the bands run sequentially in one process, the tile's other six bands cannot start and
+  the 12 h walltime kills the task at **~01:33 BST 2026-09-18 with no band completed**. Choice:
+  **(a)** `scancel 343381_8` and resubmit under a capped search, or **(b)** accept 8 of 9 —
+  commands for both in the journal's "To finish `343381_8`".
+- **The bundle stands at 52 / 61 rows.** `inspect/dr1_sep1/` carries
   **`astrometric_offsets.csv` (52 rows, 8 lenses, 7 bands)** and **`magnitudes.csv` (61 rows)**,
-  and every tile folder gained `fit_multi_wavelength.png`. Journal:
-  `2026-09-17-sed-chain-sep1.md`.
+  and every tile folder gained `fit_multi_wavelength.png`. Under (a) these reach 59 / 68; under
+  (b) they stay as they are.
+- **Four rows sit at the ±0.2" grid-offset prior edge, and two tile/band pairs repeat prelim's
+  edge.** sep1: `Tile102008165…` `nir_h` (x 0.1909) and `nir_j` (x 0.1906),
+  `Tile102008219…` `decam_g` (y 0.1938), `Tile102008475…` `decam_i` (x -0.1855) — three of the
+  four with a 3σ bound sitting **on** a limit (0.2000 / -0.1999). The prelim bundle `342629` has
+  the **same two tile/band pairs** at the same edge (plus `Tile102007903…` `decam_r`), although
+  the sep1 cut-out centres moved by 0.79" and 2.19". The prior (two VIS pixels) is smaller than
+  one NISP pixel (0.3") and one DECam pixel (~0.26"), so it is clipping a real offset.
+- **Two pipeline follow-ups are filed in the Mind (2026-09-17):** the uncapped waveband search
+  and the too-narrow grid-offset prior — `PyAutoMind/draft/bug/euclid/sed_chain_waveband_fit_can_spin_forever.md` and
+  `PyAutoMind/draft/bug/euclid/datasetmodel_grid_offset_prior_0_2_clips.md` (Mind `36db392b`). Neither is a local fix; nothing in
+  this clone was edited.
 - **The nine completed sep1 fits now carry `files/coolest.json` (2026-09-17).** The
   `feature/coolest-observation-grid` work is merged in this clone at `60133f8` and on the RAL
   stack (PyAutoLens `223132c0b`, PR #740), `coolest` **0.1.11** is installed in the RAL venv,
@@ -123,13 +146,14 @@ not copied here.
 
 ## In flight
 
-- **`343381_8` is still running on RAL** — the SED chain on
+- **`343381_8` is still running on RAL, and will not finish on its own** — the SED chain on
   `Tile102008532RA0683486015030DECNEG0642073552911`, submitted 13:33 BST on 2026-09-17, past
-  40 min on its first waveband (`nir_y`) where every other tile took about a minute a band. Its
-  VIS Sersic fit is already written; its walltime is 12 h and its
-  `search_internal/checkpoint.hdf5` was still growing. When it clears, re-pull
-  `output_sed/dr1_sep1/` and rebuild the bundle — `astrometric_offsets.csv` should reach 59
-  rows across 9 lenses and `magnitudes.csv` 68. The other eight tasks of array **`343381`**
+  **1 h 36 min** on its first waveband (`nir_y`). Diagnosed from `checkpoint.hdf5` as a Nautilus
+  exploration loop on a non-smooth likelihood (see "Where we are now"); its 12 h walltime kills
+  it at ~01:33 BST on 2026-09-18 with none of its seven bands written. The human chooses
+  `scancel` + capped resubmit, or accept 8 of 9. On either outcome re-pull `output_sed/dr1_sep1/`
+  and rebuild the bundle — `astrometric_offsets.csv` reaches 59 rows across 9 lenses and
+  `magnitudes.csv` 68 only if the tile completes. The other eight tasks of array **`343381`**
   (`--array=0,2-9`) are `COMPLETED`.
 - **SLURM array `342650`** (`euclid_dr1_two_stage`, `--array=0-9`) **is finished**: nine of the
   ten tiles completed both stages (18 zips under `output/dr1_sep1/<tile>/initial_lens_model/`),
@@ -214,6 +238,13 @@ not copied here.
   (the tools accept an absolute `--output_path`); do not restructure `output/`.
 - **Read the inner zips in place.** `zipfile.ZipFile(outer.open(inner))` works because the three
   inner zips are STORED; extracting the outer archive first costs 14.8 GB of `/mnt/c` for nothing.
+
+- **A Nautilus waveband fit can spin in exploration forever on a non-smooth likelihood**, and
+  the `.out` log is **block-buffered** so it looks frozen at the sampler start line with no new
+  output for hours. Read `files/search_internal/checkpoint.hdf5` over ssh — `n_like`,
+  `explored`, `shell_n` — not the log. A growing checkpoint means "still sampling", not
+  "making progress": compare the shell point counts and `shell_log_l_min` against a tile that
+  finished.
 
 ## Journal index
 
