@@ -12,7 +12,7 @@ and they differ in purpose rather than in mechanism. `workflow/` holds *general
 examples* of the aggregator export API — `csv_make.py`, `png_make.py` and
 `fits_make.py` teach it step by step, and `workflow/example/` shows it applied to
 real Euclid runs. `catalogue/` holds the *production* producers: the scripts the
-bundle builder actually runs to write the 18 bundle files and the master CSVs.
+bundle builder actually runs to write the 20 bundle files and the master CSVs.
 
 The clearest way in is to read the two side by side.
 `workflow/example/csv/lens_mass.py` builds the same table as
@@ -28,7 +28,7 @@ Producers live in `catalogue/scripts/`. The two orchestration scripts live in
 `scripts/` beside the pipelines they read from:
 
 ```
-scripts/build_inspection_bundle.sh   # runs the eight stages in order
+scripts/build_inspection_bundle.sh   # runs the nine stages in order
 scripts/tools/build_inspect.py             # stage 1 — collects 6 PNGs + 2 COOLEST templates
 catalogue/scripts/
   catalogue_util.py                  # shared path resolution + per-lens CSV split
@@ -37,13 +37,15 @@ catalogue/scripts/
   lens_mass.py                       # stage 4 — lens_mass.csv
   lens_sersic.py                     # stage 5 — lens_sersic.csv
   source_sersic.py                   # stage 6 — source_sersic.csv
-  multi_wavelength.py                # stage 7 — fit_multi_wavelength.png
-  magnitudes.py                      # stage 8 — magnitudes.csv
+  witt_wynne_util.py                 # SIEP solver + projection (no CLI)
+  witt_wynne.py                      # stage 7 — witt_wynne.csv, witt_wynne.in
+  multi_wavelength.py                # stage 8 — fit_multi_wavelength.png
+  magnitudes.py                      # stage 9 — magnitudes.csv
 ```
 
 ---
 
-## The 18 bundle files and what produces each
+## The 20 bundle files and what produces each
 
 Every file of a complete per-lens bundle, the script that produces it, and
 whether that script *generates* the file from the fit or *collects* an image the
@@ -55,6 +57,8 @@ fit already wrote.
 | `lens_sersic.csv` | `catalogue/scripts/lens_sersic.py` | generates | `sersic_lens_model/vis` |
 | `source_sersic.csv` | `catalogue/scripts/source_sersic.py` | generates | `sersic_lens_model/vis` |
 | `magnitudes.csv` | `catalogue/scripts/magnitudes.py` | generates | multi-band `sersic_lens_model/<band>` in `output_sed/` |
+| `witt_wynne.csv` | `catalogue/scripts/witt_wynne.py` | generates | `initial_lens_model/vis_pix` |
+| `witt_wynne.in` | `catalogue/scripts/witt_wynne.py` | generates | `initial_lens_model/vis_pix` |
 | `pre_psf.fits` | `catalogue/scripts/deblending.py` | generates | `sersic_lens_model` (every waveband) |
 | `model.fits` | `catalogue/scripts/deblending.py` | generates | `sersic_lens_model` (every waveband) |
 | `convergence.fits` | `catalogue/scripts/lens_mass_maps.py` | collects `image/tracer.fits` | `initial_lens_model/vis_pix` |
@@ -104,7 +108,7 @@ and neither is a fault in the producers:
 
 ## Run order
 
-`scripts/build_inspection_bundle.sh` runs the eight stages in dependency order.
+`scripts/build_inspection_bundle.sh` runs the nine stages in dependency order.
 It is idempotent — every stage skips work that is already done, so re-run it as
 more fits land.
 
@@ -115,19 +119,20 @@ bash scripts/build_inspection_bundle.sh dr1_prelim_grade_ab run250
 
 | Stage | Script | Reads | Writes |
 |---|---|---|---|
-| 1/8 | `scripts/tools/build_inspect.py` | `output/<sample>/` | the 6 collected PNGs + 2 COOLEST templates |
-| 2/8 | `catalogue/scripts/deblending.py` | `output/<sample>/` | `pre_psf.fits`, `model.fits` |
-| 3/8 | `catalogue/scripts/lens_mass_maps.py` | `output/<sample>/` | `convergence.fits`, `potential.fits`, `deflections.fits` |
-| 4/8 | `catalogue/scripts/lens_mass.py` | `output/<sample>/` | `lens_mass.csv` |
-| 5/8 | `catalogue/scripts/lens_sersic.py` | `output/<sample>/` | `lens_sersic.csv` |
-| 6/8 | `catalogue/scripts/source_sersic.py` | `output/<sample>/` | `source_sersic.csv` |
-| 7/8 | `catalogue/scripts/multi_wavelength.py` | `output_sed/<sample>/` | `fit_multi_wavelength.png` |
-| 8/8 | `catalogue/scripts/magnitudes.py` | `output_sed/<sample>/` | `magnitudes.csv` |
+| 1/9 | `scripts/tools/build_inspect.py` | `output/<sample>/` | the 6 collected PNGs + 2 COOLEST templates |
+| 2/9 | `catalogue/scripts/deblending.py` | `output/<sample>/` | `pre_psf.fits`, `model.fits` |
+| 3/9 | `catalogue/scripts/lens_mass_maps.py` | `output/<sample>/` | `convergence.fits`, `potential.fits`, `deflections.fits` |
+| 4/9 | `catalogue/scripts/lens_mass.py` | `output/<sample>/` | `lens_mass.csv` |
+| 5/9 | `catalogue/scripts/lens_sersic.py` | `output/<sample>/` | `lens_sersic.csv` |
+| 6/9 | `catalogue/scripts/source_sersic.py` | `output/<sample>/` | `source_sersic.csv` |
+| 7/9 | `catalogue/scripts/witt_wynne.py` | `output/<sample>/` | `witt_wynne.csv`, `witt_wynne.in` |
+| 8/9 | `catalogue/scripts/multi_wavelength.py` | `output_sed/<sample>/` | `fit_multi_wavelength.png` |
+| 9/9 | `catalogue/scripts/magnitudes.py` | `output_sed/<sample>/` | `magnitudes.csv` |
 
 Everything lands in `inspect/<sample>[_<run_tag>]/`, with the master CSVs at the
 root and one folder per lens holding that lens's own copy of every product.
 
-Stages 7 and 8 read a **separate** results tree. The multi-band SED fits are run
+Stages 8 and 9 read a **separate** results tree. The multi-band SED fits are run
 with `PYAUTO_OUTPUT_DIR=output_sed` (see `scripts/sersic_lens_model_waveband.py`
 and `scripts/lens_model_waveband.py`), so those two stages are skipped when
 `output_sed/<sample>/` does not exist. Set `SKIP_SED=1` to skip them
@@ -135,7 +140,7 @@ deliberately while SED jobs are still running.
 
 ### Fits the bundle expects
 
-Producing all 18 files needs three pipeline runs per lens:
+Producing all 20 files needs three pipeline runs per lens:
 
 ```bash
 python scripts/initial_lens_model.py --dataset=<lens> --sample=<sample>
@@ -150,9 +155,9 @@ plus `preprocess/segmentation.py` for `segmentation.png`.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `OUTPUT_DIR` | `output` | results tree read by stages 1-6 |
-| `SED_OUTPUT_DIR` | `output_sed` | results tree read by stages 7-8 |
-| `SKIP_SED` | `0` | `1` skips stages 7-8 |
+| `OUTPUT_DIR` | `output` | results tree read by stages 1-7 |
+| `SED_OUTPUT_DIR` | `output_sed` | results tree read by stages 8-9 |
+| `SKIP_SED` | `0` | `1` skips stages 8-9 |
 | `CREATE_ARCHIVE` | `1` | `0` skips the closing `tar czf` |
 | `DATASET_PREFIX` | *(empty)* | restrict stage 1 to lens folders with this name prefix (`Tile` for DR1) |
 
@@ -203,7 +208,17 @@ Every producer can also be run on its own; each takes `--sample`,
   reconstructed. Read it through the aggregator
   (`agg.values("wcs")`), which decodes PyAutoFit's JSON envelope; that envelope
   drops `None` values, so an unavailable value is an absent key and
-  `source_model` says why. No producer publishes the image positions yet.
+  `source_model` says why.
+- **The image positions are published as a projection, not as a solve.**
+  `witt_wynne.py` (stage 7) projects each lens's mass model onto a Witt-Wynne
+  SIEP and writes the 4 / 2 / 1 verdict, the predicted image positions, their
+  magnifications and their time lags into `witt_wynne.csv`, plus the
+  zero-centred `isit4or2or1` input file `witt_wynne.in` beside it. They are the
+  *SIEP's* images, not `al.PointSolver`'s: the projection agrees with the
+  tracer's own solve 68/68 inside the caustic and 51/68 outside it, positions to
+  0.07–0.4", on the 136-case grid of the 2026-09-17 review. No sky coordinate is
+  written — every position is relative to the lens centre. Read
+  [`../docs/witt_wynne.md`](../docs/witt_wynne.md) before using them.
 
 ---
 
@@ -212,7 +227,7 @@ Every producer can also be run on its own; each takes `--sample`,
 The DR1 science tree (`Science/euclid/catalogue/scripts/`) holds 21 further
 files that are deliberately **not** in this repository. They are either
 downstream consumers of a finished catalogue, superseded precursors, or
-paper-figure code — none of them produce any of the 18 bundle files.
+paper-figure code — none of them produce any of the 20 bundle files.
 
 | Not ported | Count | Why |
 |---|---|---|
