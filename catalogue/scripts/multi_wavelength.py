@@ -27,7 +27,7 @@ band fitted without a source model produces.
 The SED chain is run with ``PYAUTO_OUTPUT_DIR=output_sed``, so this producer
 reads ``output_sed`` by default rather than the main ``output``.
 
-Stage 6 of ``scripts/build_inspection_bundle.sh``.
+Stage 8 of ``scripts/build_inspection_bundle.sh``.
 
 __What It Reads, And What It Does Not Do__
 

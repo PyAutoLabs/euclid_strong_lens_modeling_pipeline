@@ -21,7 +21,7 @@ enters the non-linear samples. Each column comes in five flavours: median,
 lower/upper 1σ, lower/upper 3σ. Only lenses with a ``.completed`` marker are
 listed, and the master CSV is split into one row per lens folder.
 
-Stage 5 of ``scripts/build_inspection_bundle.sh``.
+Stage 6 of ``scripts/build_inspection_bundle.sh``.
 
 __The Other Half Of One Fit__
 
