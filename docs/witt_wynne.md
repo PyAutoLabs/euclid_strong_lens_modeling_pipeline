@@ -13,8 +13,9 @@ The singular isothermal elliptical **potential** (SIEP) is the one strong-lens
 model whose lens equation collapses to a quartic with a closed-form solution.
 Four numbers — an Einstein radius `b`, an ellipticity `e`, a position angle, and
 the source's offset from the lens centre — give you, without iteration, the
-number of images (4, 2 or 1), where they are, their signed magnifications and
-their relative time lags. A solve costs about 60 µs.
+number of images (4 / 3 / 2 / 1 — 3 only for flattened lenses, `e` ≳ 0.36,
+when the source crosses the pseudo-caustic), where they are, their signed
+magnifications and their relative time lags. A solve costs about 60 µs.
 
 That speed is the whole point. Paul Schechter's `isit4or2or1` exists so an LSST
 alert broker can answer "is this transient a fourth image of a known quad, or a
@@ -33,7 +34,11 @@ Two projections are available:
 
 - **`--projection=caustic`** (the default) fits the SIEP astroid to the tracer's
   own tangential caustic. Because a caustic is a property of the whole tracer,
-  external shear and any secondary perturber are folded in automatically.
+  external shear and any secondary perturber are folded in automatically. The
+  astroid is centred on the first admissible lens-plane mass profile's centre
+  while the caustic it is fitted to comes from the whole tracer, so with a
+  strong secondary perturber — whose caustic centroid is displaced from that
+  centre — the fitted astroid sits slightly off the caustic.
 - **`--projection=vector_sum`** is Schechter's literal prescription: add the
   potential ellipticity and the shear as vectors in the 2θ plane and discard
   the perpendicular components. It reads only the first admissible mass
@@ -84,9 +89,10 @@ and every `image*_x` / `image*_y` are in that same zero-centred frame.
 From the independent numerical review of 2026-09-17 (posted in full on
 [issue #84](https://github.com/PyAutoLabs/euclid_strong_lens_modeling_pipeline/issues/84)),
 which used `al.PointSolver` and `tracer.time_delays_from` as oracles over a
-136-case grid — axis ratio `q ∈ {0.5, 0.7, 0.85, 0.95}` × shear
-`γ ∈ {0, 0.03, 0.06, 0.1, 0.15}` × misalignment `{0, 30, 60, 90}°`, with sources
-at 0.5× and 1.02× the caustic:
+grid of axis ratio `q ∈ {0.5, 0.7, 0.85, 0.95}` × shear
+`γ ∈ {0, 0.03, 0.06, 0.1, 0.15}` × misalignment `{0, 30, 60, 90}°` — 68
+distinct configurations once the `γ = 0` misalignment duplicates are collapsed,
+× 2 source scales (0.5× and 1.02× the caustic) = 136 cases:
 
 | | verdict, source **inside** the caustic | verdict, source **outside** | median / max Δposition | max Δlag |
 |---|---|---|---|---|
@@ -148,7 +154,10 @@ instead, and a lens is never dropped from the catalogue because of either.
   `nan` fields would be read by the C++ as data.
 - **`n_images = -1`** means the *solve* was degenerate on an otherwise valid
   model: the source lies on a potential axis or at the lens centre
-  (`min(|p|, |q|) < 1e-6`), `e ∉ (0, 1)`, or a position, magnification or angle
+  (`min(|p|, |q|) < 1e-6`), `e ∉ (0, 1)`, no quartic root survived the
+  lens-equation filter, the solve landed in the ambiguity band (a residual
+  between the per-solve tolerance and `1e-2`, which fires only for `|Δy| ≲ 3e-5"`
+  off the major axis at `e ≈ 0.4`), or a position, magnification or angle
   came back non-finite (a source exactly on a fold or cusp). The image,
   magnification and lag cells are blank. It can never be confused with a genuine
   1-image verdict, whose position is finite.

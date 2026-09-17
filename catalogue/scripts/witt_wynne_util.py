@@ -8,7 +8,9 @@ New here? Read `start_here.py` for the pipeline entry point and
 The singular isothermal elliptical *potential* (SIEP) is the one strong-lens
 model whose lens equation reduces to a quartic with a closed-form solution.
 Given a source position it returns, without any iteration, the number of images
-(4, 2 or 1), their positions, their signed magnifications and their time lags.
+(4 / 3 / 2 / 1 -- 3 only for flattened lenses, ``e`` >~ 0.36, when the source
+crosses the pseudo-caustic), their positions, their signed magnifications and
+their time lags.
 That speed is what makes it usable inside a transient broker: when a supernova
 alert lands near a known quad, the question "is this a fourth image or a
 foreground star?" has to be answered before the object fades.
@@ -77,6 +79,11 @@ exactly:
   elongates the tangential caustic *along* ``theta``, whereas an external shear
   at ``theta_gamma`` elongates it at ``theta_gamma + 90``. The shear therefore
   enters the 2-theta vector sum **with a minus sign**, as ``-(gamma_1, gamma_2)``.
+- The astroid fitted by ``ellipticity_from_caustic`` is centred on
+  ``mass_list[0].centre`` -- the first admissible lens-plane mass profile --
+  while ``b`` and the caustic it is fitted to come from the whole tracer. With a
+  strong secondary perturber the caustic's centroid is displaced from that
+  centre, so the fitted astroid sits slightly off the caustic it is matched to.
 - Distances are angular diameter distances in ``h^-1 Mpc``, with
   ``D_H = 3000 h^-1 Mpc``.
 - The original hardcodes ``h = 0.7`` in its ``TIMECONSTANT`` while taking
@@ -286,7 +293,7 @@ def find_intersections(
 
     scale = e * (2.0 - e)
     axis_ratio_squared = (1.0 - e) ** 2
-    tolerance = residual_threshold * max(1.0, p * p + q * q)
+    tolerance = min(residual_threshold * max(1.0, p * p + q * q), AMBIGUOUS_RESIDUAL)
 
     x_list, y_list = [], []
 
@@ -384,7 +391,7 @@ def _nan_row() -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
 
 def n_images_from(x_image: np.ndarray, y_image: Optional[np.ndarray] = None) -> int:
     """
-    The 4 / 2 / 1 verdict of an ``images_from_source`` result, or
+    The 4 / 3 / 2 / 1 verdict of an ``images_from_source`` result, or
     ``N_IMAGES_SENTINEL`` (-1) when the solve was degenerate.
 
     A sentinel row is all-NaN, so it can never be confused with a genuine
@@ -531,7 +538,8 @@ def source_from_image(
     ``centre`` is ``(x, y)``, the solver's order. Returns ``(nan, nan)`` rather
     than raising when ``e`` is outside ``(0, 1)``, ``b`` is not positive or an
     input is non-finite; the image plane's own degeneracy (an image exactly on
-    the potential's major axis, ``y_reg = 0``) returns the lens centre.
+    the potential's major axis, ``y_reg = 0``) also returns ``(nan, nan)``, from
+    the ``0 / 0`` in the last term.
     """
     if not _is_solvable(e=e, b=b, x_s=x_i, y_s=y_i, centre=centre):
         return float("nan"), float("nan")
@@ -710,7 +718,9 @@ class WittWynne:
         )
 
     def n_images(self) -> int:
-        """The 4 / 2 / 1 verdict, or ``N_IMAGES_SENTINEL`` (-1)."""
+        """The 4 / 3 / 2 / 1 verdict, or ``N_IMAGES_SENTINEL`` (-1); 3 fires only
+        for flattened lenses (``e`` >~ 0.36) whose source crosses the
+        pseudo-caustic."""
         x_image, y_image, _, _ = self.images()
         return n_images_from(x_image, y_image)
 
@@ -798,13 +808,29 @@ def _is_admissible_mass(profile) -> bool:
     return isinstance(profile, _mass_classes())
 
 
-def _admissible_mass_list_from(tracer) -> list:
-    """Every Isothermal/PowerLaw-family mass profile in the tracer, in order."""
+def _lens_plane_mass_profile_list_from(tracer) -> list:
+    """
+    Every mass profile of the **lens plane** (``tracer.planes[0]``), in order.
+
+    Selection is restricted to the first plane because a mass profile or an
+    ``ExternalShear`` attached to the *source* galaxy is not part of the lens
+    this projection describes: taken tracer-wide it would be eligible for the
+    vector sum's ``ell_comps`` and would name itself in the ``mass_profile``
+    column.
+    """
     import autogalaxy as ag
 
+    if not tracer.planes:
+        return []
+
+    return tracer.planes[0].cls_list_from(cls=ag.mp.MassProfile)
+
+
+def _admissible_mass_list_from(tracer) -> list:
+    """Every Isothermal/PowerLaw-family lens-plane mass profile, in order."""
     return [
         profile
-        for profile in tracer.cls_list_from(cls=ag.mp.MassProfile)
+        for profile in _lens_plane_mass_profile_list_from(tracer)
         if _is_admissible_mass(profile)
     ]
 
@@ -815,7 +841,7 @@ def _shear_from(tracer):
     return next(
         (
             profile
-            for profile in tracer.cls_list_from(cls=ag.mp.MassProfile)
+            for profile in _lens_plane_mass_profile_list_from(tracer)
             if isinstance(profile, ag.mp.ExternalShear)
         ),
         None,

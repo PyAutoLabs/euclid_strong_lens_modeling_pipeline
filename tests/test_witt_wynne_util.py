@@ -470,6 +470,58 @@ def test_an_mge_light_basis_is_never_taken_for_the_lens_mass():
     assert abs(lit_sum.pa_deg - dark_sum.pa_deg) < 0.1
 
 
+def test_a_mass_profile_on_the_source_galaxy_is_not_the_lens():
+    """
+    Selection is per plane, not tracer-wide.
+
+    A mass profile or an ``ExternalShear`` on the *source* galaxy belongs to a
+    second deflector behind the lens, not to the lens this projection
+    describes. Taken tracer-wide it would be eligible: the vector sum would read
+    its ``ell_comps`` and the producer's ``mass_profile`` column would name it,
+    and with the source's own shear picked the potential is rotated outright.
+    """
+    import autolens as al
+    import autogalaxy as ag
+
+    mass, shear = _lens_mass(), _external_shear()
+
+    lens = al.Galaxy(redshift=0.5, mass=mass, shear=shear)
+    source_with_mass = al.Galaxy(
+        redshift=1.5,
+        mass=al.mp.Isothermal(
+            centre=(0.9, -0.8),
+            ell_comps=ag.convert.ell_comps_from(axis_ratio=0.4, angle=115.0),
+            einstein_radius=0.6,
+        ),
+        shear=_external_shear(magnitude=0.2, angle=5.0),
+    )
+
+    tracer = al.Tracer(galaxies=[lens, source_with_mass], cosmology=al.cosmo.Planck15())
+
+    picked_mass, picked_shear = witt_wynne_util._mass_and_shear_from(tracer=tracer)
+
+    assert picked_mass.centre == mass.centre
+    assert picked_mass.einstein_radius == mass.einstein_radius
+    assert picked_shear.gamma_1 == shear.gamma_1
+    assert picked_shear.gamma_2 == shear.gamma_2
+
+    # One admissible profile, so no "2 admissible mass profiles" caveat either.
+    assert len(witt_wynne_util._admissible_mass_list_from(tracer)) == 1
+
+    grid, source_centre = _grid(), (0.03, 0.05)
+
+    with_source_mass = witt_wynne_util.witt_wynne_vector_sum(
+        tracer=tracer, grid=grid, source_centre=source_centre
+    )
+    lens_only = witt_wynne_util.witt_wynne_vector_sum(
+        tracer=_tracer_from(lens), grid=grid, source_centre=source_centre
+    )
+
+    assert with_source_mass.valid and lens_only.valid
+    assert with_source_mass.e == lens_only.e
+    assert with_source_mass.pa_deg == lens_only.pa_deg
+
+
 def test_a_second_mass_profile_is_recorded_rather_than_ignored():
     import autolens as al
 

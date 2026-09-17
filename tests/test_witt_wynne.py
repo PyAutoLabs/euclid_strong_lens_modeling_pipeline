@@ -21,8 +21,16 @@ catalogue depends on and a fit cannot tell you:
 5. **The wiring.** The bundle script has to actually call the producer, and its
    stage echoes have to be a consecutive ``1..9`` after the renumber.
 
-JAX-free and fit-free: the only library import any test makes is the ``numpy``
-``witt_wynne_util`` already needs. No aggregator, no dataset, no search.
+6. **The empty-query skip.** ``dataset_names_from`` lists every directory under
+   ``output/<sample>/``, so a lens with results from another stage only, or one
+   whose fit is still in flight, reaches the producer with an empty aggregator
+   query. That has to be a per-lens skip, because the bundle runs under
+   ``set -e``.
+
+JAX-free and fit-free: no non-linear search runs and no fit is read. Every test
+but the empty-query one imports only the ``numpy`` ``witt_wynne_util`` already
+needs; that one runs ``main()`` over a temporary output tree with no results in
+it, which imports ``autolens`` but reads nothing.
 """
 
 import argparse
@@ -376,6 +384,58 @@ def test_parse_args_rejects_an_unknown_projection(monkeypatch):
 
     with pytest.raises(SystemExit):
         witt_wynne.parse_args()
+
+
+def test_parse_args_rejects_redshifts_that_are_not_ordered(monkeypatch):
+    for argv in [
+        ["witt_wynne.py", "--z_lens=1.0", "--z_source=0.5"],
+        ["witt_wynne.py", "--z_lens=0.5", "--z_source=0.5"],
+        ["witt_wynne.py", "--z_lens=-0.5"],
+    ]:
+        monkeypatch.setattr(sys, "argv", argv)
+
+        with pytest.raises(SystemExit):
+            witt_wynne.parse_args()
+
+
+"""
+__The Empty Query__
+
+`dataset_names_from` lists every directory under `output/<sample>/`, so a lens
+with only another stage's results, or one whose fit is still running, reaches
+the per-lens loop with an empty aggregator query. `next(iter(...))` on one of
+those raises `StopIteration`, which the per-lens guard did not catch and which
+would abort stage 7 -- and with it every later stage, because the bundle runs
+under `set -e`.
+"""
+
+
+def test_a_lens_with_no_completed_fit_is_skipped_not_raised(
+    tmp_path, monkeypatch, capsys
+):
+    output_path = tmp_path / "output"
+    inspect_path = tmp_path / "inspect"
+
+    (output_path / "no_fit_sample" / "lens_0000").mkdir(parents=True)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "witt_wynne.py",
+            "--sample=no_fit_sample",
+            f"--output_path={output_path}",
+            f"--inspect_dir={inspect_path}",
+        ],
+    )
+
+    witt_wynne.main()
+
+    out = capsys.readouterr().out
+
+    assert "skipping lens_0000: no completed initial_lens_model/vis_pix fit" in out
+    assert "no lenses projected; no witt_wynne.csv written" in out
+    assert not (inspect_path / "witt_wynne.csv").exists()
 
 
 """

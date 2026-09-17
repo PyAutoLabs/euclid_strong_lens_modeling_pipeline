@@ -15,8 +15,9 @@ Produces two per-lens products plus one master table:
 Each row is the lens's mass model projected onto a singular isothermal
 elliptical **potential** (SIEP): an Einstein radius ``b``, a gravlens
 ellipticity ``e``, a position angle East of North, the source's offset from the
-lens centre, and — solved from those four numbers in closed form — the 4 / 2 / 1
-verdict, the image positions, their signed magnifications and their time lags.
+lens centre, and — solved from those four numbers in closed form — the
+4 / 3 / 2 / 1 verdict, the image positions, their signed magnifications and
+their time lags.
 
 The point of the product is corroboration, not precision. When a transient
 alert lands near a known Euclid lens, Schechter's LSST-broker code
@@ -240,7 +241,12 @@ def source_centre_recomputed_from(agg_query):
     import util
 
     fit_gen = al.agg.FitImagingAgg(aggregator=agg_query).max_log_likelihood_gen_from()
-    fit = next(iter(fit_gen))[0]
+    fit_entry = next(iter(fit_gen), None)
+
+    if fit_entry is None:
+        return None, "none"
+
+    fit = fit_entry[0]
 
     centre = util.source_centre_from(fit.tracer)
 
@@ -432,7 +438,17 @@ def parse_args():
             "Default: 0.05."
         ),
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if not 0.0 < args.z_lens < args.z_source:
+        parser.error(
+            f"--z_lens ({args.z_lens}) and --z_source ({args.z_source}) must "
+            "satisfy 0 < z_lens < z_source: the angular diameter distance "
+            "between them is otherwise negative or zero and every lag is "
+            "meaningless."
+        )
+
+    return args
 
 
 def _distances_from(cosmology, z_lens: float, z_source: float):
@@ -501,6 +517,12 @@ def main():
         else witt_wynne_util.witt_wynne_vector_sum
     )
 
+    fit_tag = (
+        args.unique_tag
+        if args.search_name is None
+        else f"{args.unique_tag}/{args.search_name}"
+    )
+
     rows = []
 
     for dataset_name in dataset_name_list:
@@ -518,15 +540,34 @@ def main():
             if args.search_name is not None:
                 agg_query = agg_query.query(agg_query.search.name == args.search_name)
 
-            tracer = next(
+            """
+            __No Completed Fit__
+
+            `dataset_names_from` lists every directory under `output/<sample>/`,
+            so a lens with results from another stage only, or one whose fit is
+            still in flight, reaches here with an empty query. An empty
+            aggregator query is an empty `map`, so `next` without a default
+            raises `StopIteration` -- which is not caught below and would abort
+            the whole bundle. It is a per-lens skip instead.
+            """
+            tracer_entry = next(
                 iter(
                     al.agg.TracerAgg(aggregator=agg_query).max_log_likelihood_gen_from()
-                )
-            )[0]
+                ),
+                None,
+            )
 
-            dataset = next(
-                iter(al.agg.ImagingAgg(aggregator=agg_query).dataset_gen_from())
-            )[0]
+            dataset_entry = next(
+                iter(al.agg.ImagingAgg(aggregator=agg_query).dataset_gen_from()),
+                None,
+            )
+
+            if tracer_entry is None or dataset_entry is None:
+                print(f"skipping {dataset_name}: no completed {fit_tag} fit")
+                continue
+
+            tracer = tracer_entry[0]
+            dataset = dataset_entry[0]
 
             """
             __The Source Position__
@@ -603,7 +644,13 @@ def main():
                 )
             )
 
-        except (ValueError, FileNotFoundError, KeyError, IndexError) as e:
+        except (
+            ValueError,
+            FileNotFoundError,
+            KeyError,
+            IndexError,
+            StopIteration,
+        ) as e:
             print(f"skipping {dataset_name}: {e}")
             continue
 
