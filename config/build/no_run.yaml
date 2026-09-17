@@ -32,6 +32,7 @@
 
 - util  # Shared pipeline helpers (dataset loading, the latent catalogue, plotting) imported by every script. A module, not a runnable script. Stem-matched, not path-matched, so it cannot also swallow catalogue_util.py.
 - catalogue/scripts/catalogue_util.py  # Shared helpers for the catalogue producers (path resolution, per-tile CSV splitting). A module, not a runnable script.
+- catalogue/scripts/witt_wynne_util.py  # Catalogue helper module (imported by catalogue/scripts/witt_wynne.py); no CLI
 
 # --- Interactive GUI tools ------------------------------------------------
 # Each opens a matplotlib window and blocks until a human clicks or types.
