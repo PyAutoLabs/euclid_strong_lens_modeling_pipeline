@@ -68,6 +68,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import util  # noqa: E402
 
+# The half-width of the grid-offset prior the band fits are given. Imported
+# rather than repeated, so the fixture below is fitted under the prior the
+# pipeline actually uses and the prior-edge assertions move with it.
+from scripts.lens_model_waveband import GRID_OFFSET_PRIOR_ARCSEC  # noqa: E402
+
 # The ``ast`` reader below extends `test_catalogue_parity`'s, and shares its two
 # node helpers rather than growing a second copy of them.
 from test_catalogue_parity import _keyword, _literal  # noqa: E402
@@ -315,7 +320,9 @@ def test_magnitudes_writes_no_blank_cells(tmp_path, monkeypatch, pipeline_config
     import autolens as al
 
     model = af.Collection(
-        galaxies=af.Collection(lens=af.Model(al.Galaxy, redshift=0.5, bulge=al.lp.Sersic))
+        galaxies=af.Collection(
+            lens=af.Model(al.Galaxy, redshift=0.5, bulge=al.lp.Sersic)
+        )
     )
 
     offset = 1.0
@@ -373,8 +380,18 @@ OFFSET_Y_PATH = "dataset_model.grid_offset.grid_offset_0"
 OFFSET_X_PATH = "dataset_model.grid_offset.grid_offset_1"
 
 # The bands of the offset fixture: one VIS result with no `dataset_model` (the
-# frame the offsets are measured against) and two band results with one.
-OFFSET_BANDS = ("vis", "nir_h", "nir_j")
+# frame the offsets are measured against) and three band results with one. The
+# third, `decam_g`, is the prior-edge band: its x posterior is shifted until the
+# 3 sigma upper bound sits on the prior limit, which is what `prior_edge_x` is
+# for.
+OFFSET_BANDS = ("vis", "nir_h", "nir_j", "decam_g")
+EDGE_BAND = "decam_g"
+
+# The x shift that puts `decam_g`'s 3 sigma upper bound exactly on the prior's
+# upper limit. Read off the prior the fixture is built with, so widening
+# `GRID_OFFSET_PRIOR_ARCSEC` moves the fixture with it rather than silently
+# leaving a row that no longer reaches the edge.
+EDGE_SHIFT_X = GRID_OFFSET_PRIOR_ARCSEC - REFERENCE_OFFSET_X["_upper_3_sigma"]
 
 
 def _offset_model():
@@ -390,24 +407,27 @@ def _offset_model():
 
     dataset_model = af.Model(al.DatasetModel)
     dataset_model.grid_offset.grid_offset_0 = af.UniformPrior(
-        lower_limit=-0.2, upper_limit=0.2
+        lower_limit=-GRID_OFFSET_PRIOR_ARCSEC, upper_limit=GRID_OFFSET_PRIOR_ARCSEC
     )
     dataset_model.grid_offset.grid_offset_1 = af.UniformPrior(
-        lower_limit=-0.2, upper_limit=0.2
+        lower_limit=-GRID_OFFSET_PRIOR_ARCSEC, upper_limit=GRID_OFFSET_PRIOR_ARCSEC
     )
 
     return af.Collection(
-        galaxies=af.Collection(
-            lens=al.Galaxy(redshift=0.5, bulge=al.lp.Sersic())
-        ),
+        galaxies=af.Collection(lens=al.Galaxy(redshift=0.5, bulge=al.lp.Sersic())),
         dataset_model=dataset_model,
     )
 
 
-def _offset_summary(model, shift):
+def _offset_summary(model, shift, shift_x=None):
     """
     A ``SamplesSummary`` carrying the reference posterior, every value moved by
     ``shift`` so each row of the fixture is distinguishable from the others.
+
+    ``shift_x`` moves the x offset by a different amount from the y offset,
+    which is what the prior-edge band needs: one component pressed against its
+    prior limit while the other sits well inside it, so a flag that ignored the
+    component it was computed for would be caught.
 
     Written by hand rather than quantiled out of a ``SamplesPDF``: this test is
     a known-answer test, and what it has to prove is that the six flavours of
@@ -417,8 +437,11 @@ def _offset_summary(model, shift):
     from autofit.non_linear.samples.summary import SamplesSummary
     from autofit.non_linear.samples.sample import Sample
 
+    if shift_x is None:
+        shift_x = shift
+
     def value(values, suffix):
-        return values[suffix] + shift
+        return values[suffix] + (shift if values is REFERENCE_OFFSET_Y else shift_x)
 
     def sample(suffix):
         return Sample(
@@ -496,10 +519,10 @@ def test_astrometric_offsets_writes_the_fitted_offset(
     tmp_path, monkeypatch, pipeline_config
 ):
     """
-    Two lenses, each fitted in ``vis`` (no ``dataset_model``) and two bands
+    Two lenses, each fitted in ``vis`` (no ``dataset_model``) and three bands
     (one each), scraped by the real ``main()``.
 
-    Three things are under test at once, and each fails differently:
+    Four things are under test at once, and each fails differently:
 
     * **The VIS results produce no row.** Their model has no
       ``dataset_model.grid_offset``, so ``add_variable`` would write them as
@@ -515,6 +538,12 @@ def test_astrometric_offsets_writes_the_fitted_offset(
       a mis-mapped ``grid_offset_0`` / ``grid_offset_1``, a swapped ``y`` / ``x``
       name or a wrong value type fails here rather than shipping a plausible
       wrong column.
+    * **The prior-edge flags mark the right rows.** ``decam_g``'s x posterior is
+      shifted until its 3σ upper bound sits on the prior's upper limit while its
+      y posterior stays well inside; ``prior_edge_x`` must be ``True`` on those
+      two rows only, and ``prior_edge_y`` ``False`` everywhere. A flag computed
+      from a literal rather than the result's own prior, read off the wrong
+      component, or matched to the wrong row all fail here.
     """
     import autofit as af
     import autolens as al
@@ -523,7 +552,9 @@ def test_astrometric_offsets_writes_the_fitted_offset(
     # `dataset_model` — it is the astrometric frame, not a band measured
     # against it.
     vis_model = af.Collection(
-        galaxies=af.Collection(lens=af.Model(al.Galaxy, redshift=0.5, bulge=al.lp.Sersic))
+        galaxies=af.Collection(
+            lens=af.Model(al.Galaxy, redshift=0.5, bulge=al.lp.Sersic)
+        )
     )
 
     offset_model = _offset_model()
@@ -544,12 +575,22 @@ def test_astrometric_offsets_writes_the_fitted_offset(
                 continue
             # The reference row is (LENS_NAMES[0], "nir_h"), written unshifted.
             shift = 0.1 * (2 * lens_index + band_index - 1)
-            shifts[(lens_name, band)] = shift
+            # `decam_g` is the prior-edge band: its x posterior is pushed out
+            # until the 3 sigma upper bound reaches the prior limit (a little
+            # short of it for the second lens, so the two rows are still
+            # distinguishable and both stay inside the prior), while its y
+            # posterior keeps the ordinary per-lens shift.
+            if band == EDGE_BAND:
+                shift = 0.1 * lens_index
+                shift_x = EDGE_SHIFT_X - 0.001 * lens_index
+            else:
+                shift_x = shift
+            shifts[(lens_name, band)] = (shift, shift_x)
             _write_offset_result(
                 offset_model,
                 path_prefix=Path(SAMPLE) / lens_name,
                 name=band,
-                summary=_offset_summary(offset_model, shift),
+                summary=_offset_summary(offset_model, shift, shift_x=shift_x),
             )
 
     inspect_path = tmp_path / "inspect"
@@ -561,11 +602,11 @@ def test_astrometric_offsets_writes_the_fitted_offset(
     with open(csv_path, newline="") as f:
         rows = list(csv.DictReader(f))
 
-    assert len(rows) == len(LENS_NAMES) * 2, (
+    assert len(rows) == len(LENS_NAMES) * (len(OFFSET_BANDS) - 1), (
         "astrometric_offsets.csv carries one row per (lens, non-VIS waveband); "
         f"{len(rows)} rows means the vis results were not excluded"
     )
-    assert {row["waveband"] for row in rows} == {"nir_h", "nir_j"}, (
+    assert {row["waveband"] for row in rows} == {"nir_h", "nir_j", EDGE_BAND}, (
         "a vis row reached astrometric_offsets.csv; the VIS Sersic fit has no "
         "dataset_model, so its offset columns would be blank"
     )
@@ -573,7 +614,7 @@ def test_astrometric_offsets_writes_the_fitted_offset(
     by_key = {(row["lens_name"], row["waveband"]): row for row in rows}
     assert set(by_key) == set(shifts)
 
-    for (lens_name, band), shift in shifts.items():
+    for (lens_name, band), (shift, shift_x) in shifts.items():
         row = by_key[(lens_name, band)]
         assert float(row["crval_ra_deg"]) == pytest.approx(CRVAL_RA_DEG)
         for suffix, expected in REFERENCE_OFFSET_Y.items():
@@ -582,8 +623,21 @@ def test_astrometric_offsets_writes_the_fitted_offset(
             ), f"grid_offset_y{suffix} of {lens_name}/{band}"
         for suffix, expected in REFERENCE_OFFSET_X.items():
             assert float(row[f"grid_offset_x{suffix}"]) == pytest.approx(
-                expected + shift
+                expected + shift_x
             ), f"grid_offset_x{suffix} of {lens_name}/{band}"
+
+        # The flags, per row: only the edge band's x reaches its prior limit.
+        assert row["prior_edge_x"] == ("True" if band == EDGE_BAND else "False"), (
+            f"prior_edge_x of {lens_name}/{band} is '{row['prior_edge_x']}'; the "
+            f"3 sigma upper bound is {row['grid_offset_x_upper_3_sigma']} against "
+            f"a prior limit of {GRID_OFFSET_PRIOR_ARCSEC}"
+        )
+        assert row["prior_edge_y"] == "False", (
+            f"prior_edge_y of {lens_name}/{band} is flagged, but its 3 sigma "
+            f"bounds ({row['grid_offset_y_lower_3_sigma']}, "
+            f"{row['grid_offset_y_upper_3_sigma']}) are well inside "
+            f"±{GRID_OFFSET_PRIOR_ARCSEC}"
+        )
 
     # The reference row, spelled out: these are the numbers
     # `Tile102005065RA0135279431487DECNEG0701599765928` / `nir_h` carries in the
@@ -621,7 +675,9 @@ EMPTY_QUERY_PRODUCERS = (
 
 
 @pytest.mark.parametrize("producer", EMPTY_QUERY_PRODUCERS)
-def test_producers_survive_an_empty_query(producer, tmp_path, monkeypatch, pipeline_config):
+def test_producers_survive_an_empty_query(
+    producer, tmp_path, monkeypatch, pipeline_config
+):
     """
     A results tree that holds a completed ``vis_lp`` search and nothing else,
     scraped by a producer whose default ``--search_name`` is ``vis_pix``: the
@@ -730,7 +786,11 @@ def arguments_from(path):
                     else None
                 )
                 calls = add_variable_calls(statement)
-                if pairs is not None and isinstance(statement.target, ast.Tuple) and calls:
+                if (
+                    pairs is not None
+                    and isinstance(statement.target, ast.Tuple)
+                    and calls
+                ):
                     for _call in calls:
                         for argument, _name in pairs:
                             arguments.append(argument)

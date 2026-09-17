@@ -17,8 +17,9 @@ per ``(lens, waveband)`` carrying the two fitted ``DatasetModel`` offsets:
 - ``grid_offset_y`` — ``dataset_model.grid_offset.grid_offset_0``
 - ``grid_offset_x`` — ``dataset_model.grid_offset.grid_offset_1``
 
-plus the ``lens_name``, ``waveband`` and ``crval_ra_deg`` label columns. Each
-offset comes in four flavours: max-log-likelihood, median, ±1σ and ±3σ.
+plus the ``lens_name``, ``waveband``, ``crval_ra_deg``, ``prior_edge_y`` and
+``prior_edge_x`` label columns. Each offset comes in four flavours:
+max-log-likelihood, median, ±1σ and ±3σ.
 
 __What The Offset Means__
 
@@ -32,10 +33,34 @@ These are the *only* two free parameters of a band fit: the VIS Sersic lens
 model is frozen and only its intensity is re-solved, so the posterior in this
 table is a direct measurement of NISP/EXT-to-VIS registration for that lens.
 
-``scripts/lens_model_waveband.py`` gives both a uniform prior of ±0.2" (two VIS
-pixels at 0.1"/pixel), so a value pinned at the edge of that range means the
-band's misregistration exceeds what the fit is allowed to model — a QA flag on
-the row, not a measurement.
+``scripts/lens_model_waveband.py`` gives both a uniform prior of ±0.5"
+(``GRID_OFFSET_PRIOR_ARCSEC``, wider than one NISP or DECam pixel), so a value
+pinned at the edge of that range means the band's misregistration exceeds what
+the fit is allowed to model — a QA flag on the row, not a measurement. The two
+``prior_edge_*`` columns below are that flag, made explicit.
+
+__Prior-Edge Flags__
+
+``prior_edge_y`` and ``prior_edge_x`` are ``True`` when that component's 3σ
+interval reaches a limit of its own uniform prior: with ``width`` the prior
+width and ``tol = 0.01 * width``, when ``lower_3σ <= lower_limit + tol`` or
+``upper_3σ >= upper_limit - tol``.
+
+The limits are read off **the result's own model** — the ``UniformPrior`` at
+``dataset_model.grid_offset.grid_offset_0`` / ``_1`` in its ``files/model.json``
+— never a literal in this file. A tree holding fits from before the prior was
+widened therefore flags against ±0.2" and a tree fitted after it against ±0.5",
+which is what makes the column readable across a re-fit. The 3σ bounds are the
+same numbers ``af.ValueType.ValuesAt3Sigma`` writes into
+``grid_offset_*_lower_3_sigma`` / ``_upper_3_sigma``, taken from the same
+``samples_summary.values_at_sigma_3``, so a reader can check the flag by eye
+against the row it sits on.
+
+A flagged row is a **QA signal, not a measurement**: it says the posterior is
+pressed against the edge of what the fit was allowed to model, so the offset it
+reports is a lower bound on the true misregistration rather than a value to
+propagate. Flagged rows should be re-fitted under a wider prior, not averaged
+in.
 
 __Why VIS Has No Row__
 
@@ -85,6 +110,13 @@ import magnitudes
 # constant so the column specs stay readable in the source (and to the syntax
 # tree `tests/test_catalogue_parity.py` reads them out of).
 GRID_OFFSET_Y_PATH = ("dataset_model", "grid_offset", "grid_offset_0")
+GRID_OFFSET_X_PATH = ("dataset_model", "grid_offset", "grid_offset_1")
+
+# Fraction of the prior width within which a 3-sigma bound counts as "at the
+# limit". A posterior that genuinely stops short of the prior leaves far more
+# room than this; one truncated by it lands on the limit to every digit the CSV
+# carries.
+PRIOR_EDGE_TOLERANCE_FRACTION = 0.01
 
 
 def parse_args():
@@ -154,6 +186,79 @@ def with_grid_offset(aggregator):
     )
 
 
+def bounds_at_3_sigma(summary, path):
+    """
+    The ``(lower, upper)`` 3σ bounds this result's samples summary holds for
+    ``path``, or ``None`` if it holds none.
+
+    ``values_at_sigma_3`` is keyed by the dotted model path when it is read back
+    from ``files/samples_summary.json`` and by the tuple when a summary is built
+    in memory, which is exactly the normalisation ``AggregateCSV``'s ``Row``
+    does before it writes the ``_lower_3_sigma`` / ``_upper_3_sigma`` cells. The
+    same normalisation here is what makes the flag and the cells it is read
+    against the same numbers.
+    """
+    values = getattr(summary, "values_at_sigma_3", None) or {}
+
+    for key, value in values.items():
+        key_path = tuple(key.split(".")) if isinstance(key, str) else tuple(key)
+        if key_path == tuple(path):
+            return value
+
+    return None
+
+
+def at_prior_edge(result, path) -> bool:
+    """
+    Whether this result's 3σ interval for ``path`` reaches a limit of the
+    uniform prior the fit gave it.
+
+    The limits come from the result's own model, so the flag means the same
+    thing in a tree fitted under any prior; see ``__Prior-Edge Flags__`` above.
+
+    Nothing here is guarded: every result reaching this point passed
+    ``has_grid_offset``, so the prior is in its model, and a fitted parameter
+    with no 3σ bounds in its summary is a broken result rather than an ordinary
+    one — it would write blank ``_3_sigma`` cells in the same row.
+    """
+    prior = result.model.object_for_path(tuple(path))
+
+    bounds = bounds_at_3_sigma(result.samples_summary, path)
+    if bounds is None:
+        raise ValueError(
+            f"result {result.id} fitted {'.'.join(path)} but its samples summary "
+            "carries no 3 sigma bounds for it"
+        )
+
+    lower_3_sigma, upper_3_sigma = bounds
+    tolerance = PRIOR_EDGE_TOLERANCE_FRACTION * (prior.upper_limit - prior.lower_limit)
+
+    return bool(
+        lower_3_sigma <= prior.lower_limit + tolerance
+        or upper_3_sigma >= prior.upper_limit - tolerance
+    )
+
+
+def prior_edge_columns(aggregator):
+    """
+    The ``(prior_edge_y, prior_edge_x)`` value lists for the aggregator's rows,
+    in the order it yields them.
+
+    Built by iterating the aggregator exactly as the ``crval_ra_deg`` label list
+    is, and for the same reason: ``LabelColumn`` matches values to rows by row
+    number, so a list built from any other set — or in any other order — would
+    flag the wrong rows.
+    """
+    prior_edge_y = []
+    prior_edge_x = []
+
+    for result in aggregator:
+        prior_edge_y.append(at_prior_edge(result, GRID_OFFSET_Y_PATH))
+        prior_edge_x.append(at_prior_edge(result, GRID_OFFSET_X_PATH))
+
+    return prior_edge_y, prior_edge_x
+
+
 def main():
     """
     __Query: Every Band Under One Tag, Minus VIS__
@@ -186,9 +291,13 @@ def main():
         print(f"no sample directory at {sample_root}; nothing to do")
         return
 
-    agg = Aggregator.from_directory(directory=sample_root, completed_only=True, unzip_temporary=True)
+    agg = Aggregator.from_directory(
+        directory=sample_root, completed_only=True, unzip_temporary=True
+    )
     agg_query = agg.query(agg.unique_tag == args.unique_tag)
-    agg_query = magnitudes.latest_result_per_lens_band(agg_query, sample_root=sample_root)
+    agg_query = magnitudes.latest_result_per_lens_band(
+        agg_query, sample_root=sample_root
+    )
     agg_query = with_grid_offset(agg_query)
 
     try:
@@ -198,7 +307,7 @@ def main():
         return
 
     """
-    __Three Label Columns, Built After The Filter__
+    __Five Label Columns, Built After The Filter__
 
     The same three ``magnitudes.csv`` carries: ``lens_name`` (the dataset
     directory, which the per-lens split groups on), ``waveband``
@@ -211,6 +320,11 @@ def main():
     ``LabelColumn`` matches its values to rows by row number, so a list built
     from the unfiltered aggregator would shift every label by the number of VIS
     results that preceded it and quietly mislabel the table.
+
+    Then the two ``prior_edge_*`` flags, built over the same filtered aggregator
+    in the same pass order. They are label columns rather than variables because
+    nothing in the samples summary holds them: they are computed from a result's
+    prior limits and its 3σ bounds together.
     """
     lens_name_list = [
         search.path_prefix.parts[-1] for search in agg_query.values("search")
@@ -220,9 +334,13 @@ def main():
         wcs_dict["crval_ra_deg"] for wcs_dict in agg_query.values("wcs")
     ]
 
+    prior_edge_y_list, prior_edge_x_list = prior_edge_columns(agg_query)
+
     agg_csv.add_label_column(name="lens_name", values=lens_name_list)
     agg_csv.add_label_column(name="waveband", values=waveband_list)
     agg_csv.add_label_column(name="crval_ra_deg", values=crval_ra_deg_list)
+    agg_csv.add_label_column(name="prior_edge_y", values=prior_edge_y_list)
+    agg_csv.add_label_column(name="prior_edge_x", values=prior_edge_x_list)
 
     """
     __Six Columns Per Offset__
@@ -280,7 +398,9 @@ def main():
     print(f"wrote {out_csv} ({len(lens_name_list)} rows)")
 
     written = catalogue_util.write_per_tile_csv(
-        master_csv=out_csv, inspect_path=inspect_path, filename="astrometric_offsets.csv"
+        master_csv=out_csv,
+        inspect_path=inspect_path,
+        filename="astrometric_offsets.csv",
     )
     print(f"wrote {written} per-lens astrometric_offsets.csv files")
 
