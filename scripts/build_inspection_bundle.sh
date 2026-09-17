@@ -3,7 +3,7 @@
 # Euclid Pipeline: Inspection Bundle Builder
 # ==========================================
 #
-# Runs the eight catalogue producers in dependency order and assembles a
+# Runs the nine catalogue producers in dependency order and assembles a
 # per-lens inspection bundle for one sample. Idempotent: safe to re-run as more
 # results land — already-built lenses are skipped by each stage.
 #
@@ -13,6 +13,7 @@
 #   lens_sersic.csv
 #   source_sersic.csv
 #   magnitudes.csv                       # one row per (lens, waveband)
+#   astrometric_offsets.csv              # one row per (lens, non-VIS waveband)
 #   <dataset_name>/
 #       vis_lp_fit.png                   # collected by build_inspect.py
 #       vis_pix_fit.png
@@ -32,8 +33,9 @@
 #       lens_sersic.csv
 #       source_sersic.csv
 #       magnitudes.csv
+#       astrometric_offsets.csv
 #
-# Stages 7 and 8 read a separate results tree (default `output_sed`) holding the
+# Stages 7-9 read a separate results tree (default `output_sed`) holding the
 # multi-band SED fits produced by running the waveband scripts with
 # PYAUTO_OUTPUT_DIR=output_sed. They are skipped when that tree has no directory
 # for the sample.
@@ -45,8 +47,8 @@
 #
 # Environment:
 #   OUTPUT_DIR        results tree for stages 1-6      (default: output)
-#   SED_OUTPUT_DIR    results tree for stages 7-8      (default: output_sed)
-#   SKIP_SED=1        skip stages 7-8 even if present  (default: 0)
+#   SED_OUTPUT_DIR    results tree for stages 7-9      (default: output_sed)
+#   SKIP_SED=1        skip stages 7-9 even if present  (default: 0)
 #   CREATE_ARCHIVE=0  do not tar the bundle at the end (default: 1)
 #   DATASET_PREFIX    only collect datasets with this name prefix (default: all)
 
@@ -87,62 +89,68 @@ cd "$PROJECT_ROOT"
 
 mkdir -p "$INSPECT_DIR"
 
-echo "==> [1/8] inspection PNGs (scripts/tools/build_inspect.py)"
+echo "==> [1/9] inspection PNGs (scripts/tools/build_inspect.py)"
 python "$PROJECT_ROOT/scripts/tools/build_inspect.py" \
     --sample="$SAMPLE" \
     --output_path="$OUTPUT_DIR" \
     --inspect_dir="$INSPECT_DIR" \
     --dataset_prefix="$DATASET_PREFIX"
 
-echo "==> [2/8] deblended FITS (catalogue/scripts/deblending.py)"
+echo "==> [2/9] deblended FITS (catalogue/scripts/deblending.py)"
 python "$PROJECT_ROOT/catalogue/scripts/deblending.py" \
     --sample="$SAMPLE" \
     --output_path="$OUTPUT_DIR" \
     --inspect_dir="$INSPECT_DIR"
 
-echo "==> [3/8] lens mass maps (catalogue/scripts/lens_mass_maps.py)"
+echo "==> [3/9] lens mass maps (catalogue/scripts/lens_mass_maps.py)"
 python "$PROJECT_ROOT/catalogue/scripts/lens_mass_maps.py" \
     --sample="$SAMPLE" \
     --output_path="$OUTPUT_DIR" \
     --inspect_dir="$INSPECT_DIR"
 
-echo "==> [4/8] lens mass CSV (catalogue/scripts/lens_mass.py)"
+echo "==> [4/9] lens mass CSV (catalogue/scripts/lens_mass.py)"
 python "$PROJECT_ROOT/catalogue/scripts/lens_mass.py" \
     --sample="$SAMPLE" \
     --output_path="$OUTPUT_DIR" \
     --inspect_dir="$INSPECT_DIR"
 
-echo "==> [5/8] lens Sersic CSV (catalogue/scripts/lens_sersic.py)"
+echo "==> [5/9] lens Sersic CSV (catalogue/scripts/lens_sersic.py)"
 python "$PROJECT_ROOT/catalogue/scripts/lens_sersic.py" \
     --sample="$SAMPLE" \
     --output_path="$OUTPUT_DIR" \
     --inspect_dir="$INSPECT_DIR"
 
-echo "==> [6/8] source Sersic CSV (catalogue/scripts/source_sersic.py)"
+echo "==> [6/9] source Sersic CSV (catalogue/scripts/source_sersic.py)"
 python "$PROJECT_ROOT/catalogue/scripts/source_sersic.py" \
     --sample="$SAMPLE" \
     --output_path="$OUTPUT_DIR" \
     --inspect_dir="$INSPECT_DIR"
 
-# Stages 7+8 read the multi-band SED tree. Set SKIP_SED=1 to refresh only the
+# Stages 7-9 read the multi-band SED tree. Set SKIP_SED=1 to refresh only the
 # stable products while SED jobs are still running.
 SED_OUTPUT_PATH="${PROJECT_ROOT}/${SED_OUTPUT_DIR}"
 if [ "${SKIP_SED:-0}" = "1" ]; then
-    echo "==> [7/8,8/8] skipped — SKIP_SED=1"
+    echo "==> [7/9,8/9,9/9] skipped — SKIP_SED=1"
 elif [ -d "$SED_OUTPUT_PATH/$SAMPLE" ]; then
-    echo "==> [7/8] multi-wavelength PNG (catalogue/scripts/multi_wavelength.py)"
+    echo "==> [7/9] multi-wavelength PNG (catalogue/scripts/multi_wavelength.py)"
     python "$PROJECT_ROOT/catalogue/scripts/multi_wavelength.py" \
         --sample="$SAMPLE" \
         --output_path="$SED_OUTPUT_DIR" \
         --inspect_dir="$INSPECT_DIR"
 
-    echo "==> [8/8] magnitudes CSV (catalogue/scripts/magnitudes.py)"
+    echo "==> [8/9] magnitudes CSV (catalogue/scripts/magnitudes.py)"
     python "$PROJECT_ROOT/catalogue/scripts/magnitudes.py" \
         --sample="$SAMPLE" \
         --output_path="$SED_OUTPUT_DIR" \
         --inspect_dir="$INSPECT_DIR"
+
+    echo "==> [9/9] astrometric offsets CSV (catalogue/scripts/astrometric_offsets.py)"
+    python "$PROJECT_ROOT/catalogue/scripts/astrometric_offsets.py" \
+        --sample="$SAMPLE" \
+        --output_path="$SED_OUTPUT_DIR" \
+        --inspect_dir="$INSPECT_DIR"
 else
-    echo "==> [7/8,8/8] skipped — no $SED_OUTPUT_PATH/$SAMPLE/ (no SED runs yet)"
+    echo "==> [7/9,8/9,9/9] skipped — no $SED_OUTPUT_PATH/$SAMPLE/ (no SED runs yet)"
 fi
 
 echo ""

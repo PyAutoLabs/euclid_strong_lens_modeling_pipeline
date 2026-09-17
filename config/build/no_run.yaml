@@ -25,6 +25,7 @@
 - catalogue/scripts/source_sersic.py  # Catalogue producer: aggregates converged sersic_lens_model/vis samples.
 - catalogue/scripts/multi_wavelength.py  # Catalogue producer: needs the multi-band SED tree (output_sed/<sample>) produced by a full sersic_lens_model_waveband run, not a test-mode one.
 - catalogue/scripts/magnitudes.py  # Catalogue producer: reads latent values from the multi-band SED tree; skip_latents() is True in every test mode, so no latents are written.
+- catalogue/scripts/astrometric_offsets.py  # Catalogue producer: reads the fitted DatasetModel grid offset out of the multi-band SED tree (output_sed/<sample>), which a test-mode run does not produce.
 
 # --- Shared helper modules ------------------------------------------------
 # Imported by the scripts above; they define no top-level work and have no

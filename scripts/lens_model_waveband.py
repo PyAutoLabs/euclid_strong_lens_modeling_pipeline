@@ -50,11 +50,14 @@ the SED chain driver, which passes the Sersic VIS result and
 
 __Downstream__
 
-The per-band results are the input to two catalogue producers:
+The per-band results are the input to three catalogue producers:
 ``catalogue/scripts/magnitudes.py`` scrapes their latent fluxes into
-``magnitudes.csv``, the photometry table the SED fitting works from, and
+``magnitudes.csv``, the photometry table the SED fitting works from;
+``catalogue/scripts/astrometric_offsets.py`` publishes the ``DatasetModel``
+offset fitted below — the band's ``(y, x)`` registration against VIS, with
+errors — into ``astrometric_offsets.csv``; and
 ``catalogue/scripts/multi_wavelength.py`` stacks one row per band into
-``fit_multi_wavelength.png`` for visual inspection. Both default to reading
+``fit_multi_wavelength.png`` for visual inspection. All three default to reading
 ``output_sed``, the output tree the SED chain is run under.
 
 New to the pipeline? Read ``start_here.py`` in the repository root first: it

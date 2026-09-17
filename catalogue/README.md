@@ -12,7 +12,7 @@ and they differ in purpose rather than in mechanism. `workflow/` holds *general
 examples* of the aggregator export API — `csv_make.py`, `png_make.py` and
 `fits_make.py` teach it step by step, and `workflow/example/` shows it applied to
 real Euclid runs. `catalogue/` holds the *production* producers: the scripts the
-bundle builder actually runs to write the 18 bundle files and the master CSVs.
+bundle builder actually runs to write the 19 bundle files and the master CSVs.
 
 The clearest way in is to read the two side by side.
 `workflow/example/csv/lens_mass.py` builds the same table as
@@ -28,7 +28,7 @@ Producers live in `catalogue/scripts/`. The two orchestration scripts live in
 `scripts/` beside the pipelines they read from:
 
 ```
-scripts/build_inspection_bundle.sh   # runs the eight stages in order
+scripts/build_inspection_bundle.sh   # runs the nine stages in order
 scripts/tools/build_inspect.py             # stage 1 — collects 6 PNGs + 2 COOLEST templates
 catalogue/scripts/
   catalogue_util.py                  # shared path resolution + per-lens CSV split
@@ -39,11 +39,12 @@ catalogue/scripts/
   source_sersic.py                   # stage 6 — source_sersic.csv
   multi_wavelength.py                # stage 7 — fit_multi_wavelength.png
   magnitudes.py                      # stage 8 — magnitudes.csv
+  astrometric_offsets.py             # stage 9 — astrometric_offsets.csv
 ```
 
 ---
 
-## The 18 bundle files and what produces each
+## The 19 bundle files and what produces each
 
 Every file of a complete per-lens bundle, the script that produces it, and
 whether that script *generates* the file from the fit or *collects* an image the
@@ -55,6 +56,7 @@ fit already wrote.
 | `lens_sersic.csv` | `catalogue/scripts/lens_sersic.py` | generates | `sersic_lens_model/vis` |
 | `source_sersic.csv` | `catalogue/scripts/source_sersic.py` | generates | `sersic_lens_model/vis` |
 | `magnitudes.csv` | `catalogue/scripts/magnitudes.py` | generates | multi-band `sersic_lens_model/<band>` in `output_sed/` |
+| `astrometric_offsets.csv` | `catalogue/scripts/astrometric_offsets.py` | generates | multi-band `sersic_lens_model/<band>` in `output_sed/` |
 | `pre_psf.fits` | `catalogue/scripts/deblending.py` | generates | `sersic_lens_model` (every waveband) |
 | `model.fits` | `catalogue/scripts/deblending.py` | generates | `sersic_lens_model` (every waveband) |
 | `convergence.fits` | `catalogue/scripts/lens_mass_maps.py` | collects `image/tracer.fits` | `initial_lens_model/vis_pix` |
@@ -104,7 +106,7 @@ and neither is a fault in the producers:
 
 ## Run order
 
-`scripts/build_inspection_bundle.sh` runs the eight stages in dependency order.
+`scripts/build_inspection_bundle.sh` runs the nine stages in dependency order.
 It is idempotent — every stage skips work that is already done, so re-run it as
 more fits land.
 
@@ -115,27 +117,28 @@ bash scripts/build_inspection_bundle.sh dr1_prelim_grade_ab run250
 
 | Stage | Script | Reads | Writes |
 |---|---|---|---|
-| 1/8 | `scripts/tools/build_inspect.py` | `output/<sample>/` | the 6 collected PNGs + 2 COOLEST templates |
-| 2/8 | `catalogue/scripts/deblending.py` | `output/<sample>/` | `pre_psf.fits`, `model.fits` |
-| 3/8 | `catalogue/scripts/lens_mass_maps.py` | `output/<sample>/` | `convergence.fits`, `potential.fits`, `deflections.fits` |
-| 4/8 | `catalogue/scripts/lens_mass.py` | `output/<sample>/` | `lens_mass.csv` |
-| 5/8 | `catalogue/scripts/lens_sersic.py` | `output/<sample>/` | `lens_sersic.csv` |
-| 6/8 | `catalogue/scripts/source_sersic.py` | `output/<sample>/` | `source_sersic.csv` |
-| 7/8 | `catalogue/scripts/multi_wavelength.py` | `output_sed/<sample>/` | `fit_multi_wavelength.png` |
-| 8/8 | `catalogue/scripts/magnitudes.py` | `output_sed/<sample>/` | `magnitudes.csv` |
+| 1/9 | `scripts/tools/build_inspect.py` | `output/<sample>/` | the 6 collected PNGs + 2 COOLEST templates |
+| 2/9 | `catalogue/scripts/deblending.py` | `output/<sample>/` | `pre_psf.fits`, `model.fits` |
+| 3/9 | `catalogue/scripts/lens_mass_maps.py` | `output/<sample>/` | `convergence.fits`, `potential.fits`, `deflections.fits` |
+| 4/9 | `catalogue/scripts/lens_mass.py` | `output/<sample>/` | `lens_mass.csv` |
+| 5/9 | `catalogue/scripts/lens_sersic.py` | `output/<sample>/` | `lens_sersic.csv` |
+| 6/9 | `catalogue/scripts/source_sersic.py` | `output/<sample>/` | `source_sersic.csv` |
+| 7/9 | `catalogue/scripts/multi_wavelength.py` | `output_sed/<sample>/` | `fit_multi_wavelength.png` |
+| 8/9 | `catalogue/scripts/magnitudes.py` | `output_sed/<sample>/` | `magnitudes.csv` |
+| 9/9 | `catalogue/scripts/astrometric_offsets.py` | `output_sed/<sample>/` | `astrometric_offsets.csv` |
 
 Everything lands in `inspect/<sample>[_<run_tag>]/`, with the master CSVs at the
 root and one folder per lens holding that lens's own copy of every product.
 
-Stages 7 and 8 read a **separate** results tree. The multi-band SED fits are run
+Stages 7-9 read a **separate** results tree. The multi-band SED fits are run
 with `PYAUTO_OUTPUT_DIR=output_sed` (see `scripts/sersic_lens_model_waveband.py`
-and `scripts/lens_model_waveband.py`), so those two stages are skipped when
+and `scripts/lens_model_waveband.py`), so those three stages are skipped when
 `output_sed/<sample>/` does not exist. Set `SKIP_SED=1` to skip them
 deliberately while SED jobs are still running.
 
 ### Fits the bundle expects
 
-Producing all 18 files needs three pipeline runs per lens:
+Producing all 19 files needs three pipeline runs per lens:
 
 ```bash
 python scripts/initial_lens_model.py --dataset=<lens> --sample=<sample>
@@ -151,8 +154,8 @@ plus `preprocess/segmentation.py` for `segmentation.png`.
 | Variable | Default | Effect |
 |---|---|---|
 | `OUTPUT_DIR` | `output` | results tree read by stages 1-6 |
-| `SED_OUTPUT_DIR` | `output_sed` | results tree read by stages 7-8 |
-| `SKIP_SED` | `0` | `1` skips stages 7-8 |
+| `SED_OUTPUT_DIR` | `output_sed` | results tree read by stages 7-9 |
+| `SKIP_SED` | `0` | `1` skips stages 7-9 |
 | `CREATE_ARCHIVE` | `1` | `0` skips the closing `tar czf` |
 | `DATASET_PREFIX` | *(empty)* | restrict stage 1 to lens folders with this name prefix (`Tile` for DR1) |
 
@@ -168,7 +171,8 @@ Every producer can also be run on its own; each takes `--sample`,
   rather than half-written. A sample still being fitted therefore yields a
   partial but never a corrupt catalogue.
 - **Five value flavours per variable.** Each CSV column appears as median plus
-  lower/upper 1σ and lower/upper 3σ (`magnitudes.csv` adds max-log-likelihood).
+  lower/upper 1σ and lower/upper 3σ (`magnitudes.csv` and
+  `astrometric_offsets.csv` add max-log-likelihood).
 - **Intensity is never a column.** The Sersic profiles are `lp_linear.Sersic`,
   whose intensity is solved by linear algebra at each likelihood evaluation and
   so never enters the non-linear samples.
@@ -184,6 +188,16 @@ Every producer can also be run on its own; each takes `--sample`,
   re-project them with are the zoomed mask's, carried in the FITS header. The
   stage collects rather than generates: it evaluates no profile and loads no
   dataset, so a map in the bundle is bit-for-bit the one the fit wrote.
+- **Astrometric offsets are `(y, x)` in arcsec, relative to VIS.** The
+  `grid_offset_y` / `grid_offset_x` of `astrometric_offsets.csv` are the fitted
+  `DatasetModel` offset of a band's grid, which the fit *subtracts* from that
+  band's grids before evaluating the VIS model — so a positive `grid_offset_y`
+  means the band's sky lies +y arcsec from the VIS astrometric frame. VIS itself
+  has no row: it is the frame the offsets are measured against, and the VIS
+  Sersic fit carries no `dataset_model` to read. `scripts/lens_model_waveband.py`
+  gives both a uniform prior of ±0.2", so a value at the edge of that range is a
+  QA flag — the band's misregistration exceeds what the fit can model — rather
+  than a measurement.
 - **Master CSVs are split per lens.** `catalogue_util.write_per_tile_csv` drops
   each lens's rows into its own folder so a single lens folder is
   self-contained and can be shipped on its own.
@@ -212,7 +226,7 @@ Every producer can also be run on its own; each takes `--sample`,
 The DR1 science tree (`Science/euclid/catalogue/scripts/`) holds 21 further
 files that are deliberately **not** in this repository. They are either
 downstream consumers of a finished catalogue, superseded precursors, or
-paper-figure code — none of them produce any of the 18 bundle files.
+paper-figure code — none of them produce any of the 19 bundle files.
 
 | Not ported | Count | Why |
 |---|---|---|
