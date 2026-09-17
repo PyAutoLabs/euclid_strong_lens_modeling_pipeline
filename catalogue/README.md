@@ -41,6 +41,9 @@ catalogue/scripts/
   witt_wynne.py                      # stage 7 — witt_wynne.csv, witt_wynne.in
   multi_wavelength.py                # stage 8 — fit_multi_wavelength.png
   magnitudes.py                      # stage 9 — magnitudes.csv
+  multi_wavelength.py                # stage 7 — fit_multi_wavelength.png
+  magnitudes.py                      # stage 8 — magnitudes.csv
+  astrometric_offsets.py             # stage 9 — astrometric_offsets.csv
 ```
 
 ---
@@ -59,6 +62,7 @@ fit already wrote.
 | `magnitudes.csv` | `catalogue/scripts/magnitudes.py` | generates | multi-band `sersic_lens_model/<band>` in `output_sed/` |
 | `witt_wynne.csv` | `catalogue/scripts/witt_wynne.py` | generates | `initial_lens_model/vis_pix` |
 | `witt_wynne.in` | `catalogue/scripts/witt_wynne.py` | generates | `initial_lens_model/vis_pix` |
+| `astrometric_offsets.csv` | `catalogue/scripts/astrometric_offsets.py` | generates | multi-band `sersic_lens_model/<band>` in `output_sed/` |
 | `pre_psf.fits` | `catalogue/scripts/deblending.py` | generates | `sersic_lens_model` (every waveband) |
 | `model.fits` | `catalogue/scripts/deblending.py` | generates | `sersic_lens_model` (every waveband) |
 | `convergence.fits` | `catalogue/scripts/lens_mass_maps.py` | collects `image/tracer.fits` | `initial_lens_model/vis_pix` |
@@ -128,13 +132,16 @@ bash scripts/build_inspection_bundle.sh dr1_prelim_grade_ab run250
 | 7/9 | `catalogue/scripts/witt_wynne.py` | `output/<sample>/` | `witt_wynne.csv`, `witt_wynne.in` |
 | 8/9 | `catalogue/scripts/multi_wavelength.py` | `output_sed/<sample>/` | `fit_multi_wavelength.png` |
 | 9/9 | `catalogue/scripts/magnitudes.py` | `output_sed/<sample>/` | `magnitudes.csv` |
+| 7/9 | `catalogue/scripts/multi_wavelength.py` | `output_sed/<sample>/` | `fit_multi_wavelength.png` |
+| 8/9 | `catalogue/scripts/magnitudes.py` | `output_sed/<sample>/` | `magnitudes.csv` |
+| 9/9 | `catalogue/scripts/astrometric_offsets.py` | `output_sed/<sample>/` | `astrometric_offsets.csv` |
 
 Everything lands in `inspect/<sample>[_<run_tag>]/`, with the master CSVs at the
 root and one folder per lens holding that lens's own copy of every product.
 
 Stages 8 and 9 read a **separate** results tree. The multi-band SED fits are run
 with `PYAUTO_OUTPUT_DIR=output_sed` (see `scripts/sersic_lens_model_waveband.py`
-and `scripts/lens_model_waveband.py`), so those two stages are skipped when
+and `scripts/lens_model_waveband.py`), so those three stages are skipped when
 `output_sed/<sample>/` does not exist. Set `SKIP_SED=1` to skip them
 deliberately while SED jobs are still running.
 
@@ -173,7 +180,8 @@ Every producer can also be run on its own; each takes `--sample`,
   rather than half-written. A sample still being fitted therefore yields a
   partial but never a corrupt catalogue.
 - **Five value flavours per variable.** Each CSV column appears as median plus
-  lower/upper 1σ and lower/upper 3σ (`magnitudes.csv` adds max-log-likelihood).
+  lower/upper 1σ and lower/upper 3σ (`magnitudes.csv` and
+  `astrometric_offsets.csv` add max-log-likelihood).
 - **Intensity is never a column.** The Sersic profiles are `lp_linear.Sersic`,
   whose intensity is solved by linear algebra at each likelihood evaluation and
   so never enters the non-linear samples.
@@ -189,6 +197,16 @@ Every producer can also be run on its own; each takes `--sample`,
   re-project them with are the zoomed mask's, carried in the FITS header. The
   stage collects rather than generates: it evaluates no profile and loads no
   dataset, so a map in the bundle is bit-for-bit the one the fit wrote.
+- **Astrometric offsets are `(y, x)` in arcsec, relative to VIS.** The
+  `grid_offset_y` / `grid_offset_x` of `astrometric_offsets.csv` are the fitted
+  `DatasetModel` offset of a band's grid, which the fit *subtracts* from that
+  band's grids before evaluating the VIS model — so a positive `grid_offset_y`
+  means the band's sky lies +y arcsec from the VIS astrometric frame. VIS itself
+  has no row: it is the frame the offsets are measured against, and the VIS
+  Sersic fit carries no `dataset_model` to read. `scripts/lens_model_waveband.py`
+  gives both a uniform prior of ±0.2", so a value at the edge of that range is a
+  QA flag — the band's misregistration exceeds what the fit can model — rather
+  than a measurement.
 - **Master CSVs are split per lens.** `catalogue_util.write_per_tile_csv` drops
   each lens's rows into its own folder so a single lens folder is
   self-contained and can be shipped on its own.

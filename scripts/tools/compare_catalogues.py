@@ -27,7 +27,8 @@ Usage
 
 Each directory is a bundle as ``scripts/build_inspection_bundle.sh`` writes one:
 a ``lens_mass.csv`` at its root, and optionally ``lens_sersic.csv``,
-``source_sersic.csv`` and ``magnitudes.csv`` beside it. ``lens_mass.csv`` is
+``source_sersic.csv``, ``magnitudes.csv`` and ``astrometric_offsets.csv``
+beside it. ``lens_mass.csv`` is
 required on both sides; every other product is compared when both sides have it
 and reported as absent when they do not.
 
@@ -42,8 +43,8 @@ bitwise reproducible, so most of this is a tolerance question rather than an
 equality question. Four rules, one per kind of quantity:
 
 **Tile identity — exact.** Rows are keyed by ``lens_name`` (and, for
-``magnitudes.csv``, by ``(lens_name, waveband)``, which is the row identity that
-producer writes). The key is compared as a string, with no normalisation: a tile
+``magnitudes.csv`` and ``astrometric_offsets.csv``, by
+``(lens_name, waveband)``, which is the row identity those producers write). The key is compared as a string, with no normalisation: a tile
 present on one side only is reported and fails the check. Only the tiles common
 to both sides are carried into the value checks, so a partial rebuild is
 compared on what it built rather than being drowned in absences — but the
@@ -162,6 +163,7 @@ PRODUCTS = {
     "lens_sersic": ("lens_name",),
     "source_sersic": ("lens_name",),
     "magnitudes": ("lens_name", "waveband"),
+    "astrometric_offsets": ("lens_name", "waveband"),
 }
 
 REQUIRED_PRODUCT = "lens_mass"
@@ -181,7 +183,8 @@ VALUE_SUFFIXES = (
 LABEL_COLUMNS = ("id", "lens_name", "waveband")
 
 # Astrometry is compared exactly. `crval_ra_deg` is the only one the DR1
-# producers write today (in `magnitudes.csv`); the others are named so a future
+# producers write today (in `magnitudes.csv` and `astrometric_offsets.csv`); the
+# others are named so a future
 # producer that adds them is covered without an edit here.
 ASTROMETRY_COLUMNS = ("crval_ra_deg", "crval_dec_deg", "ra", "dec")
 
@@ -198,6 +201,8 @@ MODEL_PARAMETER_BASES = frozenset(
         "shear_gamma_2",
         "effective_radius",
         "sersic_index",
+        "grid_offset_y",
+        "grid_offset_x",
     }
 )
 

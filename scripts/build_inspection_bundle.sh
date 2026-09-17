@@ -14,6 +14,7 @@
 #   source_sersic.csv
 #   magnitudes.csv                       # one row per (lens, waveband)
 #   witt_wynne.csv                       # one row per lens: the SIEP projection
+#   astrometric_offsets.csv              # one row per (lens, non-VIS waveband)
 #   <dataset_name>/
 #       vis_lp_fit.png                   # collected by build_inspect.py
 #       vis_pix_fit.png
@@ -35,6 +36,7 @@
 #       magnitudes.csv
 #       witt_wynne.csv
 #       witt_wynne.in                    # isit4or2or1 input, zero-centred
+#       astrometric_offsets.csv
 #
 # Stages 8 and 9 read a separate results tree (default `output_sed`) holding the
 # multi-band SED fits produced by running the waveband scripts with
@@ -147,6 +149,12 @@ elif [ -d "$SED_OUTPUT_PATH/$SAMPLE" ]; then
 
     echo "==> [9/9] magnitudes CSV (catalogue/scripts/magnitudes.py)"
     python "$PROJECT_ROOT/catalogue/scripts/magnitudes.py" \
+        --sample="$SAMPLE" \
+        --output_path="$SED_OUTPUT_DIR" \
+        --inspect_dir="$INSPECT_DIR"
+
+    echo "==> [9/9] astrometric offsets CSV (catalogue/scripts/astrometric_offsets.py)"
+    python "$PROJECT_ROOT/catalogue/scripts/astrometric_offsets.py" \
         --sample="$SAMPLE" \
         --output_path="$SED_OUTPUT_DIR" \
         --inspect_dir="$INSPECT_DIR"

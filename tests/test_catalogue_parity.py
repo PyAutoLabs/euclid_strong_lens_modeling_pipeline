@@ -3,11 +3,12 @@ Column parity between this pipeline's catalogue producers and the DR1
 reference catalogue.
 
 The four DR1 CSV header lines are checked in verbatim under
-``tests/data/dr1_headers/``. For each producer under ``catalogue/scripts/``
-this module reconstructs the header ``af.AggregateCSV`` will write — from the
-producer's own ``add_label_column`` / ``add_variable`` calls and the real
-``autofit`` ``Column`` class — and asserts it reproduces the DR1 header
-**exactly, order included**.
+``tests/data/dr1_headers/``, beside one further header this repository pins for
+a product DR1 has no counterpart for (``astrometric_offsets.txt``). For each
+producer under ``catalogue/scripts/`` this module reconstructs the header
+``af.AggregateCSV`` will write — from the producer's own ``add_label_column`` /
+``add_variable`` calls and the real ``autofit`` ``Column`` class — and asserts
+it reproduces the stored header **exactly, order included**.
 
 Why reconstruct rather than run the producers: each producer's column list is
 a literal inside ``main()``, and ``main()`` needs a populated ``output/`` tree
@@ -34,10 +35,21 @@ sys.path.insert(0, str(PROJECT_ROOT))
 CATALOGUE_SCRIPTS = PROJECT_ROOT / "catalogue" / "scripts"
 DR1_HEADERS = Path(__file__).parent / "data" / "dr1_headers"
 
-# The producers whose CSV has a DR1 counterpart. `deblending.py` and
-# `multi_wavelength.py` write products DR1 has no CSV for, and
-# `catalogue_util.py` is a shared helper.
-PRODUCERS = ["lens_mass", "lens_sersic", "source_sersic", "magnitudes"]
+# The producers whose CSV has a stored header. The first four are the DR1
+# counterparts, checked in from the DR1 catalogue itself. `astrometric_offsets`
+# is the fifth: DR1 has no such CSV, so its fixture is a header *pin* written by
+# this repository (`head -1` of a real build) rather than a parity reference —
+# it still fails on a renamed column, a reordered `add_variable` block or a
+# changed `value_types` set, which is what this module is for.
+# `deblending.py` and `multi_wavelength.py` write products no CSV corresponds
+# to, and `catalogue_util.py` is a shared helper.
+PRODUCERS = [
+    "lens_mass",
+    "lens_sersic",
+    "source_sersic",
+    "magnitudes",
+    "astrometric_offsets",
+]
 
 
 class _EmptyRow:
@@ -222,7 +234,8 @@ def header_from(specs):
 @pytest.mark.parametrize("producer", PRODUCERS)
 def test_catalogue_columns_reproduce_the_dr1_header(producer):
     """
-    Deliverable: the euclid catalogue is column-for-column the DR1 catalogue.
+    Deliverable: the euclid catalogue is column-for-column the DR1 catalogue
+    (and, for ``astrometric_offsets``, the header this repository pinned).
     A renamed column, a reordered ``add_variable`` block, a dropped parameter or
     a changed ``value_types`` set all break this.
     """
