@@ -263,7 +263,7 @@ python catalogue/scripts/witt_wynne.py --sample=q1_walsmley
 # -> inspect/q1_walsmley/witt_wynne.csv
 # -> inspect/q1_walsmley/102018665_NEG570040238507752998/witt_wynne.in
 
-# 3b. Or build the whole 9-stage inspection bundle, of which this is stage 7.
+# 3b. Or build the whole 10-stage inspection bundle, of which this is stage 7.
 SKIP_SED=1 CREATE_ARCHIVE=0 bash scripts/build_inspection_bundle.sh q1_walsmley
 ```
 

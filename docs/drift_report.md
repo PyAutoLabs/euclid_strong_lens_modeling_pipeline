@@ -281,8 +281,8 @@ rather than a duplicate here. Every one of the 13 now has a named producer in
 this repository.
 
 The producer↔file map has grown since this section was written and
-`catalogue/README.md` remains its single source of truth; it now lists **20**
-files across nine stages. The counts in this section are the dated phase-1/2
+`catalogue/README.md` remains its single source of truth; it now lists **21**
+files across ten stages. The counts in this section are the dated phase-1/2
 record of the 13 files that existed then, not a current inventory. Added since:
 `convergence.fits` / `potential.fits` / `deflections.fits`
 (`catalogue/scripts/lens_mass_maps.py`, stage 3) and `witt_wynne.csv` /

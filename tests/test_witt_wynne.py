@@ -56,7 +56,7 @@ import witt_wynne_util  # noqa: E402  (loaded through the same path insert)
 
 BUNDLE_SCRIPT = PROJECT_ROOT / "scripts" / "build_inspection_bundle.sh"
 
-TOTAL_STAGES = 9
+TOTAL_STAGES = 10
 
 
 def _model():
@@ -449,13 +449,13 @@ def test_the_bundle_script_runs_the_producer():
     assert "catalogue/scripts/witt_wynne.py" in script
 
 
-def test_the_bundle_stage_echoes_are_a_consecutive_run_of_nine():
+def test_the_bundle_stage_echoes_are_a_consecutive_run_of_ten():
     script = BUNDLE_SCRIPT.read_text()
 
     stages = [int(n) for n in re.findall(r"\[(\d+)/%d" % TOTAL_STAGES, script)]
 
-    # Every stage announces itself, and the SED pair announces itself twice
-    # (once when it runs, once per skip branch), so compare the *set*.
+    # Every stage announces itself, and the SED stages announce themselves
+    # again in each skip branch, so compare the *set*.
     assert sorted(set(stages)) == list(range(1, TOTAL_STAGES + 1))
 
     # No stale `[n/8]` marker survived the renumber.
