@@ -21,7 +21,7 @@ fitted produces a partial but never a corrupt catalogue.
 The master CSV is also split into one row per lens, dropped in that lens's own
 folder inside the inspect directory, so each folder is self-contained.
 
-Stage 3 of ``scripts/build_inspection_bundle.sh``.
+Stage 4 of ``scripts/build_inspection_bundle.sh``.
 
 __Its Tutorial Twin__
 

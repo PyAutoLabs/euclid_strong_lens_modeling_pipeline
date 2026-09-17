@@ -23,6 +23,7 @@
 - catalogue/scripts/lens_mass.py  # Catalogue producer: aggregates converged initial_lens_model/vis_pix samples; test-mode samples carry no meaningful posterior.
 - catalogue/scripts/lens_sersic.py  # Catalogue producer: aggregates converged sersic_lens_model/vis samples.
 - catalogue/scripts/source_sersic.py  # Catalogue producer: aggregates converged sersic_lens_model/vis samples.
+- catalogue/scripts/witt_wynne.py  # Catalogue producer: projects a completed real-mode initial_lens_model/vis_pix fit onto Witt-Wynne SIEP space; it needs that fit's files/wcs.json (or its reconstruction) for the source position, and skip_fit_output() is True in every test mode, so no wcs.json and no result to project exist.
 - catalogue/scripts/multi_wavelength.py  # Catalogue producer: needs the multi-band SED tree (output_sed/<sample>) produced by a full sersic_lens_model_waveband run, not a test-mode one.
 - catalogue/scripts/magnitudes.py  # Catalogue producer: reads latent values from the multi-band SED tree; skip_latents() is True in every test mode, so no latents are written.
 - catalogue/scripts/astrometric_offsets.py  # Catalogue producer: reads the fitted DatasetModel grid offset out of the multi-band SED tree (output_sed/<sample>), which a test-mode run does not produce.
@@ -33,6 +34,7 @@
 
 - util  # Shared pipeline helpers (dataset loading, the latent catalogue, plotting) imported by every script. A module, not a runnable script. Stem-matched, not path-matched, so it cannot also swallow catalogue_util.py.
 - catalogue/scripts/catalogue_util.py  # Shared helpers for the catalogue producers (path resolution, per-tile CSV splitting). A module, not a runnable script.
+- catalogue/scripts/witt_wynne_util.py  # Catalogue helper module (imported by catalogue/scripts/witt_wynne.py); no CLI
 
 # --- Interactive GUI tools ------------------------------------------------
 # Each opens a matplotlib window and blocks until a human clicks or types.

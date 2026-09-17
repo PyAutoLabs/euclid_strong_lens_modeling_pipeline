@@ -50,7 +50,7 @@ reads ``output_sed`` by default rather than the main ``output``. Re-runs of a
 waveband leave more than one result per ``(lens, stage, band)``; the newest is
 kept and the rest dropped, by ``magnitudes.latest_result_per_lens_band``.
 
-Stage 9 of ``scripts/build_inspection_bundle.sh``.
+Stage 10 of ``scripts/build_inspection_bundle.sh``.
 
 __Shared Machinery__
 
@@ -171,7 +171,7 @@ def main():
     Then ``with_grid_offset`` drops VIS. ``AggregateCSV`` raises ``ValueError``
     when handed an empty aggregator, which is the ordinary case for a sample
     whose SED chain has not run yet *and* for a tree holding only VIS fits. That
-    is caught and reported rather than raised: stage 9 of the bundle builder
+    is caught and reported rather than raised: stage 10 of the bundle builder
     should leave a partial bundle alone, not abort it.
     """
     args = parse_args()
