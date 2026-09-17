@@ -156,8 +156,9 @@ here on request — contact James Nightingale on the Euclid consortium SLACK.
 | `scripts/tools/diagnose_latent.py` | Replays the Euclid latent catalogue on one converged result and prints every latent value, flagging NaN and zero sentinels. Runs no search. |
 | `scripts/tools/diagnose_latent_vis_pix.py` | The population version: the same replay over every `vis_pix` result in a sample, reporting per-dataset OK/ERR. |
 | `scripts/tools/build_inspect.py` | Collects the inspection bundle's PNGs out of finished result zips. |
-| `scripts/build_inspection_bundle.sh` | Runs all nine catalogue stages in order for a sample. |
-| `catalogue/` | The producers that turn finished fits into the per-lens inspection bundle and the master CSVs — see [`catalogue/README.md`](catalogue/README.md) for the 19-file to producer table and the run order. |
+| `scripts/build_inspection_bundle.sh` | Runs all ten catalogue stages in order for a sample. |
+| `catalogue/scripts/witt_wynne.py` | Projects each lens's `initial_lens_model/vis_pix` mass model onto a Witt-Wynne SIEP and writes the `isit4or2or1` input file plus the 4 / 2 / 1 verdict, image positions, magnifications and time lags into `witt_wynne.csv`. See [`docs/witt_wynne.md`](docs/witt_wynne.md). |
+| `catalogue/` | The producers that turn finished fits into the per-lens inspection bundle and the master CSVs — see [`catalogue/README.md`](catalogue/README.md) for the 21-file to producer table and the run order. |
 
 ## Command-Line Arguments
 

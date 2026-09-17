@@ -21,7 +21,7 @@ Each column comes in five flavours: median, lower/upper 1σ, lower/upper 3σ.
 Only lenses whose search wrote a ``.completed`` marker are listed. The master
 CSV is also split into one row per lens, dropped in that lens's own folder.
 
-Stage 4 of ``scripts/build_inspection_bundle.sh``.
+Stage 5 of ``scripts/build_inspection_bundle.sh``.
 
 __Why A Sersic, After The MGE__
 
@@ -100,7 +100,7 @@ def main():
     separate results tree ``scripts/sersic_lens_model.py`` writes beside — not
     inside — the initial fit's.
 
-    That is the run-order dependency ``catalogue/README.md`` records for stage 4:
+    That is the run-order dependency ``catalogue/README.md`` records for stage 5:
     a lens with no finished ``sersic_lens_model/vis`` search simply does not
     appear in ``lens_sersic.csv``, because ``completed_only=True`` filtered it
     out one line below. Everything else on the way to the CSV — path resolution,

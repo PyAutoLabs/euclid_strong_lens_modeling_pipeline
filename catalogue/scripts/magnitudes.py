@@ -30,7 +30,7 @@ reads ``output_sed`` by default rather than the main ``output``. Re-runs of a
 waveband leave more than one result per ``(lens, stage, band)``; the newest is
 kept and the rest dropped.
 
-Stage 7 of ``scripts/build_inspection_bundle.sh``.
+Stage 9 of ``scripts/build_inspection_bundle.sh``.
 
 __Where These Results Come From__
 
@@ -191,7 +191,7 @@ def main():
 
     ``AggregateCSV`` raises ``ValueError`` when handed an empty aggregator, which
     is the ordinary case for a sample whose SED chain has not run yet. That is
-    caught and reported rather than raised: stage 7 of the bundle builder should
+    caught and reported rather than raised: stage 9 of the bundle builder should
     leave a partial bundle alone, not abort it.
     """
     args = parse_args()

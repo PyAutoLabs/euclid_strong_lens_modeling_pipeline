@@ -3,7 +3,7 @@
 # Build the inspection bundle (the catalogue) for one sample, on the cluster.
 #
 # WHAT THIS DOES
-#   Runs `scripts/build_inspection_bundle.sh` — the eight catalogue producers in
+#   Runs `scripts/build_inspection_bundle.sh` — the ten catalogue producers in
 #   dependency order — over a results tree that is already on the cluster, and
 #   leaves the bundle in `inspect/<sample>[_<run_tag>]/`. It fits nothing: every
 #   number it writes was produced by a fit that has already finished, so this is

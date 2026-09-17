@@ -11,9 +11,10 @@ Two modes, one script:
   top of this file: an ``Isothermal`` + ``ExternalShear`` mass, a ``Sersic`` lens light and a
   ``Sersic`` source. Use it to make a clean, well-understood test lens.
 - ``--from-result`` takes a **fit you have already run** and resimulates it: the tracer is
-  rebuilt from that result's ``model.json`` + maximum-log-likelihood sample, and the bands,
-  PSFs, zero-points, WCS and noise levels are read off the dataset the fit was made on. This
-  is the *"I have fitted a lens, now resimulate it"* workflow.
+  loaded from that result's ``tracer.json`` — the maximum-log-likelihood lens with the solved
+  light-profile intensities already in it — and the bands, PSFs, zero-points, WCS and noise
+  levels are read off the dataset the fit was made on. This is the *"I have fitted a lens, now
+  resimulate it"* workflow.
 
 Every simulation writes a **truth file** (``truth.json``) beside the data holding every model
 parameter, the true per-band fluxes (counts and µJy), the four aperture lens fluxes, the true
@@ -56,7 +57,10 @@ does (and reuses its ``resolve_files_path`` helper), so the arguments are the sa
 
 The tracer is whatever the fit inferred — an MGE ``initial_lens_model/vis_lp`` result
 resimulates as an MGE, a ``sersic_lens_model/vis`` result resimulates as the Sersic-on-Sersic
-lens the DR1 resimulation programme wants.
+lens the DR1 resimulation programme wants. It is read from the result's ``tracer.json``, which
+is the only file under ``files/`` carrying the light-profile intensities: this pipeline fits
+*linear* light profiles, whose intensities are solved inside the likelihood and so are absent
+from ``model.json`` and from the parameter vector.
 
 **Prior-edge rule.** Real Euclid fits frequently pin the lens-light ``sersic_index`` against
 the upper prior edge at 5. Simulating a lens at the prior edge bakes that artefact into the
@@ -252,6 +256,9 @@ rather than PyAutoLens's.
 
 - ``json_number`` is the guard on everything written into ``truth.json``. A truth file is only
   useful if it can be read back by any JSON parser, and a non-finite float cannot be.
+- ``simulated_image_from`` is the only route from a model image to a simulated band. It runs the
+  PSF convolution, clips the round-off negatives it produces, and hands the result back to
+  ``SimulatorImaging`` — which otherwise dies drawing Poisson noise it was told not to add.
 - ``gaussian_psf_from`` is the idealised PSF of ``--from-params``: a circular Gaussian of the
   right FWHM, unit-normalised, returned as a ``Convolver`` so the same object can both blur the
   simulated band and, later, degrade the lens light to the worst band's seeing for the aperture
@@ -273,6 +280,98 @@ def json_number(value):
     """
     value = float(value)
     return value if np.isfinite(value) else None
+
+
+def band_simulator_from(psf, noise_sigma):
+    """
+    The ``SimulatorImaging`` every band is simulated with.
+
+    Poisson noise is switched off in both the data and the noise-map, and a constant noise-map of
+    ``noise_sigma`` requested instead (``noise_if_add_noise_false``); :func:`simulate` then adds
+    Gaussian noise at exactly that sigma. Euclid MER cut-outs are background-subtracted mosaics
+    whose RMS maps are near-constant, so constant Gaussian noise is both the closer match and the
+    cleanly-known truth — hence ``background_sky_level=0.0`` as well.
+
+    It is a function rather than four lines inside the band loop so that
+    :func:`simulated_image_from`'s guard can be tested against the *real* simulator this pipeline
+    builds, and so that ``tests/test_repo_invariants.py``'s "only the simulator script simulates"
+    invariant keeps holding over a single construction site.
+    """
+    import autolens as al
+
+    return al.SimulatorImaging(
+        exposure_time=EXPOSURE_TIME,
+        psf=psf,
+        background_sky_level=0.0,
+        add_poisson_noise_to_data=False,
+        include_poisson_noise_in_noise_map=False,
+        noise_if_add_noise_false=noise_sigma,
+    )
+
+
+ROUND_OFF_FRACTION = 1e-10
+
+
+def simulated_image_from(simulator, image, pixel_scale):
+    """
+    PSF-convolve ``image`` through ``simulator``, clipping the convolution's round-off away
+    before the library sees it.
+
+    Every model image this script builds is non-negative — a Sersic is — but PSF-convolving one
+    returns pixels of order ``-4e-18`` where the true value is zero: floating-point round-off,
+    about ``1e-17`` of the image peak. PyAutoArray's ``SimulatorImaging`` draws its Poisson noise
+    **before** it checks ``add_poisson_noise_to_data``
+    (``autoarray/dataset/imaging/simulator.py:246``), so ``np.random.poisson`` is handed a
+    negative lambda and raises ``ValueError: lam < 0`` — even though this script switches Poisson
+    noise off entirely. Four of the 100 ``dr1_sep1_sersics`` tiles died that way on 2026-09-13.
+
+    Clipping the *input* would not help: the negatives are made by the convolution, not carried
+    into it. So the convolution is run here (mirroring the library's own branch on
+    ``use_real_space_convolution``, so it is the same convolution it would have done), the
+    round-off is clipped, and the already-convolved image is handed back with
+    ``image_is_convolved=True``. Everything the simulator does after the convolution — the
+    background sky, the noise-map, the dataset — is unchanged.
+
+    The clip is not allowed to hide a real result: a minimum below
+    ``-ROUND_OFF_FRACTION * maximum`` is seven orders of magnitude beyond round-off, so it is a
+    genuinely negative image and raises rather than being quietly zeroed.
+
+    The library-side fix is filed as
+    ``PyAutoMind/draft/bug/autoarray/simulator_imaging_poisson_drawn_before_flag_check.md``;
+    this guard is what lets the pipeline run before it lands.
+    """
+    import autolens as al
+
+    array = al.Array2D.no_mask(values=image, pixel_scales=pixel_scale)
+
+    if simulator.use_real_space_convolution:
+        convolved = simulator.psf.convolved_image_via_real_space_from(
+            image=array, blurring_image=None
+        )
+    else:
+        convolved = simulator.psf.convolved_image_from(image=array, blurring_image=None)
+
+    values = np.asarray(convolved.native, dtype=np.float64)
+
+    minimum = float(values.min())
+    maximum = float(values.max())
+
+    if minimum < -ROUND_OFF_FRACTION * maximum:
+        raise SystemExit(
+            f"ERROR: the PSF-convolved image has minimum {minimum:.3e} against maximum "
+            f"{maximum:.3e}. That is far beyond the ~1e-17 convolution round-off this clip "
+            f"exists for, so it is a genuinely negative image and is not being clipped away."
+        )
+
+    return np.asarray(
+        simulator.via_image_from(
+            image=al.Array2D.no_mask(
+                values=np.clip(values, 0.0, None), pixel_scales=pixel_scale
+            ),
+            image_is_convolved=True,
+        ).data.native,
+        dtype=np.float64,
+    )
 
 
 def gaussian_psf_from(fwhm_arcsec, shape_native, pixel_scale):
@@ -539,10 +638,14 @@ applied around them:
 
 - ``tracer_from_params`` assembles the analytic lens from the ``TRUTH`` block above, at unit
   intensity. Nothing here knows about bands; the per-band scaling happens in :func:`simulate`.
-- ``tracer_from_result`` rebuilds a lens that was *fitted*, from a finished search's
-  ``model.json`` and its maximum-log-likelihood sample. Whatever that fit inferred is what gets
-  simulated — an MGE lens light resimulates as an MGE, a Sersic fit as a Sersic — which is
-  why this script needs no model of its own for the resimulation mode.
+- ``tracer_from_result`` loads a lens that was *fitted*, from a finished search's
+  ``tracer.json``. Whatever that fit inferred is what gets simulated — an MGE lens light
+  resimulates as an MGE, a Sersic fit as a Sersic — which is why this script needs no model of
+  its own for the resimulation mode. ``tracer.json`` rather than ``model.json`` because every
+  profile this pipeline fits is *linear*: the intensities are solved inside the likelihood, so
+  they exist only in the tracer PyAutoLens writes at the end of the fit.
+- ``assert_intensities_recovered`` refuses a tracer whose light profiles are still linear or
+  are all dark, so a resimulation can never quietly write noise.
 - ``apply_sersic_index_prior_edge_rule`` runs only on a ``--from-result`` tracer, and only on
   the lens light: an inferred value pinned against its prior edge is an artefact of the fit
   rather than a measurement, and simulating it would bake the artefact into the mock.
@@ -670,14 +773,93 @@ def apply_sersic_index_prior_edge_rule(galaxy, prior_edge, replacement):
     return inferred, float(replacement)
 
 
+def light_profile_list_from(galaxy):
+    """
+    Every light profile of ``galaxy``, with an MGE ``Basis`` flattened into its components.
+
+    The same ``bulge`` / ``disk`` / ``light`` walk (and the same ``profile_list`` recursion)
+    :func:`scaled_tracer_from` uses, so "the profiles that carry flux" means one thing in this
+    file.
+    """
+    profiles = []
+
+    def collect(profile):
+        if profile is None:
+            return
+        profile_list = getattr(profile, "profile_list", None)
+        if profile_list is not None:
+            for entry in profile_list:
+                collect(entry)
+        else:
+            profiles.append(profile)
+
+    for name in ("bulge", "disk", "light"):
+        collect(getattr(galaxy, name, None))
+
+    return profiles
+
+
+def assert_intensities_recovered(tracer, files_path):
+    """
+    Refuse to simulate a lens whose light profiles carry no flux.
+
+    This is the regression guard for the defect this mode was born with: every light profile
+    this pipeline fits is *linear* (``al.lp_linear.Sersic``, an MGE ``Basis`` of
+    ``al.lp_linear.Gaussian``), so a tracer rebuilt from ``model.json`` plus a parameter vector
+    has no intensities at all — the simulation is then pure noise, and nothing downstream
+    notices, because a dark lens is a perfectly valid tracer. Raising here is the difference
+    between a loud failure and 100 mock tiles of noise.
+    """
+    import autolens as al
+
+    linear = sorted(
+        {
+            type(profile).__name__
+            for galaxy in tracer.galaxies
+            for profile in light_profile_list_from(galaxy)
+            if isinstance(profile, al.lp_linear.LightProfileLinear)
+        }
+    )
+    if linear:
+        raise SystemExit(
+            f"ERROR: the tracer loaded from {files_path / 'tracer.json'} still holds linear "
+            f"light profiles ({', '.join(linear)}), whose intensities are solved inside the "
+            f"likelihood rather than stored. Simulating it would write pure noise. This file "
+            f"should have been written from "
+            f"`fit.model_obj_linear_light_profiles_to_light_profiles`; re-run the fit with a "
+            f"current PyAutoLens."
+        )
+
+    intensities = [
+        float(profile.intensity)
+        for galaxy in tracer.galaxies
+        for profile in light_profile_list_from(galaxy)
+        if getattr(profile, "intensity", None) is not None
+    ]
+    if intensities and not any(intensity != 0.0 for intensity in intensities):
+        raise SystemExit(
+            f"ERROR: every light profile in {files_path / 'tracer.json'} has zero intensity, "
+            f"so the simulation would be pure noise."
+        )
+
+
 def tracer_from_result(args, output_path):
     """
-    Rebuild the tracer of a finished fit from its ``model.json`` and maximum-log-likelihood
-    sample.
+    Load the tracer of a finished fit from its ``tracer.json``.
 
-    This is the same resolution ``scripts/tools/diagnose_latent.py`` performs — its
+    ``tracer.json`` is the *solved* lens. PyAutoLens writes it in
+    ``AnalysisDataset.save_results`` from ``ResultImaging.max_log_likelihood_tracer``, which is
+    ``fit.model_obj_linear_light_profiles_to_light_profiles`` — the maximum-log-likelihood
+    tracer with every linear light profile already converted to a standard profile carrying the
+    intensity the inversion solved for. It is the only file under ``files/`` that holds an
+    intensity at all, which is exactly why it is read here rather than ``model.json``: every
+    light profile this pipeline fits is linear, so a tracer rebuilt from ``model.json`` plus the
+    maximum-log-likelihood parameter vector carries no flux and simulates as noise.
+
+    The result *directory* is resolved exactly as before: ``scripts/tools/diagnose_latent.py``'s
     ``resolve_files_path`` is imported rather than reimplemented, so "the newest converged
-    result" means the same thing in both scripts.
+    result" means the same thing in both scripts and ``--result_hash`` selects the same
+    directory it always did.
     """
     from autofit import from_dict
     import autolens as al  # noqa: F401  needed so `from_dict` resolves al.* classes
@@ -692,18 +874,21 @@ def tracer_from_result(args, output_path):
     files_path = resolve_files_path(search_dir, result_hash=args.result_hash)
     print(f"[simulator] resimulating result: {files_path}", flush=True)
 
-    with open(files_path / "samples_summary.json") as f:
-        summary = from_dict(json.load(f))
-    with open(files_path / "model.json") as f:
-        model = from_dict(json.load(f))
-    summary.model = model
+    tracer_json = files_path / "tracer.json"
+    if not tracer_json.exists():
+        raise SystemExit(
+            f"ERROR: no tracer.json in {files_path}. It is written by PyAutoLens at the end of "
+            f"a fit and is the only file there holding the solved light-profile intensities, so "
+            f"this result cannot be resimulated without it. Re-run the fit, or point "
+            f"--result_hash at a result that has one."
+        )
 
-    parameters = summary.max_log_likelihood_sample.parameter_lists_for_model(model)
-    instance = model.instance_from_vector(vector=parameters)
+    with open(tracer_json) as f:
+        tracer = from_dict(json.load(f))
 
-    galaxies = list(instance.galaxies)
+    assert_intensities_recovered(tracer=tracer, files_path=files_path)
 
-    return al.Tracer(galaxies=galaxies), files_path
+    return tracer, files_path
 
 
 """
@@ -1101,28 +1286,17 @@ def simulate(args):
         Euclid MER cut-outs are background-subtracted mosaics whose RMS maps are near-constant,
         so constant Gaussian noise is both the closer match and the cleanly-known truth.
         """
-        simulator = al.SimulatorImaging(
-            exposure_time=EXPOSURE_TIME,
-            psf=psf,
-            background_sky_level=0.0,
-            add_poisson_noise_to_data=False,
-            include_poisson_noise_in_noise_map=False,
-            noise_if_add_noise_false=noise_sigma,
-        )
+        simulator = band_simulator_from(psf=psf, noise_sigma=noise_sigma)
 
-        image_convolved = np.asarray(
-            simulator.via_image_from(
-                image=al.Array2D.no_mask(
-                    values=lens_image + lensed_source_image, pixel_scales=pixel_scale
-                )
-            ).data.native,
-            dtype=np.float64,
+        image_convolved = simulated_image_from(
+            simulator=simulator,
+            image=lens_image + lensed_source_image,
+            pixel_scale=pixel_scale,
         )
-        lens_image_convolved = np.asarray(
-            simulator.via_image_from(
-                image=al.Array2D.no_mask(values=lens_image, pixel_scales=pixel_scale)
-            ).data.native,
-            dtype=np.float64,
+        lens_image_convolved = simulated_image_from(
+            simulator=simulator,
+            image=lens_image,
+            pixel_scale=pixel_scale,
         )
 
         data = image_convolved + rng.normal(
@@ -1578,8 +1752,8 @@ def parse_args():
         "--from-result",
         action="store_true",
         help=(
-            "Rebuild the tracer from a finished fit's model.json + max-log-likelihood sample "
-            "instead of the analytic truth values in this file."
+            "Load the tracer from a finished fit's tracer.json (the max-log-likelihood lens, "
+            "with its solved intensities) instead of the analytic truth values in this file."
         ),
     )
     parser.add_argument(
@@ -1616,7 +1790,7 @@ def parse_args():
         default=None,
         help=(
             "Result hash subdirectory. Default: the most recently modified hash directory "
-            "that contains samples_summary.json + model.json."
+            "that contains samples_summary.json + model.json; it must also hold tracer.json."
         ),
     )
 
