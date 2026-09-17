@@ -67,6 +67,20 @@ not copied here.
 
 ## Where we are now
 
+- **The multi-band SED chain has run on the sep1 sample (2026-09-17).** SLURM array
+  **`343381`** (`euclid_sersic_waveband`, `--array=0,2-9`, partition `ral`, 8 cpus, 64 GB,
+  12 h) ran `hpc/batch_cpu/submit_sersic_waveband` — new in this clone at `2c4bead`, the
+  prelim copy of pipeline PR #70's script with `PROJECT_PATH`, `sample=dr1_sep1` and the sep1
+  tile list re-pointed. **Eight of nine tasks `COMPLETED` in 6-16 min**; `343381_8`
+  (`Tile102008532RA0683486015030DECNEG0642073552911`) was still running 40 min in, on its
+  first waveband, and was left alone. The chain seeded off a **copy** of each tile's
+  `initial_lens_model/vis_lp/<hash>.zip` into `output_sed/dr1_sep1/<tile>/…`, and every task's
+  `.out` shows `Fit Already Completed` on the seeded hash, so no `vis_lp` was refitted. Local
+  `output_sed/` now mirrors RAL **nested** (`output_sed/dr1_sep1/<Tile>/…`, 70 zips: 9 seeds,
+  9 `sersic_lens_model/vis`, 52 waveband fits). The bundle `inspect/dr1_sep1/` gained
+  **`astrometric_offsets.csv` (52 rows, 8 lenses, 7 bands)** and **`magnitudes.csv` (61 rows)**,
+  and every tile folder gained `fit_multi_wavelength.png`. Journal:
+  `2026-09-17-sed-chain-sep1.md`.
 - **The nine completed sep1 fits now carry `files/coolest.json` (2026-09-17).** The
   `feature/coolest-observation-grid` work is merged in this clone at `60133f8` and on the RAL
   stack (PyAutoLens `223132c0b`, PR #740), `coolest` **0.1.11** is installed in the RAL venv,
@@ -109,7 +123,14 @@ not copied here.
 
 ## In flight
 
-- **Nothing is running on RAL.** `squeue` is empty for `jnightin`.
+- **`343381_8` is still running on RAL** — the SED chain on
+  `Tile102008532RA0683486015030DECNEG0642073552911`, submitted 13:33 BST on 2026-09-17, past
+  40 min on its first waveband (`nir_y`) where every other tile took about a minute a band. Its
+  VIS Sersic fit is already written; its walltime is 12 h and its
+  `search_internal/checkpoint.hdf5` was still growing. When it clears, re-pull
+  `output_sed/dr1_sep1/` and rebuild the bundle — `astrometric_offsets.csv` should reach 59
+  rows across 9 lenses and `magnitudes.csv` 68. The other eight tasks of array **`343381`**
+  (`--array=0,2-9`) are `COMPLETED`.
 - **SLURM array `342650`** (`euclid_dr1_two_stage`, `--array=0-9`) **is finished**: nine of the
   ten tiles completed both stages (18 zips under `output/dr1_sep1/<tile>/initial_lens_model/`),
   and `Tile102007299RA0702283866574DECNEG0660415308762` (array index 1) never completed its
@@ -126,6 +147,13 @@ not copied here.
 
 ## Open, carried forward
 
+- **The Sersic products are not in the bundle, although the fits exist.**
+  `lens_sersic.csv`, `source_sersic.csv`, `fit_sersic.png` and `coolest_sersic.json` are absent
+  from `inspect/dr1_sep1/` because stages 1, 5 and 6 of `scripts/build_inspection_bundle.sh`
+  read `OUTPUT_DIR`, while the SED chain writes `sersic_lens_model` into `SED_OUTPUT_DIR`. Run
+  by hand against `--output_path=output_sed` they give 9 rows each. Whether the bundle script
+  should point those three stages at the SED tree is an open question for the pipeline, not a
+  local fix — `euclid_dr1_prelim`'s `342629` bundle has the same gap.
 - **The results are pulled; the by-eye sheet is still owed.** Local `output/` mirrors RAL
   (18 zips, 52 MB, flat `output/<Tile>/…` layout). What remains is the **per-tile side-by-side
   sheet** — the new `vis_pix` fit PNG next to 342629's for the same lens — and the
@@ -150,6 +178,15 @@ not copied here.
 
 ## Traps — don't repeat
 
+- **`output/` is flat here but `output_sed/` is nested.** The SED tree is pulled as
+  `output_sed/dr1_sep1/<Tile>/…` (matching RAL) because stages 7-9 of
+  `scripts/build_inspection_bundle.sh` resolve `<PROJECT_ROOT>/<SED_OUTPUT_DIR>/<sample>`, so
+  `SED_OUTPUT_DIR=output_sed` needs no symlink — while `OUTPUT_DIR` still needs the scratch
+  `dr1_sep1 →  output` symlink for the flat `output/`. The two trees deliberately differ; do
+  not "fix" one to match the other.
+- **Band coverage differs per tile.** `Tile102005065…` carries only `nir_y`/`nir_j`/`nir_h`;
+  the other eight carry those plus `decam_g/r/i/z`. A short SED task or a short row count is
+  the cut-out, not a failure.
 - **Never refresh or touch `/mnt/ral/jnightin/PyAuto` while an array is running.** Mid-run
   library drift is what broke prelim's `342301_1/_7/_8`. Prelim's `342629_1/_3` were still
   live when this project was submitted, and share that stack.
@@ -180,6 +217,10 @@ not copied here.
 
 ## Journal index
 
+- `2026-09-17-sed-chain-sep1.md` — the CPU SED chain (array `343381`, `--array=0,2-9`) run
+  on the nine seeded sep1 tiles: eight tiles complete in 6-16 min, the bundle rebuilt with
+  `astrometric_offsets.csv` (52 rows) and `magnitudes.csv` (61 rows), and the three
+  near-prior-edge registration rows.
 - `2026-09-16-coolest-json-reload-pass.md` — the coolest.json reload pass prepared (branch
   merged, tests green, `submit_reload_coolest` written) and then **run on 2026-09-17**
   (array `343367`): all 18 zips and all nine inspect folders now carry a COOLEST template.
