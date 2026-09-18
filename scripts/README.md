@@ -58,8 +58,10 @@ All fitting pipelines share one argument parser (`util.parse_fit_args`) —
     `dataset/simulated/euclid_dr1_like/` was made with
     (`--from-params --seed 1`), and `truth.json` is the known-answer source for
     `tests/test_compute_latent_variable.py`.
-  - `--from-result` resimulates a fit you have already run: the tracer is rebuilt
-    from that result's `model.json` + maximum-log-likelihood sample (resolved with
+  - `--from-result` resimulates a fit you have already run: the tracer is loaded
+    from that result's `tracer.json` — the maximum-log-likelihood lens with the
+    linear light profiles already converted to the intensities the fit solved for,
+    which `model.json` and the parameter vector do not carry (resolved with
     `tools/diagnose_latent.py::resolve_files_path`, so the arguments are the same
     `--sample` / `--dataset` / `--unique_tag` / `--search` / `--result_hash`) and
     the bands, PSF stamps, zero-points, WCS and noise levels come from the dataset
@@ -92,6 +94,6 @@ All fitting pipelines share one argument parser (`util.parse_fit_args`) —
 
 - `tools/build_inspect.py`: Collects the inspection bundle's PNGs out of the result
   zips PyAutoFit writes (falling back to an unzipped result directory).
-- `build_inspection_bundle.sh`: Runs all seven catalogue stages in order for a
+- `build_inspection_bundle.sh`: Runs all ten catalogue stages in order for a
   sample. See [`../catalogue/README.md`](../catalogue/README.md) for the
-  13-file to producer table, the run order and the upstream fit each stage needs.
+  21-file to producer table, the run order and the upstream fit each stage needs.

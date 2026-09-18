@@ -280,6 +280,18 @@ are catalogued in `catalogue/README.md` — see that file's producer table
 rather than a duplicate here. Every one of the 13 now has a named producer in
 this repository.
 
+The producer↔file map has grown since this section was written and
+`catalogue/README.md` remains its single source of truth; it now lists **21**
+files across ten stages. The counts in this section are the dated phase-1/2
+record of the 13 files that existed then, not a current inventory. Added since:
+`convergence.fits` / `potential.fits` / `deflections.fits`
+(`catalogue/scripts/lens_mass_maps.py`, stage 3) and `witt_wynne.csv` /
+`witt_wynne.in` (`catalogue/scripts/witt_wynne.py`, stage 7 — the Witt-Wynne
+SIEP projection, registered in `docs/witt_wynne.md`). Neither needs any input
+the datasets below do not already ship: both read only a finished
+`initial_lens_model/vis_pix` result, so the 13-of-13 and 11-of-13 statements
+below are unchanged by them.
+
 On the shipped **real** example dataset,
 `dataset/q1_walsmley/102018665_NEG570040238507752998/`, 11 of the 13 can be
 produced end to end. The two gaps are `segmentation.png` and

@@ -22,7 +22,7 @@ Read this page once to pick a route. Everything else about the fits themselves i
 | A cluster where JAX is unavailable or broken | **Numba only** | `batch_cpu/submit_initial_lens_model` | Both stages in one process with JAX disabled. The `vis_lp` stage is markedly slower this way. |
 | The VIS fits are done and you want the multi-band SED chain (Sersic VIS fit + every other waveband) | **SED chain, CPU** (default) | `batch_cpu/submit_sersic_waveband` | `vis_lp` (short-circuited from its cached zip) then the VIS Sersic fit then one Sersic fit per non-VIS band, in one process with JAX pinned to the CPU backend. 8 cores, 64 GB, 12 h, partition `ral`, writes to `output_sed/` via `PYAUTO_OUTPUT_DIR`. |
 | As above, but a GPU node is free and the sample is small | **SED chain, GPU** (optional) | `batch_gpu/submit_sersic_waveband` | The identical chain on a GPU node. Both SED analyses are `use_jax=True`, so the only difference from the CPU default is which backend the same JAX likelihood runs on. |
-| The fits are finished and you want the catalogue built where the results already live | **Catalogue build** | `batch_cpu/submit_build_inspection_bundle` | No fitting: runs `scripts/build_inspection_bundle.sh` over an existing results tree and writes `inspect/<sample>[_<run_tag>]/`. 4 cores, 8 GB, 6 h, partition `ral`. `SAMPLE`, `RUN_TAG`, `OUTPUT_DIR` and `SED_OUTPUT_DIR` are `--export` overrides. |
+| The fits are finished and you want the catalogue built where the results already live | **Catalogue build** | `batch_cpu/submit_build_inspection_bundle` | No fitting: runs `scripts/build_inspection_bundle.sh` over an existing results tree and writes `inspect/<sample>[_<run_tag>]/`. 4 cores, 8 GB, 6 h, partition `ral`. `SAMPLE`, `RUN_TAG`, `OUTPUT_DIR` and `SED_OUTPUT_DIR` are `--export` overrides, passed through `hpc/sync submit` — e.g. `hpc/sync submit cpu submit_build_inspection_bundle --export=ALL,SAMPLE=dr1_sep1`. |
 
 Both figures come from the acceptance runs recorded below, with the committed,
 laptop-friendly `config/`. The "around 10 minutes per lens" quoted in the
@@ -226,7 +226,7 @@ path and the project name (`sync.conf` is gitignored). Then, from the project ro
 | `hpc/sync jobs` / `sacct` / `cancel <id>` | Queue, history, cancel. |
 | `hpc/sync tail cpu` / `tail gpu` | Stream the live SLURM logs. |
 | `hpc/sync logs` | Download only the SLURM logs (fast, use mid-run). |
-| `hpc/sync pull` | Download the logs, then `output/` and the other result trees. |
+| `hpc/sync pull [dir ...]` | Download the logs, then `output/` and the other result trees; name roots (`pull inspect`) to fetch only those. |
 | `hpc/sync wait-and-pull [secs]` | Poll until no jobs remain, then pull. |
 | `hpc/sync status` / `check` / `du` | Dry-run transfer, connection test, remote disk usage. |
 

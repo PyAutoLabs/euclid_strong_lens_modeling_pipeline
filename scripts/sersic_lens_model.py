@@ -233,10 +233,10 @@ def fit_sersic(
                 redshift=0.5,
                 bulge=lens_bulge,
                 mass=vis_result.instance.galaxies.lens.mass,
-                shear=vis_result.instance.galaxies.lens.shear,
             ),
             source=af.Model(al.Galaxy, redshift=1.0, bulge=source_bulge),
-        )
+        ),
+        fields=vis_result.instance.fields,
     )
 
     """

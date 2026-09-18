@@ -4,7 +4,8 @@ import json
 import numpy as np
 from pathlib import Path
 from PIL import Image
-from typing import List, Optional
+from typing import List, Optional, Tuple
+import logging
 
 import matplotlib.pyplot as plt
 from autolens import conf as _conf
@@ -13,6 +14,7 @@ from autolens import output_to_json
 import autofit as af
 import autolens as al
 import autolens.plot as aplt
+from autoarray.inversion.mappings.mapping import connected_components_from
 
 
 def _find_local_maxima(flux: np.ndarray) -> List[tuple]:
@@ -711,8 +713,10 @@ class AnalysisImaging(al.AnalysisImaging):
         For this analysis it outputs the following:
 
         - The maximum log likelihood tracer of the fit.
-        - The World Coordinate System (WCS) information of the dataset, which is used to convert between pixel and
-          world coordinates.
+        - ``wcs.json``: where the fitted lens sits on the sky and where its lensed source's multiple
+          images fall in the image plane — the record ``wcs_dict_from`` builds.
+        - ``coolest.json``: the maximum log likelihood model as a COOLEST template — the file
+          ``coolest_json_from`` writes.
 
         Parameters
         ----------
@@ -724,39 +728,579 @@ class AnalysisImaging(al.AnalysisImaging):
         """
         super().save_results(paths=paths, result=result)
 
-        lens_light_centre = result.max_log_likelihood_tracer.galaxies[0].bulge.centre
-
-        lens_light_centre_wcs_pix = (
-            self.dataset.data.geometry.pixel_coordinates_wcs_2d_from(
-                scaled_coordinates_2d=lens_light_centre
+        try:
+            fit = result.max_log_likelihood_fit
+        except Exception as e:  # noqa: BLE001 — a finished search outlives its record
+            logging.getLogger(__name__).warning(
+                "wcs.json: the maximum log likelihood fit could not be built, so a "
+                f"pixelized source's clumps are not recorded ({type(e).__name__}: {e})"
             )
+            fit = None
+
+        wcs_dict = wcs_dict_from(
+            tracer=result.max_log_likelihood_tracer,
+            data=self.dataset.data,
+            pixel_wcs=self.kwargs["pixel_wcs"],
+            fit=fit,
         )
-        lens_light_centre_wcs_pix_y = lens_light_centre_wcs_pix[0]
-        lens_light_centre_wcs_pix_x = lens_light_centre_wcs_pix[1]
-
-        pixel_wcs = self.kwargs["pixel_wcs"]
-
-        ra_c_deg, dec_c_deg = pixel_wcs.wcs_pix2world(
-            lens_light_centre_wcs_pix_x, lens_light_centre_wcs_pix_y, 1
-        )
-
-        data_centre_wcs_pix = self.dataset.data.geometry.pixel_coordinates_wcs_2d_from(
-            scaled_coordinates_2d=(0.0, 0.0)
-        )
-        data_centre_wcs_pix_y = data_centre_wcs_pix[0]
-        data_centre_wcs_pix_x = data_centre_wcs_pix[1]
-
-        wcs_dict = {
-            "crpix_x": data_centre_wcs_pix_x,
-            "crpix_y": data_centre_wcs_pix_y,
-            "crval_ra_deg": float(ra_c_deg),
-            "crval_dec_deg": float(dec_c_deg),
-        }
 
         output_to_json(
             obj=wcs_dict,
             file_path=paths._files_path / "wcs.json",
         )
+
+        dataset_main_path = self.kwargs.get("dataset_main_path")
+
+        coolest_json_from(
+            tracer=result.max_log_likelihood_tracer,
+            dataset=self.dataset,
+            file_path=paths._files_path / "coolest",
+            search_name=paths.name,
+            dataset_name=(
+                Path(dataset_main_path).name if dataset_main_path is not None else None
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# The WCS record (files/wcs.json)
+# ---------------------------------------------------------------------------
+
+# The `al.PointSolver` settings the lensed source's image-plane positions are
+# solved with. They are `scripts/simulator.py`'s (`positions_from_tracer`), so
+# the images a fit records for a tracer and the `positions.json` the simulator
+# solves for the same tracer agree to `pixel_scale_precision`.
+LENSED_SOURCE_PIXEL_SCALE_PRECISION = 0.005
+LENSED_SOURCE_MAGNIFICATION_THRESHOLD = 0.1
+
+# The settings a pixelized source's clumps are found with. The three thresholds
+# are the library's own `subplot_mappings` defaults
+# (`autoarray/config/visualize/general.yaml`, `inversion:`), restated here so
+# the record does not move when a visualization config does: a mesh pixel is in
+# a clump if its reconstructed value exceeds `threshold` times a scale; ~0.5
+# isolates one smooth source, ~0.2 merges two nearby galaxies into one clump,
+# ~0.8 splits a source into its star-forming knots.
+#
+# The scale is the reconstruction's 99th percentile, NOT its maximum — which is
+# the one place this repository departs from `Inversion.source_clumps_from`. On
+# a real adaptive Delaunay / Hilbert mesh the brightest mesh pixel is an
+# isolated spike 5-30x its brightest neighbour, so fewer than
+# `SOURCE_CLUMP_MIN_PIXELS` pixels ever clear `threshold * max` and the finder
+# returns nothing at all: measured on the four `dr1_sep1` `vis_pix` fits
+# (2026-09-16), 4/4 tiles gave no clump against the maximum, while `0.5 * p99`
+# gave a compact 3 / 6 / 6 / 7 pixel clump on the source on all four, its peak
+# 0.03-0.23 arcsec (1.1-4.8 local mesh spacings) from the independent `vis_lp`
+# MGE source centre. Smoothing the reconstruction over the neighbour graph
+# first was rejected: the neighbour median collapses a compact 3-pixel source
+# (no clump on Tile102005065) and the neighbour mean drifts the peak 0.13
+# arcsec onto the second bright knot.
+SOURCE_CLUMP_THRESHOLD = 0.5
+SOURCE_CLUMP_MIN_PIXELS = 3
+SOURCE_CLUMP_TOTAL = 5
+SOURCE_CLUMP_SCALE_PERCENTILE = 99.0
+
+# The pixelized source is always the last plane, mapped by the inversion's one
+# mapper (every pipeline model has a single pixelized plane).
+SOURCE_CLUMP_MAPPER_INDEX = 0
+
+
+def source_centre_from(tracer) -> Optional[Tuple[float, float]]:
+    """
+    The source-plane (y, x) centre of the source galaxy's light, in arcsec, or
+    ``None`` when the source carries no light profile with a centre.
+
+    The source galaxy is the tracer's last — the order every pipeline model and
+    ``truth.json`` use, and the one ``LatentLens`` indexes by. Its light is the
+    first light profile the galaxy holds: a single MGE ``Basis`` in ``vis_lp``,
+    whose ``centre`` is the centre its Gaussians share, or a ``Sersic`` in the
+    SED chain. A pixelized source (``vis_pix`` and the Delaunay stages) has no
+    light profile and so no centre — there is nothing to solve for.
+    """
+    source_galaxy = tracer.galaxies[-1]
+
+    for profile in source_galaxy.cls_list_from(cls=al.LightProfile):
+        centre = getattr(profile, "centre", None)
+        if centre is not None:
+            return float(centre[0]), float(centre[1])
+
+    return None
+
+
+def lensed_source_image_positions_from(
+    tracer, data, source_centre: Tuple[float, float]
+) -> al.Grid2DIrregular:
+    """
+    The image-plane (y, x) positions, in arcsec, that the tracer maps onto
+    ``source_centre``: the lens equation solved with ``al.PointSolver`` on a
+    uniform grid spanning the cut-out, exactly as ``scripts/simulator.py``
+    solves a mock's ``positions.json``.
+
+    The solver tiles the image plane with triangles, keeps those which trace
+    onto the source-plane point and subdivides them down to
+    ``LENSED_SOURCE_PIXEL_SCALE_PRECISION`` arcsec, then drops images whose
+    magnification is below ``LENSED_SOURCE_MAGNIFICATION_THRESHOLD``. A source
+    that is not multiply imaged returns fewer than two positions.
+    """
+    grid = al.Grid2D.uniform(
+        shape_native=data.shape_native,
+        pixel_scales=data.pixel_scales,
+        origin=data.origin,
+    )
+
+    solver = al.PointSolver.for_grid(
+        grid=grid,
+        pixel_scale_precision=LENSED_SOURCE_PIXEL_SCALE_PRECISION,
+        magnification_threshold=LENSED_SOURCE_MAGNIFICATION_THRESHOLD,
+    )
+
+    return solver.solve(tracer=tracer, source_plane_coordinate=source_centre)
+
+
+def source_clump_pix_indexes_from(
+    reconstruction,
+    neighbors,
+    threshold: float = SOURCE_CLUMP_THRESHOLD,
+    min_pixels: int = SOURCE_CLUMP_MIN_PIXELS,
+    total_clumps: Optional[int] = SOURCE_CLUMP_TOTAL,
+    scale_percentile: float = SOURCE_CLUMP_SCALE_PERCENTILE,
+) -> Tuple[List[np.ndarray], str]:
+    """
+    The mesh pixel indexes of the reconstruction's bright clumps, and the rule
+    that found them.
+
+    This is ``Inversion.source_clumps_from`` (``autoarray/inversion/inversion/
+    abstract.py``) line for line — mesh pixels whose reconstructed value exceeds
+    ``threshold`` times a scale are kept, split into connected components over
+    the mesh neighbour graph (``connected_components_from``), filtered by
+    ``min_pixels``, ordered by decreasing peak value and capped at
+    ``total_clumps`` — except in two places:
+
+    - the **scale** is the reconstruction's ``scale_percentile`` percentile, not
+      its maximum;
+    - a **failsafe** guarantees a clump: if nothing clears the threshold in a
+      group of ``min_pixels``, the single brightest mesh pixel is returned as a
+      one-pixel clump and a warning is logged.
+
+    The scale is a percentile because on a real adaptive Delaunay / Hilbert mesh
+    the reconstruction's maximum is not a smooth source peak but an isolated
+    spike: on the four ``dr1_sep1`` ``vis_pix`` fits (2026-09-16) the brightest
+    mesh pixel was 5-33x its own brightest neighbour, so fewer than three pixels
+    cleared ``0.5 * max`` and the library finder returned ``[]`` on 4/4 tiles,
+    while ``0.5 * p99`` returned a compact 3 / 6 / 6 / 7 pixel clump sitting on
+    the source (0.03-0.23 arcsec from the independent ``vis_lp`` MGE centre) on
+    all four. The spike is real reconstructed flux, not an edge artefact — it
+    sits on the source — so it is thresholded against, not smoothed away;
+    smoothing over the neighbour graph was measured and rejected (see the
+    constants above).
+
+    Parameters
+    ----------
+    reconstruction
+        The mesh pixel values of the source's reconstruction.
+    neighbors
+        The mesh's ``Neighbors``, mapping every mesh pixel to its neighbours.
+    threshold
+        Mesh pixels are in a clump if their reconstructed value exceeds this
+        fraction of the scale.
+    min_pixels
+        Connected groups with fewer than this many mesh pixels are discarded.
+    total_clumps
+        The maximum number of clumps returned, keeping the brightest. ``None``
+        returns all of them.
+    scale_percentile
+        The percentile of the reconstruction the threshold is taken against.
+
+    Returns
+    -------
+    The clumps, one 1D integer array of mesh pixel indexes each, brightest
+    first, and the rule that produced them: ``"percentile"`` (the threshold
+    found at least one clump), ``"brightest_pixel"`` (the failsafe) or
+    ``"none"`` (an empty reconstruction, or one whose maximum is not positive —
+    nothing was reconstructed, so there is no clump to find).
+    """
+    reconstruction = np.asarray(reconstruction)
+
+    if reconstruction.size == 0 or float(np.max(reconstruction)) <= 0.0:
+        return [], "none"
+
+    scale = float(np.percentile(reconstruction, scale_percentile))
+
+    indexes = np.where(reconstruction > threshold * scale)[0]
+
+    clumps = []
+
+    if indexes.size > 0:
+        clumps = connected_components_from(indexes=indexes, neighbors=neighbors)
+        clumps = [clump for clump in clumps if clump.shape[0] >= min_pixels]
+        clumps.sort(key=lambda clump: -float(np.max(reconstruction[clump])))
+
+        if total_clumps is not None:
+            clumps = clumps[:total_clumps]
+
+    if clumps:
+        return clumps, "percentile"
+
+    logging.getLogger(__name__).warning(
+        f"wcs.json: no group of at least {min_pixels} mesh pixels exceeds "
+        f"{threshold} times the reconstruction's {scale_percentile}th percentile "
+        f"({scale}); the brightest mesh pixel is recorded as a one-pixel clump "
+        "(`source_clump_rule` is `brightest_pixel`)"
+    )
+
+    return [np.array([int(np.argmax(reconstruction))])], "brightest_pixel"
+
+
+def pixelized_source_clumps_from(fit) -> Tuple[List[dict], str]:
+    """
+    The bright clumps of a pixelized source's reconstruction, each with its
+    source-plane peak and the image-plane pixels it maps to — read off the
+    fit's mapper, not solved — and the rule that found them.
+
+    ``source_clump_pix_indexes_from`` thresholds the reconstruction at
+    ``SOURCE_CLUMP_THRESHOLD`` times its ``SOURCE_CLUMP_SCALE_PERCENTILE``
+    percentile, splits what is left into connected groups over the mesh
+    neighbour graph, drops groups smaller than ``SOURCE_CLUMP_MIN_PIXELS``,
+    keeps the ``SOURCE_CLUMP_TOTAL`` brightest and falls back to the brightest
+    mesh pixel alone if nothing survives. Those groups are handed to
+    ``Inversion.mappings_from`` as ``pix_indexes``, which bypasses the library's
+    own finder and reads each clump's multiple images off the mapper's mapping
+    matrix as connected image-plane regions (``autoarray.inversion.mappings``,
+    PyAutoArray#517). Per clump this returns:
+
+    - ``peak_y_arcsec`` / ``peak_x_arcsec`` — the source-plane centre of the
+      clump's brightest mesh pixel (the peak, not the mean of the clump);
+    - ``peak_value`` — the reconstructed value there;
+    - ``mesh_pixels`` — how many mesh pixels the clump spans;
+    - ``image_y_arcsec`` / ``image_x_arcsec`` — one entry per image region: the
+      brightest pixel of the source's *model* image inside that region (what a
+      fibre is pointed at; ``ImageRegion.brightest_coordinate_from``), largest
+      region first.
+
+    Clumps are ordered brightest first, so the first is the source's main
+    structure and the rest are companions or star-forming knots.
+
+    Returns
+    -------
+    The clumps and the rule that found them (``"percentile"``,
+    ``"brightest_pixel"`` or ``"none"`` — the last with an empty clump list,
+    and only when nothing was reconstructed).
+    """
+    inversion = fit.inversion
+    mapper = inversion.cls_list_from(cls=al.Mapper)[SOURCE_CLUMP_MAPPER_INDEX]
+
+    reconstruction = np.asarray(inversion.reconstruction_dict[mapper])
+    mesh_grid = np.asarray(mapper.source_plane_mesh_grid)
+    model_image = fit.model_images_of_planes_list[-1]
+
+    pix_indexes, rule = source_clump_pix_indexes_from(
+        reconstruction=reconstruction,
+        neighbors=mapper.neighbors,
+    )
+
+    if rule == "none":
+        return [], rule
+
+    mappings = inversion.mappings_from(
+        mapper_index=SOURCE_CLUMP_MAPPER_INDEX,
+        pix_indexes=pix_indexes,
+    )
+
+    clumps = []
+
+    for mapping in mappings:
+        clump_pix_indexes = np.asarray(mapping.pix_indexes)
+        peak_index = int(
+            clump_pix_indexes[int(np.argmax(reconstruction[clump_pix_indexes]))]
+        )
+
+        images = [
+            region.brightest_coordinate_from(array=model_image)
+            for region in mapping.image_regions
+            if len(region.slim_indexes) > 0
+        ]
+
+        clumps.append(
+            {
+                "peak_y_arcsec": float(mesh_grid[peak_index, 0]),
+                "peak_x_arcsec": float(mesh_grid[peak_index, 1]),
+                "peak_value": float(reconstruction[peak_index]),
+                "mesh_pixels": int(clump_pix_indexes.shape[0]),
+                "image_y_arcsec": [float(y) for y, _ in images],
+                "image_x_arcsec": [float(x) for _, x in images],
+            }
+        )
+
+    return clumps, rule
+
+
+def wcs_dict_from(tracer, data, pixel_wcs, fit=None) -> dict:
+    """
+    The record ``AnalysisImaging.save_results`` writes to ``files/wcs.json``:
+    where the fitted lens sits on the sky, and where its lensed source's
+    multiple images fall.
+
+    Always present:
+
+    - ``crval_ra_deg`` / ``crval_dec_deg`` — the maximum-likelihood lens light
+      centre converted to RA / Dec through ``pixel_wcs``. Despite the FITS-style
+      name this is not the cut-out's reference pixel;
+      ``catalogue/scripts/magnitudes.py`` reads the RA back as its
+      ``crval_ra_deg`` label column.
+    - ``crpix_x`` / ``crpix_y`` — the 1-based WCS pixel of the image-plane
+      origin ``(0, 0)``.
+    - ``source_model`` — how the source was located: ``"light_profile"`` (its
+      light has a centre — the MGE ``Basis`` of ``vis_lp``, the ``Sersic`` of
+      the SED chain), ``"pixelized"`` (a ``Pixelization`` source and a ``fit``
+      to read its reconstruction from — ``vis_pix``, the Delaunay stages) or
+      ``"none"`` (neither, or no ``fit`` was given for a pixelized source).
+
+    Present when the source was located (``source_model != "none"``):
+
+    - ``source_centre_y_arcsec`` / ``source_centre_x_arcsec`` — the source
+      position the lens equation is solved for, in the source plane: the light
+      centre (``source_centre_from``), or the peak of the brightest clump of the
+      reconstruction.
+    - ``lensed_source_image_y_arcsec`` / ``lensed_source_image_x_arcsec`` and
+      ``lensed_source_image_ra_deg`` / ``lensed_source_image_dec_deg`` — that
+      position's multiple images in the image plane, in arcsec and on the sky,
+      one entry per image (``lensed_source_image_positions_from``, the
+      ``al.PointSolver`` route). Empty lists mean the solver found no image;
+      the four are *absent* if the solver raised, which is logged rather than
+      raised so a search that has finished is never lost to its own record.
+
+    Present for a pixelized source whose clumps could be read
+    (``source_model == "pixelized"``):
+
+    - ``source_clumps`` — one entry per bright clump of the reconstruction,
+      brightest first (``pixelized_source_clumps_from``): its ``peak_*`` in the
+      source plane and its ``image_*`` in the image plane read off the fit's
+      mapper — the brightest model pixel of each image region — plus the same
+      images on the sky as ``image_ra_deg`` / ``image_dec_deg``. The two routes
+      differ on purpose: the solver keys are the sub-pixel lens-equation
+      solution for one point, the mapper keys are data pixels of every clump and
+      can merge two images into one arc or split one across a critical curve.
+    - ``source_clump_rule`` — which rule found them:
+      ``"percentile"`` (the ``0.5 * p99`` threshold found at least one clump of
+      at least ``SOURCE_CLUMP_MIN_PIXELS`` mesh pixels — the normal case),
+      ``"brightest_pixel"`` (the failsafe: nothing cleared the threshold in a
+      group that large, so the single brightest mesh pixel is the clump — also
+      visible as its ``mesh_pixels: 1``, and logged), or ``"none"`` (the
+      reconstruction's maximum is not positive: nothing was reconstructed).
+      ``source_clumps: []`` occurs only in the ``"none"`` case.
+
+    Both keys are absent if the clump finder raised (logged), in which case the
+    solver keys are absent too, since there is no peak to solve for.
+
+    Nothing is ever written as ``null``: PyAutoFit's ``output_to_json`` drops
+    ``None``-valued keys on write, so an unavailable value is an absent key,
+    and ``source_model`` says why.
+
+    Parameters
+    ----------
+    tracer
+        The maximum log likelihood tracer of the fit; its first galaxy is the
+        lens, its last the source.
+    data
+        The fitted image, whose geometry converts image-plane arcsec to WCS
+        pixels and whose extent bounds the solver's grid.
+    pixel_wcs
+        The dataset's celestial ``astropy.wcs.WCS``, converting those pixels to
+        RA / Dec.
+    fit
+        The maximum log likelihood ``FitImaging``, needed only for a pixelized
+        source (its inversion holds the reconstruction and the mapper). ``None``
+        records such a source as ``"none"``.
+
+    Notes
+    -----
+    Every sky value goes through the FITS pixel the light sits in, so it is
+    right whichever way the cut-out is oriented. The array is loaded from the
+    FITS without a row flip (``autonerves.fitsable``), so its native row 0 is
+    FITS row 1 — the bottom row of a standard north-up image — and PyAutoLens's
+    positive ``y`` (native row 0 upward on its own plots) is therefore the FITS
+    row-1 direction: south, for a north-up ``CD`` matrix. Do not read a
+    ``lensed_source_image_y_arcsec`` as "north of the lens"; read the
+    ``_dec_deg`` beside it.
+    """
+    logger = logging.getLogger(__name__)
+
+    def sky_from(scaled_coordinates_2d):
+        pixel_y, pixel_x = data.geometry.pixel_coordinates_wcs_2d_from(
+            scaled_coordinates_2d=scaled_coordinates_2d
+        )
+        ra_deg, dec_deg = pixel_wcs.wcs_pix2world(pixel_x, pixel_y, 1)
+        return float(ra_deg), float(dec_deg)
+
+    lens_light_centre = tracer.galaxies[0].bulge.centre
+    lens_ra_deg, lens_dec_deg = sky_from(lens_light_centre)
+
+    data_centre_wcs_pix_y, data_centre_wcs_pix_x = (
+        data.geometry.pixel_coordinates_wcs_2d_from(scaled_coordinates_2d=(0.0, 0.0))
+    )
+
+    wcs_dict = {
+        "crpix_x": data_centre_wcs_pix_x,
+        "crpix_y": data_centre_wcs_pix_y,
+        "crval_ra_deg": lens_ra_deg,
+        "crval_dec_deg": lens_dec_deg,
+        "source_model": "none",
+    }
+
+    source_centre = source_centre_from(tracer=tracer)
+
+    if source_centre is not None:
+        wcs_dict["source_model"] = "light_profile"
+
+    elif fit is not None and fit.tracer.planes[-1].has(cls=al.Pixelization):
+        wcs_dict["source_model"] = "pixelized"
+
+        try:
+            clumps, rule = pixelized_source_clumps_from(fit=fit)
+        except Exception as e:  # noqa: BLE001 — a finished search outlives its record
+            logger.warning(
+                "wcs.json: the pixelized source's clumps could not be read off the "
+                f"fit's mapper; `source_clumps` is not written ({type(e).__name__}: {e})"
+            )
+            return wcs_dict
+
+        for clump in clumps:
+            sky = [
+                sky_from((y, x))
+                for y, x in zip(clump["image_y_arcsec"], clump["image_x_arcsec"])
+            ]
+            clump["image_ra_deg"] = [ra for ra, _ in sky]
+            clump["image_dec_deg"] = [dec for _, dec in sky]
+
+        wcs_dict["source_clumps"] = clumps
+        wcs_dict["source_clump_rule"] = rule
+
+        if clumps:
+            source_centre = (clumps[0]["peak_y_arcsec"], clumps[0]["peak_x_arcsec"])
+
+    if source_centre is None:
+        return wcs_dict
+
+    wcs_dict["source_centre_y_arcsec"] = source_centre[0]
+    wcs_dict["source_centre_x_arcsec"] = source_centre[1]
+
+    try:
+        positions = lensed_source_image_positions_from(
+            tracer=tracer, data=data, source_centre=source_centre
+        )
+    except Exception as e:  # noqa: BLE001 — a finished search outlives its record
+        logger.warning(
+            "wcs.json: the point solver raised for the source centre "
+            f"{source_centre}; the lensed-source image positions are not written "
+            f"({type(e).__name__}: {e})"
+        )
+        return wcs_dict
+
+    positions = [(float(y), float(x)) for y, x in np.asarray(positions).reshape(-1, 2)]
+    sky = [sky_from(position) for position in positions]
+
+    wcs_dict["lensed_source_image_y_arcsec"] = [y for y, _ in positions]
+    wcs_dict["lensed_source_image_x_arcsec"] = [x for _, x in positions]
+    wcs_dict["lensed_source_image_ra_deg"] = [ra for ra, _ in sky]
+    wcs_dict["lensed_source_image_dec_deg"] = [dec for _, dec in sky]
+
+    return wcs_dict
+
+
+# ---------------------------------------------------------------------------
+# The COOLEST record (files/coolest.json)
+# ---------------------------------------------------------------------------
+
+# Every fit writes a COOLEST (COde-independent Organized LEns STandard, Galan et
+# al. 2023) template of its maximum log likelihood model beside `wcs.json`, so a
+# DR1 lens can be handed to lenstronomy, herculens or any other COOLEST-speaking
+# code without re-deriving the model by hand.
+#
+# Two choices are forced by what this pipeline fits:
+#
+# - `on_unsupported="skip"`. COOLEST describes analytic profiles, and the models
+#   here are not wholly analytic: the lens (and, in `vis_lp`, the source) light
+#   is an MGE `Basis` of Gaussians, and the `vis_pix` source is a Delaunay
+#   `Pixelization`. Neither has a COOLEST profile, so raising would mean no
+#   template at all for the stages that matter. Skipping exports the *full* mass
+#   model (which is what a COOLEST consumer wants from DR1) plus any Sersic
+#   light, and names everything left out under the template's
+#   `meta.skipped_profiles`, so a reader can never mistake the template for the
+#   whole model.
+# - `dataset=`. Without it COOLEST writes an empty observation block; passing the
+#   fitted dataset stamps the template with the cut-out's own pixel grid (shape
+#   and pixel scale), which is what makes the exported model reproducible on the
+#   data it was fitted to.
+#
+# The whole thing is best-effort: `coolest` is an optional dependency of
+# PyAutoLens (`pip install autolens[coolest]`) and a template is a record, not a
+# result, so a missing package or a conversion that raises is logged and the fit
+# stands.
+
+COOLEST_PIPELINE_NAME = "euclid_strong_lens_modeling_pipeline"
+
+
+def coolest_json_from(
+    tracer,
+    dataset,
+    file_path,
+    search_name: Optional[str] = None,
+    dataset_name: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Write the COOLEST template ``AnalysisImaging.save_results`` puts in
+    ``files/coolest.json``, and return its path — or ``None`` when it could not
+    be written, which is never an error (see the comment block above).
+
+    Parameters
+    ----------
+    tracer
+        The maximum log likelihood tracer of the fit, whose galaxies' analytic
+        profiles are exported.
+    dataset
+        The fitted dataset, whose ``shape_native`` and ``pixel_scales`` set the
+        template's observation pixel grid.
+    file_path
+        The output path, with or without the ``.json`` extension (the COOLEST
+        serializer appends it).
+    search_name
+        The name of the search that produced the fit, stored in the template's
+        metadata (``paths.name``, e.g. ``"initial_lens_model"``).
+    dataset_name
+        The name of the lens the fit was made on, stored in the template's
+        metadata.
+
+    Returns
+    -------
+    The path of the written ``.json`` template, or ``None``.
+    """
+    metadata = {"pipeline": COOLEST_PIPELINE_NAME}
+
+    if search_name is not None:
+        metadata["search"] = search_name
+    if dataset_name is not None:
+        metadata["dataset"] = dataset_name
+
+    try:
+        return al.interop.coolest.to_coolest(
+            galaxies=tracer,
+            file_path=file_path,
+            dataset=dataset,
+            on_unsupported="skip",
+            metadata=metadata,
+        )
+    except ImportError as e:
+        logging.getLogger(__name__).warning(
+            "coolest.json: the optional `coolest` package is not installed, so no "
+            "COOLEST template is written — install it with "
+            f"`pip install autolens[coolest]` ({type(e).__name__}: {e})"
+        )
+    except Exception as e:  # noqa: BLE001 — a record must never fail a fit
+        logging.getLogger(__name__).warning(
+            "coolest.json: the COOLEST template of the maximum log likelihood "
+            f"model could not be written ({type(e).__name__}: {e})"
+        )
+
+    return None
 
 
 # ---------------------------------------------------------------------------

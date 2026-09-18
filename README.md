@@ -36,7 +36,7 @@ Next, install **PyAutoLens** via pip:
 
 ```bash
 pip install --upgrade pip
-pip install autolens
+pip install autolens[coolest]
 ```
 
 Clone the pipeline repository:
@@ -74,6 +74,20 @@ This script can be run as a black-box, with key output being generated, includin
 - A SIE plus shear lens mass model.
 - Deblended images of the lens and source galaxies.
 - Lens light and source models using a multi Gaussian Expansion.
+- A `files/wcs.json` record beside every fit: the lens light centre on the sky
+  (RA / Dec), the source position in the source plane, and the lensed source's
+  multiple images — the lens equation solved for that position with
+  `al.PointSolver` — in the image plane (arcsec) and on the sky (RA / Dec). For
+  a light-profile source (`vis_lp`, the SED chain) the position is the light
+  centre; for a pixelized source (`vis_pix`, the Delaunay stages) it is the peak
+  of the brightest clump of the reconstruction, and `source_clumps` lists every
+  clump with its multiple images read off the fit's mapper (the brightest model
+  pixel of each image region). Written by `util.AnalysisImaging.save_results`;
+  `util.wcs_dict_from` documents every key. An unavailable value is an absent
+  key, never `null`, and `source_model` says which case applied.
+- A `files/coolest.json` template beside it: the maximum log likelihood model in
+  the COOLEST interchange standard, for handing a fit to another lens modeling
+  code. See [COOLEST output](#coolest-output).
 
 Here is an example of the output, which shows the lens and source galaxies debelended and a source reconstruction
 in the source-plane:
@@ -142,8 +156,9 @@ here on request — contact James Nightingale on the Euclid consortium SLACK.
 | `scripts/tools/diagnose_latent.py` | Replays the Euclid latent catalogue on one converged result and prints every latent value, flagging NaN and zero sentinels. Runs no search. |
 | `scripts/tools/diagnose_latent_vis_pix.py` | The population version: the same replay over every `vis_pix` result in a sample, reporting per-dataset OK/ERR. |
 | `scripts/tools/build_inspect.py` | Collects the inspection bundle's PNGs out of finished result zips. |
-| `scripts/build_inspection_bundle.sh` | Runs all seven catalogue stages in order for a sample. |
-| `catalogue/` | The producers that turn finished fits into the per-lens inspection bundle and the master CSVs — see [`catalogue/README.md`](catalogue/README.md) for the 13-file to producer table and the run order. |
+| `scripts/build_inspection_bundle.sh` | Runs all ten catalogue stages in order for a sample. |
+| `catalogue/scripts/witt_wynne.py` | Projects each lens's `initial_lens_model/vis_pix` mass model onto a Witt-Wynne SIEP and writes the `isit4or2or1` input file plus the 4 / 2 / 1 verdict, image positions, magnifications and time lags into `witt_wynne.csv`. See [`docs/witt_wynne.md`](docs/witt_wynne.md). |
+| `catalogue/` | The producers that turn finished fits into the per-lens inspection bundle and the master CSVs — see [`catalogue/README.md`](catalogue/README.md) for the 21-file to producer table and the run order. |
 
 ## Command-Line Arguments
 
@@ -214,8 +229,8 @@ sentinel.
 ## Testing and Continuous Integration
 
 ```bash
-python -m pytest -q -m "not slow"      # 58 tests, ~4 s, JAX-free, no fit — the local default
-python -m pytest -q -m slow            # 3 tests, 10-20 s, one real (non-test-mode) fit
+python -m pytest -q -m "not slow"      # 120 tests, ~40 s, JAX-free, no fit — the local default
+python -m pytest -q -m slow            # 6 tests, ~30 s, two real (non-test-mode) fits
 python -m pytest -q                    # both
 python3 .github/scripts/run_smoke.py   # every script in smoke_tests.txt, under PYAUTO_TEST_MODE
 ```
@@ -254,3 +269,61 @@ That one key covers imaging data, fits, residual maps and inversion
 reconstructions. A single figure can be overridden without touching config by
 passing `colormap=` to the plot function. See
 [`config/visualize/README.md`](config/visualize/README.md) for the details.
+
+## COOLEST output
+
+Every search writes a `files/coolest.json` beside its `wcs.json`: a
+[COOLEST](https://github.com/aymgal/COOLEST) (COde-independent Organized LEns
+STandard) `MAP` template of the maximum log likelihood model, so a fitted lens
+can be handed to lenstronomy, herculens or any other COOLEST-speaking code
+without re-deriving the model by hand. Its observation block carries the fitted
+cut-out's own pixel grid.
+
+COOLEST describes analytic profiles, and these models are not wholly analytic.
+The template therefore carries:
+
+- the **full mass model** — the `Isothermal` (as COOLEST's `SIE`) and the
+  `ExternalShear` (as a COOLEST `MassField`);
+- the **Sersic light** where one was fitted, i.e. the `sersic_lens_model` stages;
+- everything COOLEST cannot represent — the MGE `Basis` of Gaussians, the
+  Delaunay `Pixelization` source — named under `meta.skipped_profiles` rather
+  than silently dropped, so a reader can never mistake the template for the
+  whole model.
+
+The inspection bundle collects both templates per lens, as `coolest.json` (from
+`initial_lens_model/vis_pix`) and `coolest_sersic.json` (from
+`sersic_lens_model/vis`) — see [`catalogue/README.md`](catalogue/README.md).
+
+The `coolest` package is an optional dependency of **PyAutoLens**, installed
+with the `[coolest]` extra used in [Getting Started](#getting-started):
+
+```bash
+pip install autolens[coolest]
+```
+
+Without it the fit still runs: the missing package is a logged
+`coolest.json: ...` warning and no template, never a failure. The same is true
+of any error in the export itself.
+
+[`scripts/guides/coolest_interop.py`](https://github.com/PyAutoLabs/autolens_workspace/blob/main/scripts/guides/coolest_interop.py)
+in the `autolens_workspace` is the guide to reading these templates back and
+writing your own.
+
+If you use a COOLEST template in your research, please cite the standard
+(Galan et al. 2023, JOSS 8(88) 5567,
+[doi:10.21105/joss.05567](https://doi.org/10.21105/joss.05567)):
+
+```bibtex
+@article{Galan2023,
+    author = {Galan, Aymeric and de Vyvere, Lyne Van and Gomer, Matthew R. and Vernardos, Georgios and Sluse, Dominique},
+    doi = {10.21105/joss.05567},
+    journal = {Journal of Open Source Software},
+    month = aug,
+    number = {88},
+    pages = {5567},
+    title = {{COOLEST: COde-independent Organized LEns STandard}},
+    url = {https://joss.theoj.org/papers/10.21105/joss.05567},
+    volume = {8},
+    year = {2023}
+}
+```

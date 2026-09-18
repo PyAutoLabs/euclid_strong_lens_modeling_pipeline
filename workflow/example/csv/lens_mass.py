@@ -139,7 +139,8 @@ def einstein_radius_effective_from(result):
 
     instance = samples.median_pdf()
 
-    tracer = al.Tracer(galaxies=instance.galaxies)
+    fields = getattr(instance, "fields", None)
+    tracer = al.Tracer(galaxies=instance.galaxies, fields=fields)
 
     grid = al.Grid2D.uniform(shape_native=(100, 100), pixel_scales=0.1)
 
@@ -189,13 +190,28 @@ The external shear field is parameterized by two components `gamma_1` and `gamma
 
 See the **PyAutoLens** API docs for a full description of the External Shear model.
 """
-agg_csv.add_variable(
-    argument="galaxies.lens.shear.gamma_1",
+
+
+def shear_component_from(result, component):
+    instance = result.samples.median_pdf()
+    fields = getattr(instance, "fields", None)
+
+    if fields is not None and hasattr(fields, "shear"):
+        shear = fields.shear
+    else:
+        # Explicit compatibility with results written before the fields migration.
+        shear = instance.galaxies.lens.shear
+
+    return getattr(shear, component)
+
+
+agg_csv.add_computed_column(
     name="mass_shear_gamma_1",
+    compute=lambda result: shear_component_from(result, "gamma_1"),
 )
-agg_csv.add_variable(
-    argument="galaxies.lens.shear.gamma_2",
+agg_csv.add_computed_column(
     name="mass_shear_gamma_2",
+    compute=lambda result: shear_component_from(result, "gamma_2"),
 )
 
 agg_csv.save(path=workflow_path / "csv_q1_mass_model.csv")

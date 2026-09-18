@@ -12,7 +12,7 @@ and they differ in purpose rather than in mechanism. `workflow/` holds *general
 examples* of the aggregator export API — `csv_make.py`, `png_make.py` and
 `fits_make.py` teach it step by step, and `workflow/example/` shows it applied to
 real Euclid runs. `catalogue/` holds the *production* producers: the scripts the
-bundle builder actually runs to write the 13 bundle files and the master CSVs.
+bundle builder actually runs to write the 21 bundle files and the master CSVs.
 
 The clearest way in is to read the two side by side.
 `workflow/example/csv/lens_mass.py` builds the same table as
@@ -28,21 +28,25 @@ Producers live in `catalogue/scripts/`. The two orchestration scripts live in
 `scripts/` beside the pipelines they read from:
 
 ```
-scripts/build_inspection_bundle.sh   # runs the seven stages in order
-scripts/tools/build_inspect.py             # stage 1 — collects the 6 bundle PNGs
+scripts/build_inspection_bundle.sh   # runs the ten stages in order
+scripts/tools/build_inspect.py             # stage 1 — collects 6 PNGs + 2 COOLEST templates
 catalogue/scripts/
   catalogue_util.py                  # shared path resolution + per-lens CSV split
   deblending.py                      # stage 2 — pre_psf.fits, model.fits
-  lens_mass.py                       # stage 3 — lens_mass.csv
-  lens_sersic.py                     # stage 4 — lens_sersic.csv
-  source_sersic.py                   # stage 5 — source_sersic.csv
-  multi_wavelength.py                # stage 6 — fit_multi_wavelength.png
-  magnitudes.py                      # stage 7 — magnitudes.csv
+  lens_mass_maps.py                  # stage 3 — convergence/potential/deflections.fits
+  lens_mass.py                       # stage 4 — lens_mass.csv
+  lens_sersic.py                     # stage 5 — lens_sersic.csv
+  source_sersic.py                   # stage 6 — source_sersic.csv
+  witt_wynne_util.py                 # SIEP solver + projection (no CLI)
+  witt_wynne.py                      # stage 7 — witt_wynne.csv, witt_wynne.in
+  multi_wavelength.py                # stage 8 — fit_multi_wavelength.png
+  magnitudes.py                      # stage 9 — magnitudes.csv
+  astrometric_offsets.py             # stage 10 — astrometric_offsets.csv
 ```
 
 ---
 
-## The 13 bundle files and what produces each
+## The 21 bundle files and what produces each
 
 Every file of a complete per-lens bundle, the script that produces it, and
 whether that script *generates* the file from the fit or *collects* an image the
@@ -54,8 +58,14 @@ fit already wrote.
 | `lens_sersic.csv` | `catalogue/scripts/lens_sersic.py` | generates | `sersic_lens_model/vis` |
 | `source_sersic.csv` | `catalogue/scripts/source_sersic.py` | generates | `sersic_lens_model/vis` |
 | `magnitudes.csv` | `catalogue/scripts/magnitudes.py` | generates | multi-band `sersic_lens_model/<band>` in `output_sed/` |
+| `witt_wynne.csv` | `catalogue/scripts/witt_wynne.py` | generates | `initial_lens_model/vis_pix` |
+| `witt_wynne.in` | `catalogue/scripts/witt_wynne.py` | generates | `initial_lens_model/vis_pix` |
+| `astrometric_offsets.csv` | `catalogue/scripts/astrometric_offsets.py` | generates | multi-band `sersic_lens_model/<band>` in `output_sed/` |
 | `pre_psf.fits` | `catalogue/scripts/deblending.py` | generates | `sersic_lens_model` (every waveband) |
 | `model.fits` | `catalogue/scripts/deblending.py` | generates | `sersic_lens_model` (every waveband) |
+| `convergence.fits` | `catalogue/scripts/lens_mass_maps.py` | collects `image/tracer.fits` | `initial_lens_model/vis_pix` |
+| `potential.fits` | `catalogue/scripts/lens_mass_maps.py` | collects `image/tracer.fits` | `initial_lens_model/vis_pix` |
+| `deflections.fits` | `catalogue/scripts/lens_mass_maps.py` | collects `image/tracer.fits` | `initial_lens_model/vis_pix` |
 | `fit_multi_wavelength.png` | `catalogue/scripts/multi_wavelength.py` | generates | multi-band `sersic_lens_model/<band>` in `output_sed/` |
 | `vis_lp_fit.png` | `scripts/tools/build_inspect.py` | collects `image/fit.png` | `initial_lens_model/vis_lp` |
 | `vis_pix_fit.png` | `scripts/tools/build_inspect.py` | collects `image/fit.png` | `initial_lens_model/vis_pix` |
@@ -63,15 +73,21 @@ fit already wrote.
 | `rgb.png` | `scripts/tools/build_inspect.py` | collects `image/rgb.png`, else copies `dataset/<sample>/<lens>/rgb_0.jpg` | `initial_lens_model/vis_lp` |
 | `segmentation.png` | `scripts/tools/build_inspect.py` | copies `dataset/<sample>/<lens>/segmentation.png` | `preprocess/segmentation.py` |
 | `fit_sersic.png` | `scripts/tools/build_inspect.py` | collects `image/fit.png` | `sersic_lens_model/vis` |
+| `coolest.json` | `scripts/tools/build_inspect.py` | collects `files/coolest.json` (best-effort) | `initial_lens_model/vis_pix` |
+| `coolest_sersic.json` | `scripts/tools/build_inspect.py` | collects `files/coolest.json` (best-effort) | `sersic_lens_model/vis` |
 
 `build_inspect.py` never re-renders: it streams the image out of the result zip
 PyAutoFit writes when a search finishes, falling back to the unzipped result
 directory's `image/` folder when a run was not zipped (an interrupted run, or a
-`PYAUTO_TEST_MODE` run).
+`PYAUTO_TEST_MODE` run). The two COOLEST templates are streamed the same way out
+of the result's `files/` folder — `util.AnalysisImaging.save_results` writes them
+(see README's "COOLEST output"), and both are best-effort: a lens fitted before
+the pipeline started writing them, or one fitted without the optional `coolest`
+package installed, simply has no template to collect.
 
 ### Building a bundle off a test-mode run
 
-Two things behave differently when the fits were made with `PYAUTO_TEST_MODE`,
+Three things behave differently when the fits were made with `PYAUTO_TEST_MODE`,
 and neither is a fault in the producers:
 
 - **PNGs.** The collected PNGs only exist if the fit was run with visualization
@@ -79,6 +95,11 @@ and neither is a fault in the producers:
   `config/build/profile_smoke.yaml` — suppresses PNG output entirely, and
   `PYAUTO_TEST_MODE=2` skips the sampler and so the post-fit visualization.
   A `PYAUTO_TEST_MODE=1` run *without* `PYAUTO_FAST_PLOTS` does produce them.
+- **Mass maps are absent.** `convergence.fits`, `potential.fits` and
+  `deflections.fits` are cut out of the `image/tracer.fits` a fit writes, and
+  `autonerves.test_mode.skip_fit_output()` gates the whole of that output in
+  every test mode. Stage 3 therefore skips every lens of a test-mode tree, the
+  same way the collected PNGs do.
 - **Latent columns are empty.** `autonerves.test_mode.skip_latents()` returns
   `True` for every test-mode level, so no `latent_summary.json` is written.
   `lens_mass.csv` therefore has its `effective_einstein_radius*` columns present
@@ -89,7 +110,7 @@ and neither is a fault in the producers:
 
 ## Run order
 
-`scripts/build_inspection_bundle.sh` runs the seven stages in dependency order.
+`scripts/build_inspection_bundle.sh` runs the ten stages in dependency order.
 It is idempotent — every stage skips work that is already done, so re-run it as
 more fits land.
 
@@ -100,26 +121,29 @@ bash scripts/build_inspection_bundle.sh dr1_prelim_grade_ab run250
 
 | Stage | Script | Reads | Writes |
 |---|---|---|---|
-| 1/7 | `scripts/tools/build_inspect.py` | `output/<sample>/` | the 6 collected PNGs |
-| 2/7 | `catalogue/scripts/deblending.py` | `output/<sample>/` | `pre_psf.fits`, `model.fits` |
-| 3/7 | `catalogue/scripts/lens_mass.py` | `output/<sample>/` | `lens_mass.csv` |
-| 4/7 | `catalogue/scripts/lens_sersic.py` | `output/<sample>/` | `lens_sersic.csv` |
-| 5/7 | `catalogue/scripts/source_sersic.py` | `output/<sample>/` | `source_sersic.csv` |
-| 6/7 | `catalogue/scripts/multi_wavelength.py` | `output_sed/<sample>/` | `fit_multi_wavelength.png` |
-| 7/7 | `catalogue/scripts/magnitudes.py` | `output_sed/<sample>/` | `magnitudes.csv` |
+| 1/10 | `scripts/tools/build_inspect.py` | `output/<sample>/` | the 6 collected PNGs + 2 COOLEST templates |
+| 2/10 | `catalogue/scripts/deblending.py` | `output/<sample>/` | `pre_psf.fits`, `model.fits` |
+| 3/10 | `catalogue/scripts/lens_mass_maps.py` | `output/<sample>/` | `convergence.fits`, `potential.fits`, `deflections.fits` |
+| 4/10 | `catalogue/scripts/lens_mass.py` | `output/<sample>/` | `lens_mass.csv` |
+| 5/10 | `catalogue/scripts/lens_sersic.py` | `output/<sample>/` | `lens_sersic.csv` |
+| 6/10 | `catalogue/scripts/source_sersic.py` | `output/<sample>/` | `source_sersic.csv` |
+| 7/10 | `catalogue/scripts/witt_wynne.py` | `output/<sample>/` | `witt_wynne.csv`, `witt_wynne.in` |
+| 8/10 | `catalogue/scripts/multi_wavelength.py` | `output_sed/<sample>/` | `fit_multi_wavelength.png` |
+| 9/10 | `catalogue/scripts/magnitudes.py` | `output_sed/<sample>/` | `magnitudes.csv` |
+| 10/10 | `catalogue/scripts/astrometric_offsets.py` | `output_sed/<sample>/` | `astrometric_offsets.csv` |
 
 Everything lands in `inspect/<sample>[_<run_tag>]/`, with the master CSVs at the
 root and one folder per lens holding that lens's own copy of every product.
 
-Stages 6 and 7 read a **separate** results tree. The multi-band SED fits are run
+Stages 8-10 read a **separate** results tree. The multi-band SED fits are run
 with `PYAUTO_OUTPUT_DIR=output_sed` (see `scripts/sersic_lens_model_waveband.py`
-and `scripts/lens_model_waveband.py`), so those two stages are skipped when
+and `scripts/lens_model_waveband.py`), so those three stages are skipped when
 `output_sed/<sample>/` does not exist. Set `SKIP_SED=1` to skip them
 deliberately while SED jobs are still running.
 
 ### Fits the bundle expects
 
-Producing all 13 files needs three pipeline runs per lens:
+Producing all 21 files needs three pipeline runs per lens:
 
 ```bash
 python scripts/initial_lens_model.py --dataset=<lens> --sample=<sample>
@@ -134,9 +158,9 @@ plus `preprocess/segmentation.py` for `segmentation.png`.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `OUTPUT_DIR` | `output` | results tree read by stages 1-5 |
-| `SED_OUTPUT_DIR` | `output_sed` | results tree read by stages 6-7 |
-| `SKIP_SED` | `0` | `1` skips stages 6-7 |
+| `OUTPUT_DIR` | `output` | results tree read by stages 1-7 |
+| `SED_OUTPUT_DIR` | `output_sed` | results tree read by stages 8-10 |
+| `SKIP_SED` | `0` | `1` skips stages 8-10 |
 | `CREATE_ARCHIVE` | `1` | `0` skips the closing `tar czf` |
 | `DATASET_PREFIX` | *(empty)* | restrict stage 1 to lens folders with this name prefix (`Tile` for DR1) |
 
@@ -152,16 +176,63 @@ Every producer can also be run on its own; each takes `--sample`,
   rather than half-written. A sample still being fitted therefore yields a
   partial but never a corrupt catalogue.
 - **Five value flavours per variable.** Each CSV column appears as median plus
-  lower/upper 1σ and lower/upper 3σ (`magnitudes.csv` adds max-log-likelihood).
+  lower/upper 1σ and lower/upper 3σ (`magnitudes.csv` and
+  `astrometric_offsets.csv` add max-log-likelihood).
 - **Intensity is never a column.** The Sersic profiles are `lp_linear.Sersic`,
   whose intensity is solved by linear algebra at each likelihood evaluation and
   so never enters the non-linear samples.
 - **Fluxes are µJy**, from the `*_mujy` latents of `util.LatentEuclid` enabled in
   `config/latent.yaml`. They require `magzero` in the fit's info dict, which
   `util.load_vis_dataset` reads from the FITS header.
+- **Mass maps live on the zoomed mask grid.** `convergence.fits`,
+  `potential.fits` and `deflections.fits` are lifted out of the
+  `image/tracer.fits` every finished fit writes, which
+  `PyAutoLens`'s `fits_tracer` evaluates on `aa.Zoom2D` of the fit's mask with a
+  one-pixel buffer — *not* on the cut-out's grid. Their shape therefore differs
+  from `model.fits` and from the data, and the pixel scale and origin to
+  re-project them with are the zoomed mask's, carried in the FITS header. The
+  stage collects rather than generates: it evaluates no profile and loads no
+  dataset, so a map in the bundle is bit-for-bit the one the fit wrote.
+- **Astrometric offsets are `(y, x)` in arcsec, relative to VIS.** The
+  `grid_offset_y` / `grid_offset_x` of `astrometric_offsets.csv` are the fitted
+  `DatasetModel` offset of a band's grid, which the fit *subtracts* from that
+  band's grids before evaluating the VIS model — so a positive `grid_offset_y`
+  means the band's sky lies +y arcsec from the VIS astrometric frame. VIS itself
+  has no row: it is the frame the offsets are measured against, and the VIS
+  Sersic fit carries no `dataset_model` to read. `scripts/lens_model_waveband.py`
+  gives both a uniform prior of ±0.2", so a value at the edge of that range is a
+  QA flag — the band's misregistration exceeds what the fit can model — rather
+  than a measurement.
 - **Master CSVs are split per lens.** `catalogue_util.write_per_tile_csv` drops
   each lens's rows into its own folder so a single lens folder is
   self-contained and can be shipped on its own.
+- **Sky positions come from `files/wcs.json`**, which `util.AnalysisImaging`
+  writes beside every fit: the max-likelihood lens light centre as
+  `crval_ra_deg` / `crval_dec_deg` (the RA is `magnitudes.py`'s label column),
+  the source position in the source plane (a light centre, or the brightest
+  clump's peak for a pixelized source), and its multiple images in arcsec and
+  RA / Dec solved with `al.PointSolver`; a pixelized source also carries
+  `source_clumps`, every clump's peak and images read off the fit's mapper
+  (`util.wcs_dict_from` documents the keys). Those clumps are thresholded
+  against the reconstruction's 99th percentile, not its maximum — on a real
+  adaptive mesh the brightest mesh pixel is an isolated spike and the maximum
+  rule finds no clump at all — and a brightest-pixel failsafe guarantees one,
+  so `source_clump_rule` says which rule produced the entries (`percentile`,
+  `brightest_pixel`) and `source_clumps: []` (rule `none`) means nothing was
+  reconstructed. Read it through the aggregator
+  (`agg.values("wcs")`), which decodes PyAutoFit's JSON envelope; that envelope
+  drops `None` values, so an unavailable value is an absent key and
+  `source_model` says why.
+- **The image positions are published as a projection, not as a solve.**
+  `witt_wynne.py` (stage 7) projects each lens's mass model onto a Witt-Wynne
+  SIEP and writes the 4 / 2 / 1 verdict, the predicted image positions, their
+  magnifications and their time lags into `witt_wynne.csv`, plus the
+  zero-centred `isit4or2or1` input file `witt_wynne.in` beside it. They are the
+  *SIEP's* images, not `al.PointSolver`'s: the projection agrees with the
+  tracer's own solve 68/68 inside the caustic and 51/68 outside it, positions to
+  0.07–0.4", on the 136-case grid of the 2026-09-17 review. No sky coordinate is
+  written — every position is relative to the lens centre. Read
+  [`../docs/witt_wynne.md`](../docs/witt_wynne.md) before using them.
 
 ---
 
@@ -170,7 +241,7 @@ Every producer can also be run on its own; each takes `--sample`,
 The DR1 science tree (`Science/euclid/catalogue/scripts/`) holds 21 further
 files that are deliberately **not** in this repository. They are either
 downstream consumers of a finished catalogue, superseded precursors, or
-paper-figure code — none of them produce any of the 13 bundle files.
+paper-figure code — none of them produce any of the 21 bundle files.
 
 | Not ported | Count | Why |
 |---|---|---|

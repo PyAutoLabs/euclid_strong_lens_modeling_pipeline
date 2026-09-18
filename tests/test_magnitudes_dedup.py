@@ -12,7 +12,7 @@ Two things broke on that path, and this module pins both:
 
 * the de-duplication key was ``result.directory.relative_to(sample_root)``,
   which raises ``ValueError`` for a temporary directory — a crash that takes
-  down stage 7 of ``scripts/build_inspection_bundle.sh``;
+  down stage 9 of ``scripts/build_inspection_bundle.sh``;
 * recency was ``Path(f"{result.directory}.zip").stat().st_mtime``, and no zip
   sits beside a temporary extraction, so it fell through to the extracted
   directory's own mtime — the time *this process* unpacked it, which is

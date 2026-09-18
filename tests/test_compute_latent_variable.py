@@ -174,16 +174,17 @@ def truth_model(truth):
     import autofit as af
     import autolens as al
 
-    galaxies = {
-        name: al.Galaxy(
-            redshift=galaxy["redshift"],
-            **{
-                profile_name: _profile_from(entry)
-                for profile_name, entry in galaxy["profiles"].items()
-            },
-        )
-        for name, galaxy in truth["model"].items()
-    }
+    galaxies = {}
+    field = None
+    for name, galaxy in truth["model"].items():
+        profiles = {
+            profile_name: _profile_from(entry)
+            for profile_name, entry in galaxy["profiles"].items()
+        }
+        shear = profiles.pop("shear", None)
+        galaxies[name] = al.Galaxy(redshift=galaxy["redshift"], **profiles)
+        if shear is not None:
+            field = al.MassField(redshift=galaxy["redshift"], shear=shear)
 
     return af.Collection(
         galaxies=af.Collection(
@@ -191,7 +192,8 @@ def truth_model(truth):
                 name: af.Model.from_instance(galaxy)
                 for name, galaxy in galaxies.items()
             }
-        )
+        ),
+        fields=af.Model.from_instance(field),
     )
 
 
@@ -265,12 +267,12 @@ def pixelized_source_model(truth, euclid_dataset):
 
     ``scripts/initial_lens_model.py`` builds that stage from the preceding
     ``vis_lp`` result: the lens galaxy is carried over as an *instance* (light +
-    mass + shear), and the source's light profile is replaced by a
-    ``Pixelization`` whose ``Delaunay`` mesh takes its vertices from an
-    image-plane grid built at run time — a ``Hilbert`` mesh drawn from the
-    source's adapt image, with a ring of circle-edge points appended and zeroed.
-    That grid cannot live in the model, so it travels to the analysis inside
-    ``AdaptImages``.
+    mass), its shear field is carried separately, and the source's light profile
+    is replaced by a ``Pixelization`` whose ``Delaunay`` mesh takes its vertices
+    from an image-plane grid built at run time — a ``Hilbert`` mesh drawn from
+    the source's adapt image, with a ring of circle-edge points appended and
+    zeroed. That grid cannot live in the model, so it travels to the analysis
+    inside ``AdaptImages``.
 
     Mirrored here with the truth model standing in for the ``vis_lp`` result:
     the lens is the truth lens, and the adapt image is the truth source's own
@@ -284,13 +286,13 @@ def pixelized_source_model(truth, euclid_dataset):
     lens_entry = truth["model"]["galaxy_0"]
     source_entry = truth["model"]["galaxy_1"]
 
-    lens = al.Galaxy(
-        redshift=lens_entry["redshift"],
-        **{
-            profile_name: _profile_from(entry)
-            for profile_name, entry in lens_entry["profiles"].items()
-        },
-    )
+    lens_profiles = {
+        profile_name: _profile_from(entry)
+        for profile_name, entry in lens_entry["profiles"].items()
+    }
+    shear = lens_profiles.pop("shear")
+    lens = al.Galaxy(redshift=lens_entry["redshift"], **lens_profiles)
+    field = al.MassField(redshift=lens_entry["redshift"], shear=shear)
     sersic_source = al.Galaxy(
         redshift=source_entry["redshift"],
         **{
@@ -302,7 +304,7 @@ def pixelized_source_model(truth, euclid_dataset):
     dataset = euclid_dataset.dataset
 
     adapt_data = al.Tracer(
-        galaxies=[lens, sersic_source]
+        galaxies=[lens, sersic_source], fields=[field]
     ).galaxy_image_2d_dict_from(grid=dataset.grids.lp)[sersic_source]
     adapt_data = adapt_data + np.max(adapt_data) * ADAPT_IMAGE_FLOOR
 
@@ -339,7 +341,8 @@ def pixelized_source_model(truth, euclid_dataset):
                     regularization=al.reg.AdaptSplit(),
                 ),
             ),
-        )
+        ),
+        fields=af.Model.from_instance(field),
     )
 
     assert model.prior_count == 0, (
@@ -365,9 +368,7 @@ def pixelized_latents(euclid_dataset, pixelized_source_model):
     analysis = _analysis_from(euclid_dataset, adapt_images=adapt_images)
 
     keys = util.LatentEuclid.keys(analysis)
-    values = util.LatentEuclid.variables(
-        analysis=analysis, parameters=[], model=model
-    )
+    values = util.LatentEuclid.variables(analysis=analysis, parameters=[], model=model)
     return {key: float(value) for key, value in zip(keys, values)}
 
 
@@ -673,9 +674,7 @@ def test_pixelized_source_magnification_is_finite(pixelized_latents):
         f"{magnification!r} with total_source_flux={source_flux!r}"
     )
 
-    ratio = (
-        pixelized_latents["total_lensed_source_flux_mujy"] / source_flux_mujy
-    )
+    ratio = pixelized_latents["total_lensed_source_flux_mujy"] / source_flux_mujy
     assert magnification == pytest.approx(ratio), (
         "the pixelized-source magnification must equal lensed-source uJy / "
         f"source uJy computed from the same latent block; got {magnification!r} "
@@ -703,9 +702,7 @@ def test_pixelized_source_latents_stage_invariance(pixelized_latents, latents):
     ] + list(util.LatentEuclid.APERTURE_LATENT_KEYS)
 
     for key in invariant:
-        assert pixelized_latents[key] == pytest.approx(
-            latents[key], rel=REPLAY_REL
-        ), (
+        assert pixelized_latents[key] == pytest.approx(latents[key], rel=REPLAY_REL), (
             f"latent '{key}' depends only on the mass model and the lens light, "
             "which the pixelized model shares with the light-profile model, so "
             "it must be unchanged by the source swap; got "
@@ -852,3 +849,43 @@ def test_latent_euclid_variables_traces_under_jax_jit(
             f"evaluates to {eager_value!r} eagerly on NumPy (rel="
             f"{JIT_VS_EAGER_REL})"
         )
+
+
+def test_vis_lp_fields_likelihood_and_gradient_trace_under_jax(
+    euclid_dataset, jax_analysis, monkeypatch
+):
+    """A reduced real likelihood differentiates with the production field shape."""
+    monkeypatch.setenv("PYAUTO_SMALL_DATASETS", "1")
+
+    import jax
+    import jax.numpy as jnp
+
+    model = _vis_lp_model(euclid_dataset)
+    vector = list(model.physical_values_from_prior_medians)
+    for index, (name, _) in enumerate(model.prior_tuples_ordered_by_id):
+        if name == "ell_comps_0":
+            vector[index] = 0.1
+        elif name == "ell_comps_1":
+            vector[index] = 0.05
+        elif name == "gamma_1":
+            vector[index] = 0.03
+        elif name == "gamma_2":
+            vector[index] = -0.02
+    vector = jnp.asarray(vector)
+
+    def log_likelihood(parameters):
+        # This is the production Fitness JAX path: assertions are applied to
+        # the final merit with ``where``, while traced instance construction
+        # skips the Python exception form of the assertion check.
+        instance = model.instance_from_vector(
+            parameters, ignore_assertions=True, xp=jnp
+        )
+        return jax_analysis.log_likelihood_function(instance=instance)
+
+    value, gradient = jax.jit(jax.value_and_grad(log_likelihood))(vector)
+
+    assert bool(jnp.isfinite(value))
+    assert model.fields.prior_count == 2
+    assert gradient.shape == (model.prior_count,)
+    assert bool(jnp.all(jnp.isfinite(gradient)))
+    assert bool(jnp.any(gradient != 0.0))
