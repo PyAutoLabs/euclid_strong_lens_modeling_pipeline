@@ -280,8 +280,25 @@ def test_lens_mass_writes_no_blank_cells(tmp_path, monkeypatch, pipeline_config)
     import autofit as af
     import autolens as al
 
-    # The `vis_pix` mass model: exactly the 7 free parameters `mass_args` names.
-    model = af.Collection(
+    # The current `vis_pix` mass model: exactly the 7 free parameters
+    # `mass_args` names, with shear in a separate MassField.
+    fields_model = af.Collection(
+        galaxies=af.Collection(
+            lens=af.Model(
+                al.Galaxy,
+                redshift=0.5,
+                mass=al.mp.Isothermal,
+            )
+        ),
+        fields=af.Model(
+            al.MassField,
+            redshift=0.5,
+            shear=al.mp.ExternalShear,
+        ),
+    )
+
+    # Results written before the fields migration remain catalogue inputs.
+    legacy_model = af.Collection(
         galaxies=af.Collection(
             lens=af.Model(
                 al.Galaxy,
@@ -291,11 +308,12 @@ def test_lens_mass_writes_no_blank_cells(tmp_path, monkeypatch, pipeline_config)
             )
         )
     )
-    assert model.total_free_parameters == 7
+    assert fields_model.total_free_parameters == 7
+    assert legacy_model.total_free_parameters == 7
 
     for offset, lens_name in enumerate(LENS_NAMES):
         _write_result(
-            model,
+            fields_model if offset == 0 else legacy_model,
             path_prefix=Path(SAMPLE) / lens_name,
             name="vis_pix",
             unique_tag="initial_lens_model",
@@ -708,9 +726,13 @@ def test_producers_survive_an_empty_query(
                 al.Galaxy,
                 redshift=0.5,
                 mass=al.mp.Isothermal,
-                shear=al.mp.ExternalShear,
             )
-        )
+        ),
+        fields=af.Model(
+            al.MassField,
+            redshift=0.5,
+            shear=al.mp.ExternalShear,
+        ),
     )
 
     for offset, lens_name in enumerate(LENS_NAMES):
@@ -828,11 +850,11 @@ def test_every_non_model_argument_is_a_latent_key(producer):
     latent_keys = _latent_keys()
 
     for argument in arguments:
-        if argument.startswith(("galaxies.", "dataset_model.")):
+        if argument.startswith(("galaxies.", "fields.", "dataset_model.")):
             continue
         assert argument in latent_keys, (
             f"catalogue/scripts/{producer}.py asks add_variable for "
-            f"'{argument}', which is neither a 'galaxies...' / "
+            f"'{argument}', which is neither a 'galaxies...' / 'fields...' / "
             f"'dataset_model...' model path nor a key of util.LatentEuclid "
             f"({sorted(latent_keys)}). "
             "`add_variable` looks its argument up in one merged dictionary of "

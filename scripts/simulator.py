@@ -667,7 +667,7 @@ def tracer_from_params():
 
     light = TRUTH["lens_light"]
     mass = TRUTH["lens_mass"]
-    shear = TRUTH["shear"]
+    shear_values = TRUTH["shear"]
     source = TRUTH["source_light"]
 
     lens_galaxy = al.Galaxy(
@@ -688,7 +688,13 @@ def tracer_from_params():
             ),
             einstein_radius=mass["einstein_radius"],
         ),
-        shear=al.mp.ExternalShear(gamma_1=shear["gamma_1"], gamma_2=shear["gamma_2"]),
+    )
+
+    field = al.MassField(
+        redshift=TRUTH["redshift_lens"],
+        shear=al.mp.ExternalShear(
+            gamma_1=shear_values["gamma_1"], gamma_2=shear_values["gamma_2"]
+        ),
     )
 
     source_galaxy = al.Galaxy(
@@ -704,7 +710,7 @@ def tracer_from_params():
         ),
     )
 
-    return al.Tracer(galaxies=[lens_galaxy, source_galaxy])
+    return al.Tracer(galaxies=[lens_galaxy, source_galaxy], fields=[field])
 
 
 def scaled_tracer_from(tracer, lens_scale, source_scale):
@@ -995,13 +1001,24 @@ def latents_via_truth_from(dataset_name, output_sample, tracer, magzero, loadabl
         if len(tracer.galaxies) == 2
         else [f"galaxy_{index}" for index in range(len(tracer.galaxies))]
     )
+    if len(tracer.fields) == 1 and set(tracer.fields[0].profile_dict) == {"shear"}:
+        fields = af.Model.from_instance(tracer.fields[0])
+    else:
+        fields = af.Collection(
+            **{
+                f"field_{index}": af.Model.from_instance(mass_field)
+                for index, mass_field in enumerate(tracer.fields)
+            }
+        )
+
     model = af.Collection(
         galaxies=af.Collection(
             **{
                 name: af.Model.from_instance(galaxy)
                 for name, galaxy in zip(names, tracer.galaxies)
             }
-        )
+        ),
+        fields=fields,
     )
 
     analysis = util.AnalysisImaging(
@@ -1696,6 +1713,46 @@ def model_truth_from(tracer):
         galaxies[f"galaxy_{index}"] = {
             "redshift": float(galaxy.redshift),
             "profiles": profiles,
+        }
+
+    # Keep the established truth.json schema stable: physical field profiles
+    # are recorded beside the same-redshift lens profiles even though the live
+    # tracer now keeps them in ``tracer.fields``.
+    recorded_shear_redshifts = set()
+    for mass_field in tracer.fields:
+        matching = [
+            entry
+            for entry in galaxies.values()
+            if entry["redshift"] == float(mass_field.redshift)
+        ]
+        if len(matching) != 1 or set(mass_field.profile_dict) != {"shear"}:
+            raise SystemExit(
+                "ERROR: truth.json's established galaxy-profile schema can only "
+                "represent one ExternalShear field at the redshift of exactly one "
+                "galaxy; this tracer has an unsupported MassField layout."
+            )
+
+        redshift = float(mass_field.redshift)
+        if redshift in recorded_shear_redshifts or "shear" in matching[0]["profiles"]:
+            raise SystemExit(
+                "ERROR: truth.json's established galaxy-profile schema cannot "
+                "represent multiple shear profiles at one redshift without "
+                "silently overwriting one."
+            )
+        recorded_shear_redshifts.add(redshift)
+
+        profile = mass_field.shear
+        if not all(hasattr(profile, parameter) for parameter in ("gamma_1", "gamma_2")):
+            raise SystemExit(
+                "ERROR: truth.json's established shear schema requires gamma_1 "
+                "and gamma_2 on the MassField's shear profile."
+            )
+        matching[0]["profiles"]["shear"] = {
+            "type": type(profile).__name__,
+            "parameters": {
+                "gamma_1": float(profile.gamma_1),
+                "gamma_2": float(profile.gamma_2),
+            },
         }
 
     return galaxies

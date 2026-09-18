@@ -13,8 +13,8 @@ things around their (different) aggregator queries:
    ``<inspect_dir>/<dataset_name>/``.
 
 Steps 1 and 3 live here so the producers differ only where the science does.
-Nothing in this module is Euclid-specific beyond the directory convention; it
-deliberately holds no model, latent or aggregator logic.
+The lens-mass producer also uses the explicit model-path fallback below while
+old galaxy-attached-shear results and new ``MassField`` results coexist.
 """
 
 import argparse
@@ -26,6 +26,49 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 DEFAULT_SAMPLE = "q1_walsmley"
+
+
+def add_variable_with_fallback(
+    agg_csv,
+    argument: str,
+    fallback_argument: str,
+    name: str,
+    value_types,
+):
+    """
+    Add an aggregate variable with an explicit legacy model-path fallback.
+
+    ``AggregateCSV`` normally leaves a cell blank when ``argument`` is absent.
+    During the fields migration, new results store shear at
+    ``fields.shear`` while legacy results store it at
+    ``galaxies.lens.shear``. This column selects the new path when present and
+    uses the legacy path otherwise; if neither exists,
+    the normal warning and blank-cell behavior is retained.
+    """
+    from autofit.aggregator.summary.aggregate_csv.column import Column
+
+    class FallbackColumn(Column):
+        def __init__(self):
+            super().__init__(
+                argument=argument,
+                name=name,
+                value_types=value_types,
+                strict=agg_csv._strict,
+            )
+            self.fallback_argument = fallback_argument
+
+        def value(self, row):
+            primary_argument = self.argument
+            fallback_path = tuple(self.fallback_argument.split("."))
+            if self.path not in row.known_paths and fallback_path in row.known_paths:
+                self.argument = self.fallback_argument
+
+            try:
+                return super().value(row)
+            finally:
+                self.argument = primary_argument
+
+    agg_csv._columns.append(FallbackColumn())
 
 
 def add_common_arguments(parser: argparse.ArgumentParser, default_output_path="output"):

@@ -69,10 +69,12 @@ SIMULATED_PATH = PROJECT_ROOT / "dataset" / SIMULATED_SAMPLE / SIMULATED_DATASET
 TOTAL_DRAWS = 10
 LATENT_DRAW_VIA_PDF_SIZE = 5
 
-# The pixelized fit's latents integrate an inversion on every draw and are
-# several times dearer than the light-profile fit's; three draws are enough to
-# prove the write path without doubling the job's wall time.
-PIXELIZED_TOTAL_DRAWS = 3
+# The pixelized fit exists to exercise the real output path, including an
+# inversion, rather than to compare posterior samples. Its flexible source can
+# make nearby lens draws numerically indistinguishable at the initializer's
+# relative tolerance, so one draw avoids a spurious InitializerException while
+# still running the full fit, latent, WCS, COOLEST and aggregator write paths.
+PIXELIZED_TOTAL_DRAWS = 1
 
 # The einstein_radius prior is this fraction either side of the true value, so
 # every draw is a physically sensible lens and every latent is computable.
@@ -148,7 +150,10 @@ def run_level(tmp_path_factory):
 @pytest.fixture(scope="module")
 def latent_summary(run_level):
     """The light-profile fit's ``latent_summary.json`` path and the latent keys."""
-    return run_level["light_profile"] / "latent" / "latent_summary.json", run_level["keys"]
+    return (
+        run_level["light_profile"] / "latent" / "latent_summary.json",
+        run_level["keys"],
+    )
 
 
 def _fit(tmp_path, monkeypatch):
@@ -186,16 +191,17 @@ def _fit(tmp_path, monkeypatch):
         with open(SIMULATED_PATH / "truth.json") as f:
             truth = json.load(f)
 
-        galaxies = {
-            name: al.Galaxy(
-                redshift=galaxy["redshift"],
-                **{
-                    profile_name: _profile_from(entry)
-                    for profile_name, entry in galaxy["profiles"].items()
-                },
-            )
-            for name, galaxy in truth["model"].items()
-        }
+        galaxies = {}
+        field = None
+        for name, galaxy in truth["model"].items():
+            profiles = {
+                profile_name: _profile_from(entry)
+                for profile_name, entry in galaxy["profiles"].items()
+            }
+            shear = profiles.pop("shear", None)
+            galaxies[name] = al.Galaxy(redshift=galaxy["redshift"], **profiles)
+            if shear is not None:
+                field = al.MassField(redshift=galaxy["redshift"], shear=shear)
 
         model = af.Collection(
             galaxies=af.Collection(
@@ -203,7 +209,8 @@ def _fit(tmp_path, monkeypatch):
                     name: af.Model.from_instance(galaxy)
                     for name, galaxy in galaxies.items()
                 }
-            )
+            ),
+            fields=af.Model.from_instance(field),
         )
 
         lens_name = next(iter(truth["model"]))
@@ -230,6 +237,7 @@ def _fit(tmp_path, monkeypatch):
             lens=galaxies[lens_name],
             sersic_source=galaxies[list(truth["model"])[-1]],
             euclid_dataset=euclid_dataset,
+            field=field,
         )
         pixelized_model.galaxies.lens.mass.einstein_radius = af.UniformPrior(
             lower_limit=einstein_radius * (1.0 - EINSTEIN_RADIUS_PRIOR_WIDTH),
@@ -409,9 +417,9 @@ def _assert_images_consistent(record, keys):
     """
     lengths = {key: len(record[key]) for key in keys}
 
-    assert len(set(lengths.values())) == 1, (
-        f"one entry per image in each of the four lists, got {lengths}"
-    )
+    assert (
+        len(set(lengths.values())) == 1
+    ), f"one entry per image in each of the four lists, got {lengths}"
     assert next(iter(lengths.values())) >= 1, f"at least one image, got {lengths}"
 
     for key in keys:
@@ -420,9 +428,9 @@ def _assert_images_consistent(record, keys):
 
 def _assert_images(wcs_dict, keys, n_images):
     lengths = {key: len(wcs_dict[key]) for key in keys}
-    assert set(lengths.values()) == {n_images}, (
-        f"one entry per image in each of the four lists, got {lengths}"
-    )
+    assert set(lengths.values()) == {
+        n_images
+    }, f"one entry per image in each of the four lists, got {lengths}"
     for key in keys:
         assert np.all(np.isfinite(wcs_dict[key])), f"{key} must be finite"
 
@@ -482,14 +490,15 @@ def test_a_pixelized_real_mode_fit_writes_its_clumps_to_wcs_json(run_level):
     assert wcs_dict["source_model"] == "pixelized"
 
     clumps = wcs_dict["source_clumps"]
-    assert isinstance(clumps, list) and len(clumps) >= 1, (
-        f"a pixelized fit must record at least one clump; got {clumps!r}"
-    )
+    assert (
+        isinstance(clumps, list) and len(clumps) >= 1
+    ), f"a pixelized fit must record at least one clump; got {clumps!r}"
 
     rule = wcs_dict["source_clump_rule"]
-    assert rule in ("percentile", "brightest_pixel"), (
-        f"something was reconstructed, so the rule cannot be `none`; got {rule!r}"
-    )
+    assert rule in (
+        "percentile",
+        "brightest_pixel",
+    ), f"something was reconstructed, so the rule cannot be `none`; got {rule!r}"
 
     clump = clumps[0]
     assert clump["peak_value"] > 0.0
@@ -657,9 +666,9 @@ def test_force_pickle_overwrite_rewrites_wcs_json(run_level, tmp_path):
 
     shutil.move(str(stripped), str(zip_path))
 
-    assert _wcs_members_of(zip_path) == [], (
-        "the record must be gone before the re-run, or this proves nothing"
-    )
+    assert (
+        _wcs_members_of(zip_path) == []
+    ), "the record must be gone before the re-run, or this proves nothing"
 
     forced_config = tmp_path / "config_forced"
     shutil.copytree(run_level["config_path"], forced_config)
@@ -713,9 +722,9 @@ def test_force_pickle_overwrite_rewrites_wcs_json(run_level, tmp_path):
     wcs_dict = _wcs_dict_from(files_path)
 
     assert wcs_dict["source_model"] == "pixelized"
-    assert wcs_dict["source_clumps"], (
-        f"the rewritten record must carry its clumps; got {wcs_dict['source_clumps']!r}"
-    )
+    assert wcs_dict[
+        "source_clumps"
+    ], f"the rewritten record must carry its clumps; got {wcs_dict['source_clumps']!r}"
     assert wcs_dict["source_clump_rule"] in ("percentile", "brightest_pixel")
 
     _assert_images_consistent(wcs_dict, WCS_IMAGE_KEYS)

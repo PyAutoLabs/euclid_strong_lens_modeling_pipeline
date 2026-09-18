@@ -538,7 +538,6 @@ def fit_waveband(
                     redshift=vis_result.instance.galaxies.lens.redshift,
                     bulge=vis_result.instance.galaxies.lens.bulge,
                     mass=vis_result.instance.galaxies.lens.mass,
-                    shear=vis_result.instance.galaxies.lens.shear,
                 ),
                 source=af.Model(
                     al.Galaxy,
@@ -546,6 +545,7 @@ def fit_waveband(
                     bulge=vis_result.instance.galaxies.source.bulge,
                 ),
             ),
+            fields=vis_result.instance.fields,
             dataset_model=dataset_model,
         )
 

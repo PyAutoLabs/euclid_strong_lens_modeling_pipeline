@@ -83,6 +83,9 @@ def tracer():
         mass=al.mp.Isothermal(
             centre=(0.0, 0.0), ell_comps=(0.1, 0.05), einstein_radius=1.2
         ),
+    )
+    field = al.MassField(
+        redshift=0.5,
         shear=al.mp.ExternalShear(gamma_1=0.03, gamma_2=-0.02),
     )
 
@@ -94,7 +97,7 @@ def tracer():
         ),
     )
 
-    return al.Tracer(galaxies=[lens, source])
+    return al.Tracer(galaxies=[lens, source], fields=[field])
 
 
 @pytest.fixture(scope="module")
