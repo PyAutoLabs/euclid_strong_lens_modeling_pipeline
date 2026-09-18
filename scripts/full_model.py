@@ -224,6 +224,8 @@ def source_lp(
     import autofit as af
     import autolens as al
 
+    field = af.Model(al.MassField, redshift=redshift_lens, shear=shear)
+
     model = af.Collection(
         galaxies=af.Collection(
             lens=af.Model(
@@ -232,7 +234,6 @@ def source_lp(
                 bulge=lens_bulge,
                 disk=None,
                 mass=mass,
-                shear=shear,
             ),
             source=af.Model(
                 al.Galaxy,
@@ -240,6 +241,7 @@ def source_lp(
                 bulge=source_bulge,
             ),
         ),
+        fields=field,
     )
 
     search = af.Nautilus(
@@ -321,7 +323,7 @@ def source_pix_1(
         mass_result=source_lp_result.model.galaxies.lens.mass,
         unfix_mass_centre=True,
     )
-    shear = source_lp_result.model.galaxies.lens.shear
+    field = source_lp_result.model.fields
 
     model = af.Collection(
         galaxies=af.Collection(
@@ -331,7 +333,6 @@ def source_pix_1(
                 bulge=source_lp_result.instance.galaxies.lens.bulge,
                 disk=source_lp_result.instance.galaxies.lens.disk,
                 mass=mass,
-                shear=shear,
             ),
             source=af.Model(
                 al.Galaxy,
@@ -343,6 +344,7 @@ def source_pix_1(
                 ),
             ),
         ),
+        fields=field,
     )
 
     search = af.Nautilus(
@@ -398,7 +400,6 @@ def source_pix_2(
                 bulge=source_lp_result.instance.galaxies.lens.bulge,
                 disk=source_lp_result.instance.galaxies.lens.disk,
                 mass=source_pix_result_1.instance.galaxies.lens.mass,
-                shear=source_pix_result_1.instance.galaxies.lens.shear,
             ),
             source=af.Model(
                 al.Galaxy,
@@ -410,6 +411,7 @@ def source_pix_2(
                 ),
             ),
         ),
+        fields=source_pix_result_1.instance.fields,
     )
 
     search = af.Nautilus(
@@ -471,10 +473,10 @@ def light_lp(
                 bulge=lens_bulge,
                 disk=lens_disk,
                 mass=source_result_for_lens.instance.galaxies.lens.mass,
-                shear=source_result_for_lens.instance.galaxies.lens.shear,
             ),
             source=source,
         ),
+        fields=source_result_for_lens.instance.fields,
     )
 
     search = af.Nautilus(
@@ -545,9 +547,13 @@ def mass_total(
     disk = light_result.instance.galaxies.lens.disk
 
     if not reset_shear_prior:
-        shear = source_result_for_lens.model.galaxies.lens.shear
+        field = source_result_for_lens.model.fields
     else:
-        shear = al.mp.ExternalShear
+        field = af.Model(
+            al.MassField,
+            redshift=source_result_for_lens.instance.galaxies.lens.redshift,
+            shear=af.Model(al.mp.ExternalShear),
+        )
 
     source = al.util.chaining.source_from(result=source_result_for_source)
 
@@ -559,10 +565,10 @@ def mass_total(
                 bulge=bulge,
                 disk=disk,
                 mass=mass,
-                shear=shear,
             ),
             source=source,
         ),
+        fields=field,
     )
 
     search = af.Nautilus(

@@ -254,10 +254,14 @@ def jax_stage(dataset: str, sample: str, output_path: Path) -> float:
                 redshift=0.5,
                 bulge=lens_bulge,
                 mass=mass,
-                shear=af.Model(al.mp.ExternalShear),
             ),
             source=af.Model(al.Galaxy, redshift=1.0, bulge=source_bulge),
-        )
+        ),
+        fields=af.Model(
+            al.MassField,
+            redshift=0.5,
+            shear=af.Model(al.mp.ExternalShear),
+        ),
     )
 
     analysis = util.AnalysisImaging(
@@ -301,7 +305,9 @@ def jax_stage(dataset: str, sample: str, output_path: Path) -> float:
     return log_likelihood
 
 
-def pooled_pix_fit(dataset: str, sample: str, output_path: Path, cores: int, n_like_max: int):
+def pooled_pix_fit(
+    dataset: str, sample: str, output_path: Path, cores: int, n_like_max: int
+):
     """
     The ``vis_pix`` stage: a Delaunay pixelized source on the Numba CPU sparse
     operator, ``use_jax=False``, handed to a multiprocessing ``Nautilus``.
@@ -421,7 +427,6 @@ def pooled_pix_fit(dataset: str, sample: str, output_path: Path, cores: int, n_l
                 redshift=0.5,
                 bulge=lens_bulge,
                 mass=mass,
-                shear=af.Model(al.mp.ExternalShear),
             ),
             source=af.Model(
                 al.Galaxy,
@@ -435,6 +440,11 @@ def pooled_pix_fit(dataset: str, sample: str, output_path: Path, cores: int, n_l
                     regularization=al.reg.AdaptSplit,
                 ),
             ),
+        ),
+        fields=af.Model(
+            al.MassField,
+            redshift=0.5,
+            shear=af.Model(al.mp.ExternalShear),
         ),
     )
 
@@ -485,12 +495,13 @@ def leg_control(args, output_path: Path) -> dict:
     pulls_jax = import_autolens_pulls_jax()
     print(f"[control] import autolens -> jax in sys.modules: {pulls_jax}", flush=True)
 
-    print("[control] stage 1: JAX likelihood (initialises XLA in this process)", flush=True)
+    print(
+        "[control] stage 1: JAX likelihood (initialises XLA in this process)",
+        flush=True,
+    )
     jax_stage(args.dataset, args.sample, output_path)
 
-    info = env_dict(
-        args.cores, output_path, {"import_autolens_pulls_jax": pulls_jax}
-    )
+    info = env_dict(args.cores, output_path, {"import_autolens_pulls_jax": pulls_jax})
     print(f"[control] environment at fork: {json.dumps(info)}", flush=True)
 
     print("[control] stage 2: pooled numpy/numba pixelized fit", flush=True)
@@ -565,9 +576,7 @@ def leg_subprocess(args, output_path: Path) -> dict:
             "parent is no longer a clean fork source."
         )
 
-    info = env_dict(
-        args.cores, output_path, {"import_autolens_pulls_jax": pulls_jax}
-    )
+    info = env_dict(args.cores, output_path, {"import_autolens_pulls_jax": pulls_jax})
     print(f"[subprocess] environment at fork: {json.dumps(info)}", flush=True)
 
     print("[subprocess] stage 2: pooled numpy/numba pixelized fit", flush=True)
@@ -643,7 +652,9 @@ def leg_control_real(args, output_path: Path) -> dict:
     os.environ["PYAUTO_OUTPUT_DIR"] = str(output_path)
 
     pulls_jax = import_autolens_pulls_jax()
-    print(f"[control_real] import autolens -> jax in sys.modules: {pulls_jax}", flush=True)
+    print(
+        f"[control_real] import autolens -> jax in sys.modules: {pulls_jax}", flush=True
+    )
 
     _clamp_nautilus(N_LIVE, args.n_like_max)
     pipeline = _load_pipeline_script()
@@ -670,9 +681,7 @@ def leg_control_real(args, output_path: Path) -> dict:
             "leg cannot test the fork conflict."
         )
 
-    info = env_dict(
-        args.cores, output_path, {"import_autolens_pulls_jax": pulls_jax}
-    )
+    info = env_dict(args.cores, output_path, {"import_autolens_pulls_jax": pulls_jax})
     print(f"[control_real] environment at fork: {json.dumps(info)}", flush=True)
 
     fork_state = jax_state()

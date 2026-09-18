@@ -190,6 +190,12 @@ def vis_lp_model_from(
         ell_comps_limit=0.7,
     )
 
+    field = af.Model(
+        al.MassField,
+        redshift=redshift_lens,
+        shear=af.Model(al.mp.ExternalShear),
+    )
+
     return af.Collection(
         galaxies=af.Collection(
             lens=af.Model(
@@ -197,10 +203,10 @@ def vis_lp_model_from(
                 redshift=redshift_lens,
                 bulge=lens_bulge,
                 mass=mass,
-                shear=af.Model(al.mp.ExternalShear),
             ),
             source=af.Model(al.Galaxy, redshift=redshift_source, bulge=source_bulge),
-        )
+        ),
+        fields=field,
     )
 
 
@@ -704,7 +710,7 @@ def fit(
         lower_limit=d.dataset_centre[1] - 0.1, upper_limit=d.dataset_centre[1] + 0.1
     )
 
-    shear = source_lp_result.model.galaxies.lens.shear
+    field = source_lp_result.model.fields
 
     model = af.Collection(
         galaxies=af.Collection(
@@ -713,7 +719,6 @@ def fit(
                 redshift=source_lp_result.instance.galaxies.lens.redshift,
                 bulge=source_lp_result.instance.galaxies.lens.bulge,
                 mass=mass,
-                shear=shear,
             ),
             source=af.Model(
                 al.Galaxy,
@@ -728,6 +733,7 @@ def fit(
                 ),
             ),
         ),
+        fields=field,
     )
 
     """

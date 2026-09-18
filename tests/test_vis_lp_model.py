@@ -21,9 +21,11 @@ level model rather than on the ``Basis`` it is attached to.
 No search is run and JAX is never imported; this module is a fraction of a second.
 """
 
+import copy
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -134,6 +136,89 @@ def test_prior_count_is_fifteen(model):
     assert model.prior_count == 15
 
 
+def test_external_shear_uses_the_fields_path(model):
+    """The field move changes ownership, not the two fitted shear parameters."""
+    import autolens as al
+
+    assert not hasattr(model.galaxies.lens, "shear")
+    assert model.fields.cls is al.MassField
+    assert model.fields.redshift == REDSHIFT_LENS
+    assert model.fields.shear.cls is al.mp.ExternalShear
+    assert model.fields.prior_count == 2
+    assert {
+        path for path, _ in model.path_priors_tuples if path[:2] == ("fields", "shear")
+    } == {
+        ("fields", "shear", "gamma_1"),
+        ("fields", "shear", "gamma_2"),
+    }
+
+
+def test_field_and_legacy_galaxy_shear_have_identical_deflections(model):
+    """Moving the same shear instance to ``Tracer.fields`` is numerically exact."""
+    import autolens as al
+
+    ell_comps_1_a, ell_comps_1_b = _lens_ell_comps_1_priors(model)
+    vector = _vector(
+        model,
+        [
+            (ell_comps_1_a, 0.3),
+            (ell_comps_1_b, -0.3),
+            (model.fields.shear.gamma_1, 0.03),
+            (model.fields.shear.gamma_2, -0.02),
+        ],
+    )
+    instance = model.instance_from_vector(vector)
+
+    field_tracer = al.Tracer(galaxies=list(instance.galaxies), fields=instance.fields)
+
+    legacy_lens = copy.deepcopy(instance.galaxies.lens)
+    legacy_lens.shear = copy.deepcopy(instance.fields.shear)
+    legacy_tracer = al.Tracer(
+        galaxies=[legacy_lens, copy.deepcopy(instance.galaxies.source)]
+    )
+
+    grid = al.Grid2D.uniform(shape_native=(20, 20), pixel_scales=0.1)
+    np.testing.assert_allclose(
+        field_tracer.deflections_yx_2d_from(grid=grid),
+        legacy_tracer.deflections_yx_2d_from(grid=grid),
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
+def test_flat_model_preserves_likelihood_but_changes_identifier(model):
+    """The same physical fit has a new identity after the shear path moves."""
+    import autofit as af
+    import autolens as al
+    import util
+
+    legacy = af.Collection(galaxies=copy.deepcopy(model.galaxies))
+    legacy.galaxies.lens.shear = copy.deepcopy(model.fields.shear)
+    assert legacy.prior_count == model.prior_count == 15
+    assert legacy.identifier != model.identifier
+
+    dataset = util.load_vis_dataset("euclid_dr1_like", sample_name="simulated").dataset
+    analysis = al.AnalysisImaging(dataset=dataset, use_jax=False)
+    likelihoods = []
+    for candidate in (legacy, model):
+        vector = list(candidate.physical_values_from_prior_medians)
+        for index, (name, _) in enumerate(candidate.prior_tuples_ordered_by_id):
+            if name == "ell_comps_0":
+                vector[index] = 0.1
+            elif name == "ell_comps_1":
+                vector[index] = 0.05
+            elif name == "gamma_1":
+                vector[index] = 0.03
+            elif name == "gamma_2":
+                vector[index] = -0.02
+        instance = candidate.instance_from_vector(vector, ignore_assertions=True)
+        tracer = analysis.tracer_via_instance_from(instance)
+        assert isinstance(tracer.fields, list)
+        likelihoods.append(analysis.log_likelihood_function(instance))
+
+    np.testing.assert_allclose(likelihoods[0], likelihoods[1], rtol=0, atol=1e-8)
+
+
 def test_exactly_one_assertion_is_attached(model):
     """
     ``order_bases=True`` with two bases attaches ``K - 1 = 1`` assertion, and it is
@@ -192,9 +277,7 @@ def test_each_lens_basis_has_its_own_ell_comps_prior(model):
 
     for i in range(TOTAL_GAUSSIANS):
         assert profile_list[i].ell_comps.ell_comps_1 is ell_comps_1_a
-        assert (
-            profile_list[TOTAL_GAUSSIANS + i].ell_comps.ell_comps_1 is ell_comps_1_b
-        )
+        assert profile_list[TOTAL_GAUSSIANS + i].ell_comps.ell_comps_1 is ell_comps_1_b
 
 
 # ---------------------------------------------------------------------------

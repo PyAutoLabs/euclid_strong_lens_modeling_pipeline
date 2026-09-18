@@ -119,7 +119,9 @@ def main():
     """
     # One aggregator over the whole sample. completed_only filters out lenses
     # whose search has not produced a `.completed` marker.
-    agg = Aggregator.from_directory(directory=sample_root, completed_only=True, unzip_temporary=True)
+    agg = Aggregator.from_directory(
+        directory=sample_root, completed_only=True, unzip_temporary=True
+    )
 
     """
     __Query: Pipeline Stage And Search__
@@ -160,9 +162,7 @@ def main():
     try:
         agg_csv = af.AggregateCSV(aggregator=agg_query)
     except ValueError as e:
-        print(
-            f"no completed {args.unique_tag}/{args.search_name} results: {e}"
-        )
+        print(f"no completed {args.unique_tag}/{args.search_name} results: {e}")
         return
 
     """
@@ -234,11 +234,24 @@ def main():
         ("galaxies.lens.mass.ell_comps.ell_comps_0", "ell_comps_0"),
         ("galaxies.lens.mass.ell_comps.ell_comps_1", "ell_comps_1"),
         ("galaxies.lens.mass.einstein_radius", "einstein_radius"),
-        ("galaxies.lens.shear.gamma_1", "shear_gamma_1"),
-        ("galaxies.lens.shear.gamma_2", "shear_gamma_2"),
+        ("fields.shear.gamma_1", "shear_gamma_1"),
+        ("fields.shear.gamma_2", "shear_gamma_2"),
     ]
     for argument, name in mass_args:
-        agg_csv.add_variable(argument=argument, name=name, value_types=value_types_all)
+        if argument.startswith("fields."):
+            catalogue_util.add_variable_with_fallback(
+                agg_csv=agg_csv,
+                argument=argument,
+                fallback_argument=argument.replace(
+                    "fields.shear", "galaxies.lens.shear"
+                ),
+                name=name,
+                value_types=value_types_all,
+            )
+        else:
+            agg_csv.add_variable(
+                argument=argument, name=name, value_types=value_types_all
+            )
 
     """
     __The Effective Einstein Radius Latent__
