@@ -1,7 +1,7 @@
 ---
 title: Project state
 type: state
-last_touched: 2026-09-17
+last_touched: 2026-09-18
 ---
 
 # Project state
@@ -9,7 +9,26 @@ last_touched: 2026-09-17
 The **head pointer** for this project — read this first, before any journal entry.
 Rewritten every session, never appended.
 
+## Current run — 2026-09-18
+
+**Array `343480` is running the approved top-1000-brightest `vis_lp` CPU model**
+on `dataset/dr1_sep1_top1000/`, indices `0-999`, with 8 CPUs, 64 GB and an
+18-hour limit per task. The user approved submission after reviewing the bare-field
+form: `fields=field`, with `model.fields.shear.gamma_1/2` unchanged. No `vis_pix`
+follow-up was submitted and no scientific result or convergence judgment is implied.
+
+The source port is local commit `2430e4e` (pipeline PR #90); RAL Galaxy is
+`90e757d3` and Lens is `478213e78`. Actual imports/model construction, contour
+values/JIT/vmap/gradients, one local real-input test-mode likelihood, all 11,000
+input files and 115 deployed code/configuration hashes passed before submission.
+Earlier science commits, configuration, outputs and untracked preparation are
+preserved. Full revisions, hashes and commands: [session record](2026-09-18-flat-fields-top1000.md).
+
 ## Science goal
+
+The following describes the earlier ten-lens reproduction study. The current
+top-1000 run was separately authorized on September 18; no new by-eye ruling is
+being inferred from that authorization.
 
 The **actual Euclid DR1 run**, on the September-1 segmentation delivery. `euclid_dr1_prelim`
 proved that a complete DR1 catalogue can be delivered from
