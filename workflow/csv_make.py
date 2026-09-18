@@ -88,7 +88,9 @@ Set up the aggregator which will load results from the output folder of the mode
 """
 from autofit.aggregator.aggregator import Aggregator
 
-agg = Aggregator.from_directory(directory=Path("output"), completed_only=True, unzip_temporary=True)
+agg = Aggregator.from_directory(
+    directory=Path("output"), completed_only=True, unzip_temporary=True
+)
 
 """
 Use a query on the aggregator to only get results for the `mass_total[1]` model-fit, which contains the final lens
@@ -250,8 +252,23 @@ can be added to the .csv file using the same API as above.
 """
 agg_csv = af.AggregateCSV(aggregator=agg_query)
 
-agg_csv.add_variable(
-    argument="galaxies.lens.shear.magnitude",
+
+def shear_magnitude_from(result):
+    instance = result.samples.median_pdf()
+    fields = getattr(instance, "fields", None)
+
+    if fields is not None and hasattr(fields, "shear"):
+        shear = fields.shear
+    else:
+        # Explicit compatibility with results written before the fields migration.
+        shear = instance.galaxies.lens.shear
+
+    return shear.magnitude
+
+
+agg_csv.add_computed_column(
+    name="shear_magnitude",
+    compute=shear_magnitude_from,
 )
 
 agg_csv.save(path=workflow_path / "csv_example_latent.csv")

@@ -4,11 +4,12 @@ that need a pixelized-source fit without a non-linear search.
 
 ``scripts/initial_lens_model.py`` builds that stage from the preceding
 ``vis_lp`` result: the lens galaxy is carried over as an *instance* (light +
-mass + shear), and the source's light profile is replaced by a
-``Pixelization`` whose ``Delaunay`` mesh takes its vertices from an image-plane
-grid built at run time — a ``Hilbert`` mesh drawn from the source's adapt
-image, with a ring of circle-edge points appended and zeroed. That grid cannot
-live in the model, so it travels to the analysis inside ``AdaptImages``.
+mass), its shear field is carried separately, and the source's light profile
+is replaced by a ``Pixelization`` whose ``Delaunay`` mesh takes its vertices
+from an image-plane grid built at run time — a ``Hilbert`` mesh drawn from the
+source's adapt image, with a ring of circle-edge points appended and zeroed.
+That grid cannot live in the model, so it travels to the analysis inside
+``AdaptImages``.
 
 Mirrored here with a truth model standing in for the ``vis_lp`` result: the
 lens is the truth lens, and the adapt image is the truth source's own
@@ -39,19 +40,28 @@ ADAPT_IMAGE_FLOOR = 0.01
 SOURCE_PATH = "('galaxies', 'source')"
 
 
-def pixelized_model_and_adapt_images_from(lens, sersic_source, euclid_dataset):
+def pixelized_model_and_adapt_images_from(
+    lens, sersic_source, euclid_dataset, field=None
+):
     """
     The ``vis_pix`` model (zero free parameters) and the ``AdaptImages`` its
     ``Delaunay`` mesh needs, for a truth ``lens`` and ``sersic_source`` galaxy
     on the loaded ``euclid_dataset``.
     """
+    import copy
+
     import autofit as af
     import autolens as al
+
+    lens = copy.deepcopy(lens)
+    if field is None and getattr(lens, "shear", None) is not None:
+        field = al.MassField(redshift=lens.redshift, shear=lens.shear)
+        delattr(lens, "shear")
 
     dataset = euclid_dataset.dataset
 
     adapt_data = al.Tracer(
-        galaxies=[lens, sersic_source]
+        galaxies=[lens, sersic_source], fields=[field] if field is not None else None
     ).galaxy_image_2d_dict_from(grid=dataset.grids.lp)[sersic_source]
     adapt_data = adapt_data + np.max(adapt_data) * ADAPT_IMAGE_FLOOR
 
@@ -88,7 +98,10 @@ def pixelized_model_and_adapt_images_from(lens, sersic_source, euclid_dataset):
                     regularization=al.reg.AdaptSplit(),
                 ),
             ),
-        )
+        ),
+        fields=(
+            af.Model.from_instance(field) if field is not None else af.Collection()
+        ),
     )
 
     assert model.prior_count == 0, (

@@ -418,10 +418,21 @@ def _mge_basis():
 
 
 def _tracer_from(lens):
+    import copy
+
     import autolens as al
 
+    lens = copy.deepcopy(lens)
+    shear = getattr(lens, "shear", None)
+    fields = None
+    if shear is not None:
+        delattr(lens, "shear")
+        fields = [al.MassField(redshift=lens.redshift, shear=shear)]
+
     return al.Tracer(
-        galaxies=[lens, al.Galaxy(redshift=1.5)], cosmology=al.cosmo.Planck15()
+        galaxies=[lens, al.Galaxy(redshift=1.5)],
+        fields=fields,
+        cosmology=al.cosmo.Planck15(),
     )
 
 
@@ -485,7 +496,8 @@ def test_a_mass_profile_on_the_source_galaxy_is_not_the_lens():
 
     mass, shear = _lens_mass(), _external_shear()
 
-    lens = al.Galaxy(redshift=0.5, mass=mass, shear=shear)
+    lens = al.Galaxy(redshift=0.5, mass=mass)
+    field = al.MassField(redshift=0.5, shear=shear)
     source_with_mass = al.Galaxy(
         redshift=1.5,
         mass=al.mp.Isothermal(
@@ -496,7 +508,11 @@ def test_a_mass_profile_on_the_source_galaxy_is_not_the_lens():
         shear=_external_shear(magnitude=0.2, angle=5.0),
     )
 
-    tracer = al.Tracer(galaxies=[lens, source_with_mass], cosmology=al.cosmo.Planck15())
+    tracer = al.Tracer(
+        galaxies=[lens, source_with_mass],
+        fields=[field],
+        cosmology=al.cosmo.Planck15(),
+    )
 
     picked_mass, picked_shear = witt_wynne_util._mass_and_shear_from(tracer=tracer)
 
@@ -514,7 +530,9 @@ def test_a_mass_profile_on_the_source_galaxy_is_not_the_lens():
         tracer=tracer, grid=grid, source_centre=source_centre
     )
     lens_only = witt_wynne_util.witt_wynne_vector_sum(
-        tracer=_tracer_from(lens), grid=grid, source_centre=source_centre
+        tracer=_tracer_from(al.Galaxy(redshift=0.5, mass=mass, shear=shear)),
+        grid=grid,
+        source_centre=source_centre,
     )
 
     assert with_source_mass.valid and lens_only.valid
