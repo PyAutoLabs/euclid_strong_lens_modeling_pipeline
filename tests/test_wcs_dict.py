@@ -114,7 +114,6 @@ SOLVER_FROM_PEAK_ABS = 0.1
 PEAK_ABS = 0.05
 
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -171,10 +170,24 @@ def truth_galaxies(truth):
             **{
                 profile_name: _profile_from(entry)
                 for profile_name, entry in galaxy["profiles"].items()
+                if profile_name != "shear"
             },
         )
         for galaxy in truth["model"].values()
     ]
+
+
+@pytest.fixture(scope="session")
+def truth_field(truth):
+    """The truth external shear, separated from the lens galaxy."""
+    import autolens as al
+
+    lens = next(iter(truth["model"].values()))
+
+    return al.MassField(
+        redshift=lens["redshift"],
+        shear=_profile_from(lens["profiles"]["shear"]),
+    )
 
 
 @pytest.fixture(scope="session")
@@ -183,12 +196,12 @@ def euclid_dataset():
 
 
 @pytest.fixture(scope="session")
-def wcs_dict(truth_galaxies, euclid_dataset):
+def wcs_dict(truth_galaxies, truth_field, euclid_dataset):
     """The record for the truth tracer — solved once for the module."""
     import autolens as al
 
     return util.wcs_dict_from(
-        tracer=al.Tracer(galaxies=truth_galaxies),
+        tracer=al.Tracer(galaxies=truth_galaxies, fields=[truth_field]),
         data=euclid_dataset.dataset.data,
         pixel_wcs=euclid_dataset.pixel_wcs,
     )
@@ -213,7 +226,7 @@ def _analysis_from(euclid_dataset, adapt_images=None):
 
 
 @pytest.fixture(scope="session")
-def pixelized_fit(truth_galaxies, euclid_dataset):
+def pixelized_fit(truth_galaxies, truth_field, euclid_dataset):
     """
     The ``vis_pix`` stage fitted once at zero free parameters: the truth lens
     as an instance, the source a ``Delaunay`` ``Pixelization`` (the builder in
@@ -224,6 +237,7 @@ def pixelized_fit(truth_galaxies, euclid_dataset):
         lens=truth_galaxies[0],
         sersic_source=truth_galaxies[-1],
         euclid_dataset=euclid_dataset,
+        field=truth_field,
     )
 
     analysis = _analysis_from(euclid_dataset, adapt_images=adapt_images)
@@ -390,7 +404,7 @@ def test_the_lensed_source_sky_positions_follow_the_header(wcs_dict, euclid_data
         )
 
 
-def test_the_source_centre_reads_an_mge_basis(truth_galaxies):
+def test_the_source_centre_reads_an_mge_basis(truth_galaxies, truth_field):
     """
     ``vis_lp``'s source is one MGE ``Basis``, whose ``centre`` is the centre
     its Gaussians share — the centre the lens equation is solved for.
@@ -403,14 +417,15 @@ def test_the_source_centre_reads_an_mge_basis(truth_galaxies):
         ]
     )
     tracer = al.Tracer(
-        galaxies=[truth_galaxies[0], al.Galaxy(redshift=1.0, bulge=basis)]
+        galaxies=[truth_galaxies[0], al.Galaxy(redshift=1.0, bulge=basis)],
+        fields=[truth_field],
     )
 
     assert util.source_centre_from(tracer=tracer) == (0.08, 0.12)
 
 
 def test_a_source_with_neither_light_nor_fit_writes_no_source_keys(
-    truth_galaxies, euclid_dataset
+    truth_galaxies, truth_field, euclid_dataset
 ):
     """
     A bare source galaxy has no light centre, and without a ``fit`` a pixelized
@@ -419,7 +434,10 @@ def test_a_source_with_neither_light_nor_fit_writes_no_source_keys(
     """
     import autolens as al
 
-    tracer = al.Tracer(galaxies=[truth_galaxies[0], al.Galaxy(redshift=1.0)])
+    tracer = al.Tracer(
+        galaxies=[truth_galaxies[0], al.Galaxy(redshift=1.0)],
+        fields=[truth_field],
+    )
 
     wcs_dict = util.wcs_dict_from(
         tracer=tracer,
@@ -449,7 +467,7 @@ def test_a_pixelized_source_without_a_fit_writes_no_source_keys(
 
 
 def test_a_solver_failure_is_logged_and_its_keys_left_absent(
-    truth_galaxies, euclid_dataset, monkeypatch, caplog
+    truth_galaxies, truth_field, euclid_dataset, monkeypatch, caplog
 ):
     """
     ``save_results`` runs after the search has finished; a raise there would
@@ -466,7 +484,7 @@ def test_a_solver_failure_is_logged_and_its_keys_left_absent(
 
     with caplog.at_level(logging.WARNING, logger="util"):
         wcs_dict = util.wcs_dict_from(
-            tracer=al.Tracer(galaxies=truth_galaxies),
+            tracer=al.Tracer(galaxies=truth_galaxies, fields=[truth_field]),
             data=euclid_dataset.dataset.data,
             pixel_wcs=euclid_dataset.pixel_wcs,
         )
@@ -513,7 +531,9 @@ def test_the_clump_peak_is_the_truth_source_centre(pixelized_wcs_dict, truth):
     assert pixelized_wcs_dict["source_centre_x_arcsec"] == clump["peak_x_arcsec"]
 
 
-def test_the_clump_images_off_the_mapper_are_the_truth_images(pixelized_wcs_dict, truth):
+def test_the_clump_images_off_the_mapper_are_the_truth_images(
+    pixelized_wcs_dict, truth
+):
     """
     Each of the four image regions the mapper attributes to the clump has its
     brightest model pixel within two pixels of a distinct truth image.
@@ -526,7 +546,9 @@ def test_the_clump_images_off_the_mapper_are_the_truth_images(pixelized_wcs_dict
         "the simulated source is quadruply imaged and the mapper must find "
         f"four image regions; got {len(recorded)}"
     )
-    assert np.asarray(recorded) == pytest.approx(np.asarray(expected), abs=MAPPER_IMAGE_ABS)
+    assert np.asarray(recorded) == pytest.approx(
+        np.asarray(expected), abs=MAPPER_IMAGE_ABS
+    )
     assert len(clump["image_ra_deg"]) == len(clump["image_dec_deg"]) == 4
 
 
@@ -667,9 +689,9 @@ def test_the_clump_finder_ignores_an_isolated_spike():
 
     assert rule == "percentile"
     assert len(clumps) == 1
-    assert sorted(clumps[0]) == list(range(10)), (
-        f"the source ring is one clump of ten pixels; got {clumps[0]}"
-    )
+    assert sorted(clumps[0]) == list(
+        range(10)
+    ), f"the source ring is one clump of ten pixels; got {clumps[0]}"
     assert 10 not in clumps[0]
     assert clumps[0][int(np.argmax(reconstruction[clumps[0]]))] == 9
 
@@ -841,6 +863,6 @@ def test_the_pixelized_fit_survives_a_spike(pixelized_fit, truth):
         reconstruction=spiked, neighbors=mapper.neighbors
     )
 
-    assert not any(spike_index in clump for clump in pix_indexes), (
-        f"mesh pixel {spike_index} is the injected spike and must be in no clump"
-    )
+    assert not any(
+        spike_index in clump for clump in pix_indexes
+    ), f"mesh pixel {spike_index} is the injected spike and must be in no clump"

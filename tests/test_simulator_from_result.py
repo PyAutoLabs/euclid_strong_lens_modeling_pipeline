@@ -90,6 +90,11 @@ def tracer_from(lens_light, source_light=None):
     if source_light is None:
         source_light = al.lp.Sersic(intensity=3.0, effective_radius=0.2)
 
+    field = al.MassField(
+        redshift=0.5,
+        shear=al.mp.ExternalShear(gamma_1=0.03, gamma_2=-0.02),
+    )
+
     return al.Tracer(
         galaxies=[
             al.Galaxy(
@@ -98,7 +103,8 @@ def tracer_from(lens_light, source_light=None):
                 mass=al.mp.Isothermal(einstein_radius=1.2),
             ),
             al.Galaxy(redshift=1.0, bulge=source_light),
-        ]
+        ],
+        fields=[field],
     )
 
 
@@ -118,9 +124,34 @@ def test_intensities_are_recovered_and_the_tracer_makes_an_image(tmp_path):
 
     assert tracer.galaxies[0].bulge.intensity == pytest.approx(0.5)
     assert tracer.galaxies[-1].bulge.intensity == pytest.approx(3.0)
+    assert tracer.fields[0].shear.gamma_1 == pytest.approx(0.03)
+    assert tracer.fields[0].shear.gamma_2 == pytest.approx(-0.02)
 
     grid = al.Grid2D.uniform(shape_native=(30, 30), pixel_scales=0.1)
     assert tracer.image_2d_from(grid=grid).native.max() > 0.0
+
+
+def test_truth_dump_keeps_the_established_shear_schema():
+    """A field-backed tracer still writes the existing galaxy-profile truth block."""
+    truth = simulator.model_truth_from(tracer_from(al.lp.Sersic(intensity=0.5)))
+
+    shear = truth["galaxy_0"]["profiles"]["shear"]
+    assert shear["type"] == "ExternalShear"
+    assert shear["parameters"] == {"gamma_1": 0.03, "gamma_2": -0.02}
+
+
+def test_truth_dump_rejects_a_field_the_schema_cannot_represent():
+    """Unsupported fields fail clearly instead of disappearing from truth.json."""
+    tracer = tracer_from(al.lp.Sersic(intensity=0.5))
+    tracer.fields.append(
+        al.MassField(
+            redshift=0.7,
+            shear=al.mp.ExternalShear(gamma_1=0.01, gamma_2=0.02),
+        )
+    )
+
+    with pytest.raises(SystemExit, match="unsupported MassField layout"):
+        simulator.model_truth_from(tracer)
 
 
 def test_no_linear_light_profile_survives(tmp_path):
