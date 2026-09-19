@@ -200,9 +200,18 @@ Every producer can also be run on its own; each takes `--sample`,
   means the band's sky lies +y arcsec from the VIS astrometric frame. VIS itself
   has no row: it is the frame the offsets are measured against, and the VIS
   Sersic fit carries no `dataset_model` to read. `scripts/lens_model_waveband.py`
-  gives both a uniform prior of ±0.2", so a value at the edge of that range is a
-  QA flag — the band's misregistration exceeds what the fit can model — rather
-  than a measurement.
+  gives both a uniform prior of ±0.5" (`GRID_OFFSET_PRIOR_ARCSEC`), which is
+  wider than one NISP (0.3") or DECam (~0.26") pixel; it was ±0.2" — two VIS
+  pixels — until DR1 prelim and sep1 both put the same tile/band pairs on that
+  limit with 3σ bounds of exactly 0.2000.
+- **`prior_edge_y` / `prior_edge_x` flag a row that reached the prior.** They are
+  `True` when that component's 3σ interval reaches a limit of its own uniform
+  prior, within 1% of the prior width. The limits are read off each result's own
+  model, never a literal, so a tree of pre-widening fits flags against ±0.2" and
+  a re-fitted one against ±0.5". A flagged row is a **QA signal, not a
+  measurement**: the band's misregistration exceeds what the fit was allowed to
+  model, so its offset is a lower bound on the truth and should be re-fitted
+  under a wider prior rather than propagated.
 - **Master CSVs are split per lens.** `catalogue_util.write_per_tile_csv` drops
   each lens's rows into its own folder so a single lens folder is
   self-contained and can be shipped on its own.
