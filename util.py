@@ -416,8 +416,8 @@ class VisualizerImaging(al.VisualizerImaging):
             model=model,
         )
 
-        # Load the images. DR1 tile dumps ship `.jpg` thumbnails, earlier
-        # datasets `.png`, so try each extension in turn.
+        # DR1 images ship as either one RGB or the earlier rgb_0/rgb_1 pair.
+        # Each form may use PNG or JPEG.
         def _open_rgb(stem):
             for ext in (".png", ".jpg", ".jpeg"):
                 path = dataset_main_path / f"{stem}{ext}"
@@ -427,31 +427,37 @@ class VisualizerImaging(al.VisualizerImaging):
 
         img0 = _open_rgb("rgb_0")
         img1 = _open_rgb("rgb_1")
-        if img0 is None or img1 is None:
-            return
+        if img0 is not None and img1 is not None:
+            images = [img0, img1]
+            titles = ["RGB 0", "RGB 1"]
+        else:
+            single_rgb = _open_rgb("rgb")
+            if single_rgb is None:
+                return
+            images = [single_rgb]
+            titles = ["RGB"]
 
-        mask = al.Mask2D.all_false(
-            shape_native=(img0.shape[0], img0.shape[1]),
-            pixel_scales=dataset.pixel_scales,
-            origin=dataset.mask.origin,
-        )
-
-        img0 = al.Array2DRGB(values=img0, mask=mask)
-        img1 = al.Array2DRGB(values=img1, mask=mask)
-
-        mask_rgb = al.Mask2D.circular(
-            shape_native=(img0.shape[0], img0.shape[1]),
-            pixel_scales=dataset.pixel_scales,
-            radius=dataset.mask.circular_radius,
-            origin=dataset.mask.origin,
-        )
-
-        img0_masked = al.Array2DRGB(values=img0, mask=mask_rgb)
-        img1_masked = al.Array2DRGB(values=img1, mask=mask_rgb)
+        originals = []
+        masked = []
+        for image in images:
+            shape = image.shape[:2]
+            mask = al.Mask2D.all_false(
+                shape_native=shape,
+                pixel_scales=dataset.pixel_scales,
+                origin=dataset.mask.origin,
+            )
+            mask_rgb = al.Mask2D.circular(
+                shape_native=shape,
+                pixel_scales=dataset.pixel_scales,
+                radius=dataset.mask.circular_radius,
+                origin=dataset.mask.origin,
+            )
+            originals.append(al.Array2DRGB(values=image, mask=mask))
+            masked.append(al.Array2DRGB(values=image, mask=mask_rgb))
 
         subplot_rgb(
-            arrays=[img0, img1, img0_masked, img1_masked],
-            titles=["RGB 0", "RGB 1", "RGB 0 Masked", "RGB 1 Masked"],
+            arrays=originals + masked,
+            titles=titles + [f"{title} Masked" for title in titles],
             output_path=paths.image_path,
             output_filename="rgb",
             output_format="png",
@@ -696,11 +702,9 @@ class AnalysisImaging(al.AnalysisImaging):
         array_2d = xp.zeros(image.mask.shape, dtype=image.dtype)
 
         if xp is np:
-
             array_2d[image.mask.slim_to_native_tuple] = image.array
 
         else:
-
             array_2d = array_2d.at[image.mask.slim_to_native_tuple].set(image.array)
 
         return array_2d
