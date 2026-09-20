@@ -425,17 +425,17 @@ class VisualizerImaging(al.VisualizerImaging):
                     return np.array(Image.open(path))
             return None
 
-        img0 = _open_rgb("rgb_0")
-        img1 = _open_rgb("rgb_1")
-        if img0 is not None and img1 is not None:
-            images = [img0, img1]
-            titles = ["RGB 0", "RGB 1"]
-        else:
-            single_rgb = _open_rgb("rgb")
-            if single_rgb is None:
-                return
+        single_rgb = _open_rgb("rgb")
+        if single_rgb is not None:
             images = [single_rgb]
             titles = ["RGB"]
+        else:
+            img0 = _open_rgb("rgb_0")
+            img1 = _open_rgb("rgb_1")
+            if img0 is None or img1 is None:
+                return
+            images = [img0, img1]
+            titles = ["RGB 0", "RGB 1"]
 
         originals = []
         masked = []

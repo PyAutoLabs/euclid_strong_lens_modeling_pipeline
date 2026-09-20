@@ -17,13 +17,15 @@ import util
             ["rgb_0.jpg", "rgb_1.jpg"],
             ["RGB 0", "RGB 1", "RGB 0 Masked", "RGB 1 Masked"],
         ),
+        (
+            ["rgb.jpg", "rgb_0.jpg", "rgb_1.jpg"],
+            ["RGB", "RGB Masked"],
+        ),
     ],
 )
 def test_pre_fit_rgb_output(tmp_path: Path, monkeypatch, names, expected_titles):
     for name in names:
         Image.new("RGB", (12, 10), (80, 120, 160)).save(tmp_path / name)
-    if len(names) == 2:
-        Image.new("RGB", (12, 10), (160, 120, 80)).save(tmp_path / "rgb.jpg")
 
     class BaseVisualizer:
         def visualize_before_fit(self, **kwargs):
