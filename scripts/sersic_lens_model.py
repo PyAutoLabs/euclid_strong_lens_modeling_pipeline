@@ -207,6 +207,9 @@ def fit_sersic(
     centre priors are read from ``galaxies.source.bulge``, which the ``vis_pix``
     search replaces with a ``Pixelization``.
 
+    The lens-light Sersic index uses the wider ``wide_n`` experiment prior,
+    Uniform(0.5, 10.0). The source Sersic keeps its configured prior.
+
     The redshifts below are the same dimensionless placeholders the initial fit uses:
     for a single-plane lens they do not affect the model.
     """
@@ -217,6 +220,7 @@ def fit_sersic(
     lens_bulge.centre.centre_1 = (
         vis_result.model_centred.galaxies.lens.bulge.profile_list[0].centre.centre_1
     )
+    lens_bulge.sersic_index = af.UniformPrior(lower_limit=0.5, upper_limit=10.0)
 
     source_bulge = af.Model(al.lp_linear.Sersic)
     source_bulge.centre.centre_0 = (
