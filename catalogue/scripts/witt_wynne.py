@@ -434,8 +434,7 @@ def parse_args():
         type=float,
         default=0.05,
         help=(
-            "Resolution the tangential critical curve is contoured at. "
-            "Default: 0.05."
+            "Resolution the tangential critical curve is contoured at. Default: 0.05."
         ),
     )
     args = parser.parse_args()
@@ -487,7 +486,8 @@ def _with_redshifts(model, cosmology, z_lens: float, z_source: float):
     return replace(model, d_ol=d_ol, d_ls=d_ls, z_lens=z_lens, z_source=z_source, h=h)
 
 
-def main():
+@catalogue_util.reported("witt_wynne")
+def main(counts):
     """
     __One Aggregator Per Lens__
 
@@ -524,138 +524,146 @@ def main():
     )
 
     rows = []
+    valid_input_lenses = set()
 
     for dataset_name in dataset_name_list:
-
         print(dataset_name)
 
-        try:
-            agg = Aggregator.from_directory(
-                directory=sample_root / dataset_name,
-                completed_only=True,
-                unzip_temporary=True,
-            )
+        agg = Aggregator.from_directory(
+            directory=sample_root / dataset_name,
+            completed_only=True,
+            unzip_temporary=True,
+        )
 
-            agg_query = agg.query(agg.unique_tag == args.unique_tag)
-            if args.search_name is not None:
-                agg_query = agg_query.query(agg_query.search.name == args.search_name)
+        agg_query = agg.query(agg.unique_tag == args.unique_tag)
+        if args.search_name is not None:
+            agg_query = agg_query.query(agg_query.search.name == args.search_name)
 
-            """
-            __No Completed Fit__
+        """
+        __No Completed Fit__
 
-            `dataset_names_from` lists every directory under `output/<sample>/`,
-            so a lens with results from another stage only, or one whose fit is
-            still in flight, reaches here with an empty query. An empty
-            aggregator query is an empty `map`, so `next` without a default
-            raises `StopIteration` -- which is not caught below and would abort
-            the whole bundle. It is a per-lens skip instead.
-            """
-            tracer_entry = next(
-                iter(
-                    al.agg.TracerAgg(aggregator=agg_query).max_log_likelihood_gen_from()
-                ),
-                None,
-            )
-
-            dataset_entry = next(
-                iter(al.agg.ImagingAgg(aggregator=agg_query).dataset_gen_from()),
-                None,
-            )
-
-            if tracer_entry is None or dataset_entry is None:
-                print(f"skipping {dataset_name}: no completed {fit_tag} fit")
-                continue
-
-            tracer = tracer_entry[0]
-            dataset = dataset_entry[0]
-
-            """
-            __The Source Position__
-
-            The `wcs.json` route first, then the recompute. Both are per lens,
-            and the rule that fired is a column, so a catalogue built over a
-            tree of mixed vintages says per row where its source came from.
-            """
-            wcs_list = list(agg_query.values("wcs"))
-            source_centre, source_rule = source_centre_from_wcs(
-                wcs_list[0] if wcs_list else {}
-            )
-
-            if source_centre is None:
-                source_centre, source_rule = source_centre_recomputed_from(agg_query)
-
-            if source_centre is None:
-                print(
-                    f"skipping {dataset_name}: no source position in wcs.json and "
-                    "none could be recomputed from the fit"
-                )
-                continue
-
-            """
-            __The Projection__
-
-            The caustic is traced on the cut-out's own unmasked uniform grid —
-            see "__The Grid The Caustic Is Traced On__" in the module
-            docstring for why it is not `dataset.grid`.
-            """
-            grid = al.Grid2D.uniform(
-                shape_native=dataset.data.shape_native,
-                pixel_scales=dataset.pixel_scales,
-            )
-
-            model = project(
-                tracer=tracer,
-                grid=grid,
-                source_centre=source_centre,
-                caustic_pixel_scale=args.caustic_pixel_scale,
-            )
-
-            model = _with_redshifts(
-                model=model,
-                cosmology=tracer.cosmology,
-                z_lens=args.z_lens,
-                z_source=args.z_source,
-            )
-
-            mass, _ = witt_wynne_util._mass_and_shear_from(tracer)
-            mass_profile = "" if mass is None else type(mass).__name__
-
-            zeroed = model.zeroed()
-            images = zeroed.images()
-
-            if model.valid:
-                witt_wynne_util.write_isit_input(
-                    path=inspect_path / dataset_name / "witt_wynne.in",
-                    model=model,
-                    zero_centre=True,
-                )
-            else:
-                print(f"{dataset_name}: no .in written — {model.reason}")
-
-            rows.append(
-                row_from(
-                    lens_name=dataset_name,
-                    model=zeroed,
-                    images=images,
-                    projection=args.projection,
-                    source_rule=source_rule,
-                    search_name=args.search_name,
-                    mass_profile=mass_profile,
-                )
-            )
-
-        except (
-            ValueError,
-            FileNotFoundError,
-            KeyError,
-            IndexError,
-            StopIteration,
-        ) as e:
-            print(f"skipping {dataset_name}: {e}")
+        `dataset_names_from` lists every directory under `output/<sample>/`,
+        so a lens with results from another stage only, or one whose fit is
+        still in flight, reaches here with an empty query. An empty
+        aggregator query is an empty `map`, so `next` without a default
+        raises `StopIteration` -- which is not caught below and would abort
+        the whole bundle. It is a per-lens skip instead.
+        """
+        if not len(agg_query):
+            counts.skip(dataset_name, f"no completed {fit_tag} fit")
+            continue
+        if not catalogue_util.lens_assets_available(
+            agg_query,
+            counts,
+            dataset_name,
+            values=("wcs", "dataset"),
+        ):
             continue
 
+        tracer_entry = next(
+            iter(al.agg.TracerAgg(aggregator=agg_query).max_log_likelihood_gen_from()),
+            None,
+        )
+
+        dataset_entry = next(
+            iter(al.agg.ImagingAgg(aggregator=agg_query).dataset_gen_from()),
+            None,
+        )
+
+        if tracer_entry is None or dataset_entry is None:
+            counts.skip(dataset_name, f"no completed {fit_tag} fit")
+            continue
+
+        tracer = tracer_entry[0]
+        dataset = dataset_entry[0]
+
+        """
+        __The Source Position__
+
+        The `wcs.json` route first, then the recompute. Both are per lens,
+        and the rule that fired is a column, so a catalogue built over a
+        tree of mixed vintages says per row where its source came from.
+        """
+        wcs_list = list(agg_query.values("wcs"))
+        source_centre, source_rule = source_centre_from_wcs(
+            wcs_list[0] if wcs_list else {}
+        )
+
+        if source_centre is None:
+            source_centre, source_rule = source_centre_recomputed_from(agg_query)
+
+        if source_centre is None:
+            counts.skip(
+                dataset_name, "no source position in wcs.json or reconstructed fit"
+            )
+            continue
+
+        """
+        __The Projection__
+
+        The caustic is traced on the cut-out's own unmasked uniform grid —
+        see "__The Grid The Caustic Is Traced On__" in the module
+        docstring for why it is not `dataset.grid`.
+        """
+        grid = al.Grid2D.uniform(
+            shape_native=dataset.data.shape_native,
+            pixel_scales=dataset.pixel_scales,
+        )
+
+        model = project(
+            tracer=tracer,
+            grid=grid,
+            source_centre=source_centre,
+            caustic_pixel_scale=args.caustic_pixel_scale,
+        )
+
+        model = _with_redshifts(
+            model=model,
+            cosmology=tracer.cosmology,
+            z_lens=args.z_lens,
+            z_source=args.z_source,
+        )
+
+        mass, _ = witt_wynne_util._mass_and_shear_from(tracer)
+        mass_profile = "" if mass is None else type(mass).__name__
+
+        zeroed = model.zeroed()
+        images = zeroed.images()
+
+        if model.valid:
+            witt_wynne_util.write_isit_input(
+                path=inspect_path / dataset_name / "witt_wynne.in",
+                model=model,
+                zero_centre=True,
+            )
+            valid_input_lenses.add(dataset_name)
+        else:
+            print(f"{dataset_name}: no .in written — {model.reason}")
+
+        rows.append(
+            row_from(
+                lens_name=dataset_name,
+                model=zeroed,
+                images=images,
+                projection=args.projection,
+                source_rule=source_rule,
+                search_name=args.search_name,
+                mass_profile=mass_profile,
+            )
+        )
+
+    # Only this producer owns these solver inputs. A skipped/invalid lens
+    # must not retain a previous projection while its refreshed CSV omits it.
+    for stale in inspect_path.glob("*/witt_wynne.in"):
+        if stale.parent.name not in valid_input_lenses:
+            stale.unlink()
+
+    counts.built = len(rows)
     if not rows:
-        print("no lenses projected; no witt_wynne.csv written")
+        catalogue_util.clear_csv_rows(inspect_path, "witt_wynne.csv")
+        print(
+            "no lenses projected; no witt_wynne.csv written with data; cleared stale rows"
+        )
         return
 
     """
