@@ -143,14 +143,10 @@ def has_grid_offset(result) -> bool:
     rather than returning ``None``. ``model`` reads the result's
     ``files/model.json``, which is cheap and already needed downstream.
 
-    Any failure to read the model is a "no": a result that cannot say what it
-    fitted must not be handed to ``add_variable``, which would write blank cells
-    for it rather than raise.
+    A missing or malformed model is a structural error and must raise; only
+    a readable model without the grid-offset parameter is excluded.
     """
-    try:
-        return GRID_OFFSET_Y_PATH in set(result.model.paths)
-    except Exception:
-        return False
+    return GRID_OFFSET_Y_PATH in set(result.model.paths)
 
 
 def with_grid_offset(aggregator):
@@ -176,8 +172,7 @@ def with_grid_offset(aggregator):
     excluded = len(aggregator) - len(kept)
     if excluded:
         print(
-            f"excluded {excluded} results whose model has no "
-            "dataset_model.grid_offset"
+            f"excluded {excluded} results whose model has no dataset_model.grid_offset"
         )
 
     return Aggregator(
@@ -259,7 +254,8 @@ def prior_edge_columns(aggregator):
     return prior_edge_y, prior_edge_x
 
 
-def main():
+@catalogue_util.reported("astrometric_offsets", "rows")
+def main(counts):
     """
     __Query: Every Band Under One Tag, Minus VIS__
 
@@ -273,11 +269,9 @@ def main():
     offset filter would give the same survivors but ask it to reason about a set
     it did not scan.
 
-    Then ``with_grid_offset`` drops VIS. ``AggregateCSV`` raises ``ValueError``
-    when handed an empty aggregator, which is the ordinary case for a sample
-    whose SED chain has not run yet *and* for a tree holding only VIS fits. That
-    is caught and reported rather than raised: stage 10 of the bundle builder
-    should leave a partial bundle alone, not abort it.
+    Then ``with_grid_offset`` drops VIS. Missing WCS output skips only the
+    affected row. Empty selections are checked explicitly before constructing
+    ``AggregateCSV``; malformed models, WCS and summaries still raise.
     """
     args = parse_args()
     output_path, inspect_path = catalogue_util.resolve_paths(args)
@@ -300,11 +294,16 @@ def main():
     )
     agg_query = with_grid_offset(agg_query)
 
-    try:
-        agg_csv = af.AggregateCSV(aggregator=agg_query)
-    except ValueError as e:
-        print(f"no completed {args.unique_tag} results with a grid offset: {e}")
+    agg_query = catalogue_util.available_results(
+        agg_query,
+        counts,
+        values=("wcs",),
+    )
+    if not len(agg_query):
+        print(f"no usable completed {args.unique_tag} results")
+        catalogue_util.clear_csv_rows(inspect_path, "astrometric_offsets.csv")
         return
+    agg_csv = af.AggregateCSV(aggregator=agg_query)
 
     """
     __Five Label Columns, Built After The Filter__
@@ -394,7 +393,8 @@ def main():
     registration table, beside its ``magnitudes.csv``.
     """
     out_csv = inspect_path / "astrometric_offsets.csv"
-    agg_csv.save(path=out_csv)
+    catalogue_util.save_csv(agg_csv, out_csv)
+    counts.built = len(lens_name_list)
     print(f"wrote {out_csv} ({len(lens_name_list)} rows)")
 
     written = catalogue_util.write_per_tile_csv(

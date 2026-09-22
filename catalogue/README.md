@@ -264,3 +264,37 @@ paper-figure code — none of them produce any of the 21 bundle files.
 Also left in the science tree: `preprocess/recenter_lens_centre.py`, and the
 `scripts/` one-offs `audit_sed_outputs.py`, `audit_unresolved_hpc.sh` and
 `reorganize_normies.py`.
+
+## Missing generated assets
+
+A completed search can lack fit-dependent outputs when its maximum-likelihood
+sample could not be reconstructed. Completion alone does not establish that its
+scientific products are usable. Producers warn with lens, band, result identifier
+and missing asset, and print built, already-present, skipped and error counts.
+Counts describe products (lenses or CSV rows), not successful scientific fits.
+
+- Deblending skips the lens's FITS pair if any selected band lacks either input;
+  both outputs are extracted and staged before publication. Existing complete
+  pairs retain the usual existence-based skip. No reduced-band pair is published.
+- Multi-wavelength PNGs require the selected subplot for every selected result.
+  An incomplete lens composite is skipped and any obsolete composite is removed;
+  subsequent lenses still run.
+- Magnitude rows require WCS and the latent summary; astrometric-offset rows
+  require WCS. Filtering follows newest-result selection, without falling back to
+  an older fit, and labels and values share the same surviving rows. Lens-mass
+  rows require their latent summary. Missing individual latent quantities retain
+  the existing warning/blank-cell convention. Empty refreshes clear stale CSV
+  rows, and per-lens splits belonging to removed rows are removed.
+- Mass maps skip missing tracer FITS. Witt-Wynne skips absent WCS or dataset
+  assets before attempting reconstruction; its existing source-position fallback
+  remains available when WCS exists but contains no source position. Skipped
+  projections lose stale per-lens solver inputs and CSV rows, including when
+  the entire refreshed table is empty.
+- The inspection-image collector reports incomplete products as skips, including
+  missing optional thumbnails and COOLEST files. Copied assets are decoded
+  before publication; existing complete products are validated before reuse.
+
+These skips let later bundle stages run. Malformed JSON, corrupt FITS/PNG/ZIP,
+invalid HDUs, model errors and output-write errors propagate with a nonzero exit;
+the shell retains `set -euo pipefail`. A repeat build can fill missing products
+once their inputs exist. None of these steps reruns a model fit.

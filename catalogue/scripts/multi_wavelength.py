@@ -146,7 +146,8 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
+@catalogue_util.reported("multi_wavelength")
+def main(counts):
     """
     __One Aggregator Per Lens__
 
@@ -177,11 +178,12 @@ def main():
     dataset_name_list = catalogue_util.dataset_names_from(sample_root)
 
     for dataset_name in dataset_name_list:
-
         print(dataset_name)
 
         agg = Aggregator.from_directory(
-            directory=sample_root / dataset_name, completed_only=True, unzip_temporary=True
+            directory=sample_root / dataset_name,
+            completed_only=True,
+            unzip_temporary=True,
         )
 
         agg_query = agg.query(agg.unique_tag == args.unique_tag)
@@ -211,12 +213,6 @@ def main():
                 else len(WAVEBAND_ORDER)
             ),
         )
-
-        try:
-            agg_image = af.AggregateImages(aggregator=agg_query)
-        except ValueError as e:
-            print(f"skipping {dataset_name}: {e}")
-            continue
 
         """
         __Which Four Panels__
@@ -267,11 +263,33 @@ def main():
         this product: unlike the CSVs, it is per-lens by nature, so nothing is
         split afterwards.
         """
+        from autofit.aggregator.summary.aggregate_images import subplot_filename
+
+        if not catalogue_util.lens_assets_available(
+            agg_query,
+            counts,
+            dataset_name,
+            images=tuple(dict.fromkeys(subplot_filename(panel) for panel in subplots)),
+        ):
+            (inspect_path / dataset_name / "fit_multi_wavelength.png").unlink(
+                missing_ok=True
+            )
+            continue
+        agg_image = af.AggregateImages(aggregator=agg_query)
         image = agg_image.extract_image(subplots=subplots, transpose=True)
 
         output_dataset_path = inspect_path / dataset_name
         output_dataset_path.mkdir(parents=True, exist_ok=True)
-        image.save(output_dataset_path / "fit_multi_wavelength.png")
+        from tempfile import TemporaryDirectory
+
+        with (
+            image,
+            TemporaryDirectory(prefix=".png-", dir=output_dataset_path) as temporary,
+        ):
+            staged = Path(temporary) / "fit_multi_wavelength.png"
+            image.save(staged)
+            staged.replace(output_dataset_path / staged.name)
+        counts.built += 1
 
 
 if __name__ == "__main__":
