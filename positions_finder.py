@@ -2,9 +2,12 @@
 Shared pure numpy / scipy lens-model core for the ``vis_lp`` positions work.
 
 Holds the numpy SIE + external shear tracer, the fixed-centre quick fit, the
-threshold rule ``T = min(max(2 s, 0.3"), 0.5")`` and the light-centre port
-used by ``scripts/tools/positions_gate.py`` (no PyAutoLens import). The research
-behind the numbers is in the ``euclid_dr1`` project under
+threshold rule ``T = min(max(2 s, 0.3"), 0.5")``, the phase 1 gate's central
+cut and one-image outlier drop, the light-centre port, and
+:func:`solve_images`, a numpy forward solver (grid search + refinement, a
+stand-in for ``al.PointSolver``) returning the image positions and
+magnifications of a source position. No PyAutoLens import. The research behind
+the numbers is in the ``euclid_dr1`` project under
 ``inspect/positions_census/research/`` (``SYNTHESIS.md``, ``B_final_method.md``).
 
 All positions are PyAutoLens ``(y, x)`` arcsec.
@@ -26,6 +29,8 @@ FINDER_VERSION = "1.0"
 CENTRAL_RADIUS = 0.15
 # A set is "traceable" when s_min <= D_OUT (the vis_lp default threshold).
 D_OUT = 0.2
+# A leave-one-out candidate wins on cost when it beats the runner-up by DJ.
+DJ = 4.0
 # T = min(max(FACTOR * s_final, FLOOR), CAP).
 FACTOR = 2.0
 FLOOR = 0.3
@@ -61,8 +66,18 @@ SOLVE_STEP = 0.05
 SOLVE_REFINE = 0.01
 SOLVE_TOL = 0.02
 SOLVE_DEDUP = 0.1
+# A refined minimum is an image only when the polish reaches a true root of the
+# lens equation: near a degenerate (ring-like) model a long chain of grid minima
+# sits below SOLVE_TOL without being images.
+SOLVE_ROOT_TOL = 1e-4
 # Reconcile judgement calls (not fixed by the plan; see find_positions).
 MU_BRIGHT_FRAC = 0.5
+# Source-plane match: an observed position tracing within S_MATCH of beta is
+# predicted even when its solved image is further than R_MATCH away (a
+# source-plane offset d moves a highly magnified image by up to |mu| d along the
+# arc); it claims the nearest solved image within R_CLAIM.
+S_MATCH = 0.5 * D_OUT
+R_CLAIM = 1.0
 J_MAX = 30.0
 MAX_IMAGES = 6
 
@@ -302,6 +317,79 @@ def threshold_from(
 
 
 # ---------------------------------------------------------------------------
+# Central cut and one-image outlier drop (the phase 1 gate's steps 1 and 3)
+# ---------------------------------------------------------------------------
+
+
+def central_cut(positions, centre, r: float = CENTRAL_RADIUS) -> Tuple[List[int], List[int]]:
+    """Return ``(kept_indices, cut_indices)``: positions within ``r`` of ``centre`` are cut."""
+    pos = np.asarray(positions, float).reshape(-1, 2)
+    dist = np.hypot(pos[:, 0] - centre[0], pos[:, 1] - centre[1])
+    kept = [i for i in range(len(pos)) if dist[i] >= r]
+    cut = [i for i in range(len(pos)) if dist[i] < r]
+    return kept, cut
+
+
+def leave_one_out(positions, centre) -> List[Dict]:
+    """``quick_fit`` of every set with one position removed (index-aligned)."""
+    pos = np.asarray(positions, float)
+    return [quick_fit(np.delete(pos, i, 0), centre, nseed=2) for i in range(len(pos))]
+
+
+def outlier_drop(positions, centre, fit: Dict, loo: Optional[List[Dict]] = None) -> Dict:
+    """
+    Decide whether one position must be dropped for the set to trace (step 3).
+
+    Returns a dict with ``action`` (``keep`` | ``drop`` | ``review``), ``index``
+    (the local index dropped, or None), ``reason`` (``unique`` | ``J`` |
+    ``geom_inner`` | ``geom_outer`` for a drop; ``no_single_drop`` | ``n2_fail`` |
+    ``ambiguous`` for review), ``s_final`` and ``loo`` (the leave-one-out fits, or
+    None when they were not needed).
+    """
+    pos = np.asarray(positions, float)
+    n = len(pos)
+    out = dict(action="keep", index=None, reason="", s_final=fit["s_min"], loo=loo)
+    if fit["s_min"] <= D_OUT:
+        return out
+    if n < 3:
+        out.update(action="review", reason="n2_fail")
+        return out
+    if loo is None:
+        loo = leave_one_out(pos, centre)
+    out["loo"] = loo
+    sd = np.array([f["s_min"] for f in loo])
+    Jd = np.array([f["J"] for f in loo])
+    cand = [i for i in range(n) if sd[i] <= D_OUT]
+    drop, why = None, ""
+    if not cand:
+        out.update(action="review", reason="no_single_drop")
+        return out
+    if len(cand) == 1:
+        drop, why = cand[0], "unique"
+    else:
+        order = sorted(cand, key=lambda i: Jd[i])
+        if Jd[order[1]] - Jd[order[0]] >= DJ:
+            drop, why = order[0], "J"
+        else:
+            rl = np.hypot(pos[:, 0] - centre[0], pos[:, 1] - centre[1])
+            near = int(np.argmin(rl))
+            far = int(np.argmax(rl))
+
+            def med(i):
+                return float(np.median(np.delete(rl, i)))
+
+            if near in cand and (rl[near] < 0.3 or rl[near] < 0.6 * med(near)):
+                drop, why = near, "geom_inner"
+            elif far in cand and rl[far] > 1.5 * med(far):
+                drop, why = far, "geom_outer"
+    if drop is None:
+        out.update(action="review", reason="ambiguous")
+        return out
+    out.update(action="drop", index=int(drop), reason=why, s_final=float(sd[drop]))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Light centre
 # ---------------------------------------------------------------------------
 
@@ -373,3 +461,106 @@ def light_centre_from_maps(
     if image is not None:
         return brightest_sub_pixel_centre(np.asarray(image, float), pixel_scale, centre)
     return centre
+
+
+# ---------------------------------------------------------------------------
+# Forward solver (numpy stand-in for al.PointSolver)
+# ---------------------------------------------------------------------------
+
+
+def _jacobian_det(theta: np.ndarray, params, h: float = 1e-4) -> np.ndarray:
+    """det of d beta / d theta (central differences) at each (y, x) in ``theta``."""
+    dy = np.array([h, 0.0])
+    dx = np.array([0.0, h])
+    by = (source_positions(theta + dy, params) - source_positions(theta - dy, params)) / (2 * h)
+    bx = (source_positions(theta + dx, params) - source_positions(theta - dx, params)) / (2 * h)
+    # A = [[dby/dy, dby/dx], [dbx/dy, dbx/dx]]
+    return by[:, 0] * bx[:, 1] - bx[:, 0] * by[:, 1]
+
+
+def solve_images(
+    params: Sequence[float],
+    beta,
+    half_width: float,
+    step: float = SOLVE_STEP,
+    refine: float = SOLVE_REFINE,
+    tol: float = SOLVE_TOL,
+    centre_exclusion: float = CENTRAL_RADIUS,
+    dedup: float = SOLVE_DEDUP,
+    root_tol: float = SOLVE_ROOT_TOL,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    All image-plane positions of source position ``beta`` through an SIE + shear.
+
+    Coordinates are (y, x) arcsec relative to the mass centre (as
+    :func:`source_positions`). The residual ``|beta(theta) - beta|`` is evaluated
+    on a ``step`` grid over ``[-half_width, half_width]^2``; every 3x3 local
+    minimum is refined on a ``refine`` grid over the surrounding ``+/- 1.5 step``;
+    a refined minimum with residual below ``tol`` is polished by a bounded
+    least-squares step and accepted when the polish reaches a root of the lens
+    equation (residual below ``root_tol``; near a degenerate ring-like model a
+    chain of grid minima sits below ``tol`` without being images), then
+    de-duplicated within ``dedup``. Images within
+    ``centre_exclusion`` of the centre (the central, demagnified image) are
+    dropped.
+
+    Returns
+    -------
+    (positions, magnifications)
+        ``(N, 2)`` image positions and ``(N,)`` signed magnifications
+        ``1 / det(d beta / d theta)``, ordered by decreasing ``|mu|``.
+    """
+    beta = np.asarray(beta, float).reshape(2)
+    n = int(np.floor(half_width / step))
+    ax = np.arange(-n, n + 1) * step
+    yy, xx = np.meshgrid(ax, ax, indexing="ij")
+    grid = np.stack([yy.ravel(), xx.ravel()], 1)
+    res = np.hypot(*(source_positions(grid, params) - beta).T).reshape(yy.shape)
+
+    # 3x3 local minima (edges padded with +inf so border minima count too).
+    pad = np.pad(res, 1, constant_values=np.inf)
+    is_min = np.ones_like(res, bool)
+    for di in (-1, 0, 1):
+        for dj in (-1, 0, 1):
+            if di or dj:
+                is_min &= res <= pad[1 + di : 1 + di + res.shape[0], 1 + dj : 1 + dj + res.shape[1]]
+    rows, cols = np.nonzero(is_min)
+
+    m = int(round(1.5 * step / refine))
+    fine = np.arange(-m, m + 1) * refine
+    fy, fx = np.meshgrid(fine, fine, indexing="ij")
+    offsets = np.stack([fy.ravel(), fx.ravel()], 1)
+
+    found: List[np.ndarray] = []
+    for r, c in zip(rows, cols):
+        # Coarse minima far from any image are not worth refining.
+        if res[r, c] > max(10 * tol, 2 * step):
+            continue
+        local = np.array([ax[r], ax[c]]) + offsets
+        lres = np.hypot(*(source_positions(local, params) - beta).T)
+        t0 = local[int(np.argmin(lres))]
+        if float(lres.min()) >= tol:
+            continue
+        sol = least_squares(
+            lambda t: source_positions(t[None, :], params)[0] - beta,
+            t0,
+            bounds=(t0 - 2 * step, t0 + 2 * step),
+            xtol=1e-10,
+            ftol=1e-10,
+            max_nfev=50,
+        )
+        t = sol.x
+        if np.hypot(*(source_positions(t[None, :], params)[0] - beta)) >= root_tol:
+            continue
+        if np.hypot(*t) < centre_exclusion:
+            continue
+        if any(np.hypot(*(t - s)) < dedup for s in found):
+            continue
+        found.append(t)
+    if not found:
+        return np.zeros((0, 2)), np.zeros(0)
+    pos = np.array(found)
+    with np.errstate(divide="ignore"):
+        mu = 1.0 / _jacobian_det(pos, params)
+    order = np.argsort(-np.abs(mu))
+    return pos[order], mu[order]

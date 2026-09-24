@@ -70,6 +70,7 @@ from positions_finder import (  # noqa: E402,F401
     CAP,
     CENTRAL_RADIUS,
     D_OUT,
+    DJ,
     E_MAX,
     EASY,
     FACTOR,
@@ -91,7 +92,10 @@ from positions_finder import (  # noqa: E402,F401
     _sep_fit,
     _starts,
     brightest_sub_pixel_centre,
+    central_cut,
+    leave_one_out,
     max_separation,
+    outlier_drop,
     quick_fit,
     source_positions,
     threshold_from,
@@ -99,8 +103,6 @@ from positions_finder import (  # noqa: E402,F401
 
 GATE_VERSION = "1.0"
 
-# Step 3: a leave-one-out candidate wins on cost when it beats the runner-up by DJ.
-DJ = 4.0
 # Step 4: plausibility flag when one drop lowers J by at least DJ_FLAG.
 DJ_FLAG = 10.0
 
@@ -111,74 +113,6 @@ SUBMIT_TXT = "positions_submit.txt"
 # ---------------------------------------------------------------------------
 # Gate steps
 # ---------------------------------------------------------------------------
-
-
-def central_cut(positions, centre, r: float = CENTRAL_RADIUS) -> Tuple[List[int], List[int]]:
-    """Return ``(kept_indices, cut_indices)``: positions within ``r`` of ``centre`` are cut."""
-    pos = np.asarray(positions, float).reshape(-1, 2)
-    dist = np.hypot(pos[:, 0] - centre[0], pos[:, 1] - centre[1])
-    kept = [i for i in range(len(pos)) if dist[i] >= r]
-    cut = [i for i in range(len(pos)) if dist[i] < r]
-    return kept, cut
-
-
-def leave_one_out(positions, centre) -> List[Dict]:
-    """``quick_fit`` of every set with one position removed (index-aligned)."""
-    pos = np.asarray(positions, float)
-    return [quick_fit(np.delete(pos, i, 0), centre, nseed=2) for i in range(len(pos))]
-
-
-def outlier_drop(positions, centre, fit: Dict, loo: Optional[List[Dict]] = None) -> Dict:
-    """
-    Decide whether one position must be dropped for the set to trace (step 3).
-
-    Returns a dict with ``action`` (``keep`` | ``drop`` | ``review``), ``index``
-    (the local index dropped, or None), ``reason`` (``unique`` | ``J`` |
-    ``geom_inner`` | ``geom_outer`` for a drop; ``no_single_drop`` | ``n2_fail`` |
-    ``ambiguous`` for review), ``s_final`` and ``loo`` (the leave-one-out fits, or
-    None when they were not needed).
-    """
-    pos = np.asarray(positions, float)
-    n = len(pos)
-    out = dict(action="keep", index=None, reason="", s_final=fit["s_min"], loo=loo)
-    if fit["s_min"] <= D_OUT:
-        return out
-    if n < 3:
-        out.update(action="review", reason="n2_fail")
-        return out
-    if loo is None:
-        loo = leave_one_out(pos, centre)
-    out["loo"] = loo
-    sd = np.array([f["s_min"] for f in loo])
-    Jd = np.array([f["J"] for f in loo])
-    cand = [i for i in range(n) if sd[i] <= D_OUT]
-    drop, why = None, ""
-    if not cand:
-        out.update(action="review", reason="no_single_drop")
-        return out
-    if len(cand) == 1:
-        drop, why = cand[0], "unique"
-    else:
-        order = sorted(cand, key=lambda i: Jd[i])
-        if Jd[order[1]] - Jd[order[0]] >= DJ:
-            drop, why = order[0], "J"
-        else:
-            rl = np.hypot(pos[:, 0] - centre[0], pos[:, 1] - centre[1])
-            near = int(np.argmin(rl))
-            far = int(np.argmax(rl))
-
-            def med(i):
-                return float(np.median(np.delete(rl, i)))
-
-            if near in cand and (rl[near] < 0.3 or rl[near] < 0.6 * med(near)):
-                drop, why = near, "geom_inner"
-            elif far in cand and rl[far] > 1.5 * med(far):
-                drop, why = far, "geom_outer"
-    if drop is None:
-        out.update(action="review", reason="ambiguous")
-        return out
-    out.update(action="drop", index=int(drop), reason=why, s_final=float(sd[drop]))
-    return out
 
 
 def plausibility_flag(fit: Dict, loo: List[Dict]) -> Optional[int]:
