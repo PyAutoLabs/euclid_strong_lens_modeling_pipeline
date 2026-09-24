@@ -1312,6 +1312,37 @@ def coolest_json_from(
 # ---------------------------------------------------------------------------
 
 
+POSITIONS_META_NAME = "positions_meta.json"
+
+
+def positions_likelihood_list_from_meta(dataset_main_path):
+    """
+    Read the positions gate's ``positions_meta.json`` sidecar, if there is one.
+
+    The gate (``scripts/tools/positions_gate.py``) leaves ``positions.json`` raw
+    and writes the positions it kept plus a per-tile ``PositionsLH`` threshold
+    ``T = min(max(2 s_min, 0.3"), 0.5")`` beside it.
+
+    Returns
+    -------
+    (bool, list | None)
+        ``(False, None)`` when no sidecar exists (the caller keeps its default
+        behaviour); ``(True, None)`` when the gate left fewer than two positions
+        (status ``n_lt_2``: fit with the positions penalty off); otherwise
+        ``(True, [al.PositionsLH(threshold=T, positions=positions_used)])``.
+    """
+    path = Path(dataset_main_path) / POSITIONS_META_NAME
+    if not path.exists():
+        return False, None
+    with open(path) as f:
+        meta = json.load(f)
+    used = meta.get("positions_used") or []
+    if meta.get("status") == "n_lt_2" or len(used) < 2 or meta.get("threshold") is None:
+        return True, None
+    positions = al.Grid2DIrregular(values=[tuple(p) for p in used])
+    return True, [al.PositionsLH(threshold=float(meta["threshold"]), positions=positions)]
+
+
 @dataclass
 class EuclidDataset:
     """
@@ -1563,44 +1594,52 @@ def load_vis_dataset(
         psf_lowest_resolution = None
         psf_lowest_resolution_fwhm = None
 
-    try:
-        positions = al.Grid2DIrregular(
-            values=al.from_json(file_path=dataset_main_path / "positions.json")
-        )
-        # A single position is not a multiple-image constraint; treat as absent.
-        if len(positions) == 1:
-            raise FileNotFoundError
-        positions_likelihood_list = [al.PositionsLH(threshold=0.2, positions=positions)]
-    except FileNotFoundError:
-        # No `positions.json`: derive positions from the segmentation source
-        # flux map and the VIS noise map, mirroring `preprocess/segmentation.py`.
-        source_flux_path = dataset_main_path / "segmentation" / "source_flux.fits"
-        if (
-            source_flux_path.exists()
-            and fits.getdata(source_flux_path).shape == dataset.shape_native
-        ):
-            source_flux = fits.getdata(source_flux_path).astype(np.float32)
-            try:
-                noise_map = fits.getdata(
-                    dataset_main_path / dataset_fits_name,
-                    ext=vis_index * 3 + 3,
-                ).astype(np.float32)
-            except Exception:
-                noise_map = None
-            pos_list = _compute_positions_from_source_flux(
-                source_flux=source_flux,
-                noise_map=noise_map,
-                pixel_scale=pixel_scale,
+    # A `positions_meta.json` sidecar written by the positions gate
+    # (`scripts/tools/positions_gate.py`) overrides the raw `positions.json`: it
+    # carries the positions that survived the gate and a per-tile threshold. With
+    # no sidecar the behaviour is unchanged (raw positions, threshold 0.2).
+    has_positions_meta, positions_likelihood_list = positions_likelihood_list_from_meta(
+        dataset_main_path
+    )
+    if not has_positions_meta:
+        try:
+            positions = al.Grid2DIrregular(
+                values=al.from_json(file_path=dataset_main_path / "positions.json")
             )
-            if len(pos_list) >= 2:
-                positions = al.Grid2DIrregular(values=pos_list)
-                positions_likelihood_list = [
-                    al.PositionsLH(threshold=0.2, positions=positions)
-                ]
+            # A single position is not a multiple-image constraint; treat as absent.
+            if len(positions) == 1:
+                raise FileNotFoundError
+            positions_likelihood_list = [al.PositionsLH(threshold=0.2, positions=positions)]
+        except FileNotFoundError:
+            # No `positions.json`: derive positions from the segmentation source
+            # flux map and the VIS noise map, mirroring `preprocess/segmentation.py`.
+            source_flux_path = dataset_main_path / "segmentation" / "source_flux.fits"
+            if (
+                source_flux_path.exists()
+                and fits.getdata(source_flux_path).shape == dataset.shape_native
+            ):
+                source_flux = fits.getdata(source_flux_path).astype(np.float32)
+                try:
+                    noise_map = fits.getdata(
+                        dataset_main_path / dataset_fits_name,
+                        ext=vis_index * 3 + 3,
+                    ).astype(np.float32)
+                except Exception:
+                    noise_map = None
+                pos_list = _compute_positions_from_source_flux(
+                    source_flux=source_flux,
+                    noise_map=noise_map,
+                    pixel_scale=pixel_scale,
+                )
+                if len(pos_list) >= 2:
+                    positions = al.Grid2DIrregular(values=pos_list)
+                    positions_likelihood_list = [
+                        al.PositionsLH(threshold=0.2, positions=positions)
+                    ]
+                else:
+                    positions_likelihood_list = None
             else:
                 positions_likelihood_list = None
-        else:
-            positions_likelihood_list = None
 
     return EuclidDataset(
         dataset=dataset,
