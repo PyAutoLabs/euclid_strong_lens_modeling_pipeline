@@ -1,5 +1,5 @@
 """
-Model-guided multiple-image finder for the ``vis_lp`` positions penalty.
+Multiple-image positions for the ``vis_lp`` positions penalty.
 
 One pure numpy / scipy module (no PyAutoLens import) shared by the three places
 that decide a tile's multiple-image positions:
@@ -8,43 +8,49 @@ that decide a tile's multiple-image positions:
   ``positions.json`` writer),
 - ``util._compute_positions_from_source_flux`` (the ``load_vis_dataset``
   fallback when a tile ships no ``positions.json``),
-- ``scripts/tools/positions_gate.py`` (the pre-submit gate, which runs the same
-  loop with the existing ``positions.json`` as the seed set).
+- ``scripts/tools/positions_gate.py`` (the pre-submit gate on an existing
+  ``positions.json``).
 
-WHAT IT DOES
-    It alternates between the source-flux map and a lens model until the
-    position set is stable:
+PRODUCTION PATH (the gate-based writer, :func:`find_positions_gate`)
+    1. **candidates** (:func:`gate_candidates`) -- local maxima of
+       ``segmentation/source_flux.fits`` with SNR >= ``SNR_MIN`` (3) outside a
+       ``CENTRAL_RADIUS`` (0.15", one VIS PSF FWHM) disc around the light
+       centre (the brightest lens-flux pixel, else the mask centre), a peak
+       within 0.15" of a brighter one merged into it, the brightest
+       ``n_positions`` kept. There is no SNR walk-down of any kind (the old
+       writers' walk-down to SNR 0 was the defect that put nuclei,
+       companions and neighbours into ``positions.json``);
+    2. **phase 1 gate** (:func:`gate_positions`) -- central cut, the
+       fixed-centre SIE + external shear quick fit (:func:`quick_fit`,
+       ``vis_lp``'s model space), the leave-one-out outlier drop
+       (:func:`outlier_drop`), the plausibility flag and the threshold
+       ``T = min(max(2 s_final, 0.3"), 0.5")`` with its review reasons;
+    3. **pair floor** (:func:`apply_pair_floor`) -- a final set of exactly
+       two positions needs both peak SNRs >= ``SNR_PAIR`` (3); otherwise the
+       fainter is dropped and the tile goes to review (``pair_floor``) with
+       no positions.
 
-    1. **compute** -- local maxima of ``segmentation/source_flux.fits`` with
-       signal-to-noise >= ``SNR_FLOOR`` (2) outside a ``CENTRAL_RADIUS`` (0.15")
-       disc around the light centre are *candidates*; maxima with SNR in
-       ``[SNR_WEAK, SNR_FLOOR)`` = [1, 2) are kept aside as *weak* candidates.
-       The seed set is the ``n_positions`` brightest candidates (or ``seed``);
-    2. **fit** -- the fixed-centre SIE + external shear quick fit
-       (:func:`quick_fit`, ``vis_lp``'s model space) gives a mass model and a
-       source position ``beta`` (the mean traced position); a set that does not
-       trace (``s_min > D_OUT``, three or more positions) is modelled through
-       the phase 1 gate's one-image outlier drop;
-    3. **solve** -- :func:`solve_images` forward-solves ``beta`` through the
-       model on an image-plane grid (a numpy stand-in for ``al.PointSolver``),
-       returning the predicted images and their magnifications;
-    4. **reconcile** -- predicted images are matched one-to-one to observed
-       positions within ``R_MATCH`` (0.3"): matched positions are kept; an
-       unmatched predicted image with a candidate (or only a weak) peak within
-       ``R_MATCH`` adds that peak; an observed position no predicted image
-       claims is dropped; a bright predicted image (one the matched images'
-       SNR-per-magnification says would be seen at SNR >= ``SNR_FLOOR``) over
-       empty sky (SNR < ``SNR_WEAK`` within one pixel) counts against the model
-       and, if no plausible model avoids one, against the set;
-    5. **iterate** 2-4 until the set is unchanged, at most ``MAX_ROUNDS`` (5).
+    Steps 2-3 are :func:`gate_result`; the gate runs it on ``positions.json``
+    (SNRs read off the segmentation SNR map), the writers on the step 1 set, so
+    seeded and unseeded paths agree whenever ``positions.json`` equals the
+    SNR >= 3 peak set. :func:`meta_from_result` writes the
+    ``positions_meta.json`` contract ``util.load_vis_dataset`` reads.
 
-    The tile goes to review on non-convergence (``no_converge``), an empty set
-    (``empty``: fewer than two positions survive), a final set that traces only
-    through an implausible model (``implausible_J``: the gate's cost
-    ``J >= J_MAX``, or more than ``MAX_IMAGES`` predicted images), a bright
-    predicted image nobody sees (``unseen_bright_image``), or a threshold over
-    the cap (``over_cap``). The threshold is the gate's
-    ``T = min(max(2 s_final, 0.3"), 0.5")``.
+NON-PRODUCTION DIAGNOSTICS
+    :func:`find_positions` (a compute / fit / solve / reconcile loop that adds
+    model-predicted weak counter-images and drops positions a forward solve
+    cannot place) and :func:`solve_images` (a numpy stand-in for
+    ``al.PointSolver``) are kept for the witness script
+    (``scripts/tools/positions_finder_witness.py --reconcile``) and tooling;
+    nothing in the production path calls them. On the 2026-09-24 10-lens
+    calibration sample the loop's nucleus removals all came from the central
+    cut and the outlier drop, its reviews from the gate's own conditions, its
+    model-guided counter-image search never fired and its only unique
+    contribution was adding predicted images (one likely a contaminant), while
+    unseeded it modified 3/5 good tiles. The gate-based path on the same sample:
+    the good five unchanged, the nucleus cut on Tile102014701, Tile102008208
+    and Tile102022005 to ``pair_floor`` review, Tile102012741 and
+    Tile102023528 to review.
 
     The research behind the numbers (the 2026-09-23 census of 14,032 DR1 tiles
     and the 2026-09-24 method study) is in the ``euclid_dr1`` project under
@@ -97,7 +103,7 @@ NM_BAND = (0.15, 0.75)
 
 PARAM_NAMES = ("einstein_radius", "ell_comps_0", "ell_comps_1", "gamma_1", "gamma_2")
 
-# Finder (compute / reconcile) parameters, from the approved plan.
+# Reconcile-loop (diagnostic) parameters, from the original phase 2 plan.
 N_POSITIONS = 4
 SNR_FLOOR = 2.0
 SNR_WEAK = 1.0
@@ -508,7 +514,7 @@ def light_centre_from_maps(
 
 
 # ---------------------------------------------------------------------------
-# Forward solver (numpy stand-in for al.PointSolver)
+# Forward solver (numpy stand-in for al.PointSolver; non-production diagnostic)
 # ---------------------------------------------------------------------------
 
 
@@ -960,7 +966,7 @@ def find_positions_gate(
 
 
 # ---------------------------------------------------------------------------
-# Reconcile loop
+# Reconcile loop (non-production diagnostic)
 # ---------------------------------------------------------------------------
 
 

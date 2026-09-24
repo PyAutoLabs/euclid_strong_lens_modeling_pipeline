@@ -114,22 +114,33 @@ All fitting pipelines share one argument parser (`util.parse_fit_args`) —
   `hpc/batch_cpu/submit_positions_gate`. Research and census behind every
   parameter: `euclid_dr1` project, `inspect/positions_census/research/`
   (`SYNTHESIS.md`, `B_final_method.md`, `A_central_radius.md`).
-  **Finder path:** when the tile ships `segmentation/source_flux.fits` and the
-  VIS RMS map, the gate instead runs `positions_finder.find_positions` (package
-  root, pure numpy) seeded with `positions.json`: the same cut, quick fit and
-  threshold, plus a forward solve of the fitted model that keeps predicted
-  positions, drops unpredicted ones, adds model-predicted (weak, SNR 1-2)
-  counter-images and sends to review a set whose model predicts a bright image
-  over empty sky, iterated to a stable set (<= 5 rounds). Extra sidecar keys:
-  `method`, `added`, `n_rounds`, `s_final`, `predicted`, `rounds`; statuses add
-  `add` / `modify`. `--no-finder` keeps the phase 1 steps. The same finder writes
-  new tiles' `positions.json` (`preprocess/segmentation.py`) and the
-  `load_vis_dataset` fallback.
-- `tools/positions_finder_witness.py`: Runs the finder (seeded, as the gate does,
-  and unseeded, as the segmentation writer does) over every tile of a
-  calibration sample (`--root`, any depth) without writing inside the tiles;
-  prints the per-tile old / new table and writes `witness_table.md`,
-  `witness.json` and `overlays/` under `<root>/witness`.
+  **Pair floor (phase 2):** when the tile ships `segmentation/source_flux.fits`
+  and the VIS RMS map, a final set of exactly two positions needs both peak
+  source-flux SNRs >= 3; otherwise the fainter is dropped and the tile goes to
+  review (`pair_floor`) with no positions. Sidecar `version` 2.1; extra keys
+  `method` (`gate`), `finder_version`, `s_final`, `snr`, `added` (always
+  empty). **Production writer:** the same steps end
+  `positions_finder.find_positions_gate` (package root, pure numpy), which
+  writes new tiles' `positions.json` (`preprocess/segmentation.py`) and the
+  `load_vis_dataset` fallback: SNR >= 3 source-flux peaks outside 0.15" of the
+  light centre (merged within 0.15", brightest four, no SNR walk-down), then the
+  gate steps and the pair floor, so a tile whose `positions.json` equals its
+  SNR >= 3 peak set gets the same verdict seeded or unseeded. The
+  model-guided reconcile loop (`positions_finder.find_positions`) and forward
+  solver (`solve_images`) are non-production diagnostics (witness / tooling
+  only).
+- `tools/positions_finder_witness.py`: Runs the production path seeded (the gate
+  on `positions.json`) and unseeded (the writer on the flux map) over every tile
+  of a calibration sample (`--root`, any depth) without writing inside the
+  tiles; prints both tables (with a `same` column) and writes
+  `witness_table.md`, `witness.json` and `overlays/` under `<root>/witness`.
+  `--reconcile` adds the diagnostic reconcile loop for comparison. On the
+  10-lens `euclid_dr1` calibration sample (2026-09-24) the seeded path keeps the
+  good five unchanged (s <= 0.025"), cuts the nucleus of Tile102014701, sends
+  Tile102008208 and Tile102022005 to `pair_floor` review (counter-image SNR
+  2.6 / 2.0 after the outlier drop) and Tile102012741 / Tile102023528 to
+  review; unseeded, the good five trace at s <= 0.033" on different
+  (newer-segmentation) peak sets.
 
 # Catalogue orchestration
 
