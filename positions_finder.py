@@ -113,10 +113,9 @@ SOLVE_DEDUP = 0.1
 # sits below SOLVE_TOL without being images.
 SOLVE_ROOT_TOL = 1e-4
 # Reconcile judgement calls (not fixed by the plan; see find_positions).
-# Source-plane match: an observed position tracing within S_MATCH of beta is
-# predicted even when its solved image is further than R_MATCH away (a
-# source-plane offset d moves a highly magnified image by up to |mu| d along the
-# arc); it claims the nearest solved image within R_CLAIM.
+# Source-plane match: an observed position tracing within S_MATCH of beta may
+# claim a solved image up to R_CLAIM away, not only R_MATCH (a source-plane
+# offset d moves a highly magnified image by up to |mu| d along the arc).
 S_MATCH = 0.5 * D_OUT
 R_CLAIM = 1.0
 J_MAX = 30.0
@@ -654,14 +653,21 @@ def flux_candidates(
     """
     ``(candidates, weak)``: local maxima with ``SNR >= snr_floor`` and with
     ``snr_weak <= SNR < snr_floor``, both outside ``central_radius`` of the light
-    centre, brightest first. Without an SNR map every maximum is a candidate.
+    centre and of any brighter maximum, brightest first. Without an SNR map
+    every maximum is a candidate.
     """
     ny, nx = source_flux.shape
     cand, weak = [], []
+    accepted: List[Tuple[float, float]] = []
     for v, r, c in find_local_maxima(source_flux):
         y, x = pixel_to_arcsec(r, c, ny, nx, pixel_scale)
         if np.hypot(y - light_centre[0], x - light_centre[1]) < central_radius:
             continue
+        # Two peaks closer than one PSF FWHM are one unresolved image: keep the
+        # brighter (maxima arrive brightest first).
+        if any(np.hypot(y - a, x - b) < central_radius for a, b in accepted):
+            continue
+        accepted.append((y, x))
         snr = np.inf if snr_map is None else float(snr_map[r, c])
         if not np.isfinite(snr) and snr_map is not None:
             continue
@@ -799,8 +805,8 @@ def _match(
     Greedy one-to-one matching of observed to predicted images, nearest pairs
     first. A pair is allowed within ``r_match``, or within ``R_CLAIM`` when the
     observed position traces within ``S_MATCH`` of beta (``delta``). Returns
-    ``({obs_index: pred_index}, kept)``: ``kept`` are the observed indices that
-    are predicted (matched, or tracing within ``S_MATCH``).
+    ``({obs_index: pred_index}, kept)``: ``kept`` are the matched observed
+    indices (each predicted image vouches for at most one position).
     """
     out, used = {}, set()
     if len(obs) and len(pred):
@@ -816,7 +822,7 @@ def _match(
                 continue
             out[i] = j
             used.add(j)
-    kept = [i for i in range(len(obs)) if i in out or delta[i] <= S_MATCH]
+    kept = [i for i in range(len(obs)) if i in out]
     return out, kept
 
 
@@ -914,9 +920,12 @@ def find_positions(
       fewest bright predicted images over empty sky first, then lowest
       plausibility cost, widening to a 75-start grid (cost < ``J_MAX``) only
       when the quick fit's own models all predict one;
-    - matching is one-to-one, and also through the source plane (``S_MATCH``,
-      ``R_CLAIM``) because a small source-plane offset moves a highly
-      magnified image a long way along its arc;
+    - matching is one-to-one, with the claim radius widened to ``R_CLAIM``
+      for a position tracing within ``S_MATCH`` of beta, because a small
+      source-plane offset moves a highly magnified image a long way along its
+      arc;
+    - candidate peaks closer than ``CENTRAL_RADIUS`` (one VIS PSF FWHM) to a
+      brighter candidate are not resolved images and are suppressed;
     - an unmatched predicted image takes the highest-SNR candidate within
       ``r_match`` before a weak one;
     - "bright" means an expected SNR >= ``SNR_FLOOR``: ``|mu|`` times the

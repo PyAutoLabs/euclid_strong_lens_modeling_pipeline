@@ -169,6 +169,17 @@ def test_weak_counter_image_is_added_only_where_predicted(quad):
     assert result.n_rounds == 2
 
 
+def test_unresolved_neighbouring_peaks_are_one_candidate():
+    # Diagonal neighbours (0.14") are both 4-neighbour maxima but one PSF FWHM
+    # cannot resolve them; peaks 0.3" apart are two candidates.
+    flux = np.zeros((N_PIX, N_PIX))
+    flux[10, 10], flux[11, 11] = 10.0, 9.0
+    flux[10, 40], flux[13, 40] = 10.0, 9.0
+    cand, _ = pf.flux_candidates(flux, flux, PS, CENTRE)
+    assert [(p.flux) for p in cand] == [10.0, 10.0, 9.0]
+    assert pf.pixel_to_arcsec(11, 11, N_PIX, N_PIX, PS) not in [[p.y, p.x] for p in cand]
+
+
 def test_nucleus_seed_is_cut(quad):
     images, _ = quad
     seed = np.vstack([images, [CENTRE[0] + 0.1, CENTRE[1]]])
