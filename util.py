@@ -53,16 +53,17 @@ def _positions_result_from_source_flux(
     light_centre=None,
 ):
     """
-    The model-guided finder's full result (``positions_finder.FinderResult``)
-    for a source-flux map; the same call ``preprocess/segmentation.py`` makes.
+    The production writer's full result (``positions_finder.FinderResult``,
+    ``method: "gate"``) for a source-flux map; the same call
+    ``preprocess/segmentation.py`` makes.
     """
-    return positions_finder.find_positions(
+    return positions_finder.find_positions_gate(
         source_flux,
         positions_finder.snr_map_from(source_flux, noise_map),
-        lens_flux,
-        pixel_scale,
         light_centre=light_centre,
+        pixel_scale=pixel_scale,
         n_positions=n_positions,
+        lens_flux=lens_flux,
     )
 
 
@@ -77,16 +78,16 @@ def _compute_positions_from_source_flux(
     """
     Compute up to *n_positions* multiple-image positions from a source flux map.
 
-    A thin wrapper over ``positions_finder.find_positions``, the model-guided
-    finder ``preprocess/segmentation.py`` (the canonical writer of
+    A thin wrapper over ``positions_finder.find_positions_gate``, the
+    production writer ``preprocess/segmentation.py`` (the canonical writer of
     ``positions.json``) also calls. This function is the fallback used by
     `load_vis_dataset` when no ``positions.json`` is present but the dataset
     ships a ``segmentation/source_flux.fits`` map.
 
-    Local maxima with signal-to-noise >= 2 outside 0.15" of the light centre
-    seed a loop that fits a fixed-centre SIE + shear, forward-solves its images,
-    keeps the positions it predicts, drops the ones it cannot place and adds
-    model-predicted weak (SNR 1-2) counter-images, until the set is stable.
+    Local maxima with signal-to-noise >= 3 outside 0.15" of the light centre
+    (no SNR walk-down; the brightest ``n_positions``) go through the positions
+    gate's steps -- fixed-centre SIE + shear quick fit, leave-one-out outlier
+    drop, threshold -- and the pair floor (a final pair needs both SNRs >= 3).
 
     Parameters
     ----------
@@ -1587,7 +1588,7 @@ def load_vis_dataset(
             positions_likelihood_list = [al.PositionsLH(threshold=0.2, positions=positions)]
         except FileNotFoundError:
             # No `positions.json`: derive positions from the segmentation source
-            # flux map and the VIS noise map with the model-guided finder
+            # flux map and the VIS noise map with the production writer
             # `preprocess/segmentation.py` uses, and its per-tile threshold.
             source_flux_path = dataset_main_path / "segmentation" / "source_flux.fits"
             if (

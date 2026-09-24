@@ -13,9 +13,11 @@ Panel order (single row):
   5. artefact_binary.fits
 
 Also writes ``positions.json`` and its ``positions_meta.json`` sidecar (the
-finder's threshold, status and bookkeeping), both consumed by
-``util.load_vis_dataset``. The positions come from the model-guided finder
-(``positions_finder.py``).
+threshold, status and bookkeeping), both consumed by
+``util.load_vis_dataset``. The positions come from the gate-based production
+writer ``positions_finder.find_positions_gate``: SNR >= 3 source-flux peaks
+outside 0.15" of the light centre, the positions gate's quick fit, outlier
+drop and threshold, and the pair floor.
 
 Run from the project root::
 
@@ -147,18 +149,18 @@ def compute_positions_result(
     light_centre=None,
 ) -> positions_finder.FinderResult:
     """
-    The model-guided finder's full result for one lens (``positions_finder.find_positions``).
+    The production writer's full result for one lens (``positions_finder.find_positions_gate``).
 
     ``light_centre`` is the fixed mass centre (``vis_lp``'s ``dataset_centre``);
     by default the brightest ``lens_flux`` pixel.
     """
-    return positions_finder.find_positions(
+    return positions_finder.find_positions_gate(
         flux,
         snr_map,
-        lens_flux,
-        pixel_scale,
         light_centre=light_centre,
+        pixel_scale=pixel_scale,
         n_positions=N_POSITIONS,
+        lens_flux=lens_flux,
     )
 
 
@@ -174,11 +176,12 @@ def compute_positions(
     """
     Up to ``N_POSITIONS`` multiple-image positions from the source-flux map.
 
-    A thin wrapper over ``positions_finder.find_positions``: SNR >= 2 peaks
-    outside 0.15" of the light centre seed a compute / fit / solve / reconcile
-    loop against a fixed-centre SIE + shear, which adds model-predicted weak
-    counter-images and drops positions the model cannot place. ``ny``/``nx`` are
-    kept for the call signature (the shape is read off ``flux``).
+    A thin wrapper over ``positions_finder.find_positions_gate``: SNR >= 3
+    peaks outside 0.15" of the light centre (no SNR walk-down), then the
+    positions gate's fixed-centre SIE + shear quick fit, leave-one-out outlier
+    drop and threshold, then the pair floor (a pair needs both SNRs >= 3).
+    ``ny``/``nx`` are kept for the call signature (the shape is read off
+    ``flux``).
     """
     return compute_positions_result(flux, snr_map, pixel_scale, lens_flux, light_centre).positions
 

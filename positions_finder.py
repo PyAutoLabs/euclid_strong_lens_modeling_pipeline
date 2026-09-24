@@ -64,7 +64,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 from scipy.optimize import least_squares, minimize
 
-FINDER_VERSION = "1.0"
+FINDER_VERSION = "2.1"
 
 # Hard cut around the light centre (one VIS PSF FWHM); also the solver's
 # central-image exclusion and the candidate exclusion disc.
@@ -123,8 +123,9 @@ MAX_IMAGES = 6
 
 META_NAME = "positions_meta.json"
 # positions_meta.json schema version, shared by the gate and the segmentation
-# writer (1.0 = phase 1 gate, 2.0 = finder fields added).
-META_VERSION = "2.0"
+# writer (1.0 = phase 1 gate, 2.0 = reconcile-loop fields added, 2.1 = the
+# gate-based production writer with the pair floor).
+META_VERSION = "2.1"
 
 
 # ---------------------------------------------------------------------------
@@ -535,6 +536,9 @@ def solve_images(
     """
     All image-plane positions of source position ``beta`` through an SIE + shear.
 
+    A non-production diagnostic (used by the :func:`find_positions` reconcile
+    loop and by tests/tooling); the production writer never forward-solves.
+
     Coordinates are (y, x) arcsec relative to the mass centre (as
     :func:`source_positions`). The residual ``|beta(theta) - beta|`` is evaluated
     on a ``step`` grid over ``[-half_width, half_width]^2``; every 3x3 local
@@ -688,6 +692,274 @@ def snr_map_from(source_flux: np.ndarray, noise_map: Optional[np.ndarray]) -> Op
 
 
 # ---------------------------------------------------------------------------
+# Production path: the gate-based writer
+# ---------------------------------------------------------------------------
+
+# The production writer's candidate floor and the pair floor (source-flux SNR).
+SNR_MIN = 3.0
+SNR_PAIR = 3.0
+# Step 4 (list only): plausibility flag when one drop lowers J by at least DJ_FLAG.
+DJ_FLAG = 10.0
+
+
+def gate_candidates(
+    source_flux: np.ndarray,
+    snr_map: Optional[np.ndarray],
+    pixel_scale: float,
+    light_centre,
+    n_positions: int = N_POSITIONS,
+    snr_min: float = SNR_MIN,
+    central_radius: float = CENTRAL_RADIUS,
+    merge_radius: float = CENTRAL_RADIUS,
+) -> List[Peak]:
+    """
+    The production writer's candidate set: local maxima of ``source_flux`` with
+    ``SNR >= snr_min`` outside ``central_radius`` of the light centre, a peak
+    within ``merge_radius`` (one VIS PSF FWHM) of a brighter kept peak merged
+    into it, brightest (by flux) first, capped at ``n_positions``.
+
+    There is no SNR walk-down of any kind: a peak below ``snr_min`` is never a
+    candidate. Without an SNR map every maximum passes the floor (SNR ``inf``).
+    """
+    source_flux = np.asarray(source_flux, float)
+    ny, nx = source_flux.shape
+    out: List[Peak] = []
+    for v, r, c in find_local_maxima(source_flux):
+        if snr_map is None:
+            snr = np.inf
+        else:
+            snr = float(snr_map[r, c])
+            if not np.isfinite(snr) or snr < snr_min:
+                continue
+        y, x = pixel_to_arcsec(r, c, ny, nx, pixel_scale)
+        if np.hypot(y - light_centre[0], x - light_centre[1]) < central_radius:
+            continue
+        if any(np.hypot(y - p.y, x - p.x) < merge_radius for p in out):
+            continue
+        out.append(Peak(float(y), float(x), float(v), snr))
+    return out[:n_positions]
+
+
+def plausibility_flag(fit: Dict, loo: List[Dict]) -> Optional[int]:
+    """
+    Step 4 (list only): the local index whose removal lowers ``J`` by >= ``DJ_FLAG``
+    and beats every other removal by >= ``DJ``, else None.
+    """
+    if not loo or len(loo) < 3:
+        return None
+    Jd = np.array([f["J"] for f in loo])
+    i = int(np.argmin(Jd))
+    if fit["J"] - Jd[i] >= DJ_FLAG and np.sort(Jd)[1] - Jd[i] >= DJ:
+        return i
+    return None
+
+
+def gate_positions(positions, centre, version: Optional[str] = None) -> Dict:
+    """
+    The phase 1 gate on one position set; returns the ``positions_meta.json``
+    dict (without the tile-level keys). ``positions`` are raw (y, x) arcsec,
+    ``centre`` the light centre.
+
+    Steps: central cut (``CENTRAL_RADIUS``), quick fit, one-image outlier drop
+    (``outlier_drop``), plausibility flag, threshold
+    ``T = min(max(2 s_final, 0.3"), 0.5")`` with ``over_cap`` review.
+    """
+    pos_raw = np.asarray(positions, float).reshape(-1, 2)
+    centre = (float(centre[0]), float(centre[1]))
+    kept, cut = central_cut(pos_raw, centre)
+    dropped = [
+        dict(index=i, y=_r4(pos_raw[i, 0]), x=_r4(pos_raw[i, 1]), reason="central_cut")
+        for i in cut
+    ]
+    meta = dict(
+        version=META_VERSION if version is None else version,
+        light_centre=[_r4(centre[0]), _r4(centre[1])],
+        n_raw=len(pos_raw),
+        positions_used=[],
+        dropped=dropped,
+        flag_index=None,
+        s_min_all=None,
+        s_min=None,
+        J=None,
+        threshold=None,
+        factor=FACTOR,
+        floor=FLOOR,
+        cap=CAP,
+        status="keep",
+        review_reason="",
+        params=None,
+    )
+    used_idx = list(kept)
+    if len(used_idx) < 2:
+        meta.update(
+            positions_used=[[_r4(v) for v in pos_raw[i]] for i in used_idx],
+            status="n_lt_2",
+            review_reason="n_lt_2",
+        )
+        return meta
+
+    pos = pos_raw[used_idx]
+    fit = quick_fit(pos, centre)
+    meta["s_min_all"] = _r4(fit["s_min"])
+    decision = outlier_drop(pos, centre, fit)
+    final_fit = fit
+    status, reason, flag_index = "keep", "", None
+    if decision["action"] == "review":
+        status, reason = "review", decision["reason"]
+    elif decision["action"] == "drop":
+        j = decision["index"]
+        raw_i = used_idx[j]
+        dropped.append(
+            dict(
+                index=raw_i,
+                y=_r4(pos_raw[raw_i, 0]),
+                x=_r4(pos_raw[raw_i, 1]),
+                reason=f"outlier_{decision['reason']}",
+            )
+        )
+        final_fit = decision["loo"][j]
+        used_idx = [i for i in used_idx if i != raw_i]
+    elif len(pos) >= 3 and fit["J"] >= DJ_FLAG:
+        loo = decision["loo"] or leave_one_out(pos, centre)
+        k = plausibility_flag(fit, loo)
+        if k is not None:
+            flag_index = used_idx[k]
+            status, reason = "flag", "plausibility"
+
+    threshold, over_cap = threshold_from(final_fit["s_min"])
+    if over_cap and status != "review":
+        status, reason = "review", "over_cap"
+    if status == "keep" and dropped:
+        status = "drop"
+
+    meta.update(
+        positions_used=[[_r4(v) for v in pos_raw[i]] for i in used_idx],
+        dropped=dropped,
+        flag_index=flag_index,
+        s_min=_r4(final_fit["s_min"]),
+        J=_r4(final_fit["J"]),
+        threshold=_r4(threshold),
+        status=status,
+        review_reason=reason,
+        params={k: _r4(v) for k, v in zip(PARAM_NAMES, final_fit["params"])},
+    )
+    return meta
+
+
+def _used_indices(meta: Dict) -> List[int]:
+    """Raw indices of ``meta['positions_used']`` (in order): those not dropped."""
+    gone = {d["index"] for d in meta["dropped"]}
+    return [i for i in range(meta["n_raw"]) if i not in gone]
+
+
+def apply_pair_floor(meta: Dict, snrs: Optional[Sequence[Optional[float]]], snr_pair: float = SNR_PAIR) -> Dict:
+    """
+    The pair floor, applied after the gate steps (in place; returns ``meta``).
+
+    A final set of exactly two positions needs both peak SNRs >= ``snr_pair``:
+    otherwise the fainter (lower SNR) is dropped (reason ``pair_floor``), fewer
+    than two positions remain, and the tile goes to review
+    (``review_reason: pair_floor``) with no positions and no threshold.
+    ``snrs`` is index-aligned with the raw positions; ``None`` (no SNR map), or
+    an unknown SNR for either position, leaves the set as the gate left it.
+    """
+    used = meta["positions_used"]
+    if snrs is None or meta["status"] == "n_lt_2" or len(used) != 2:
+        return meta
+    idx = _used_indices(meta)
+    s = [snrs[i] for i in idx]
+    if any(v is None or np.isnan(v) for v in s):
+        return meta
+    k = int(np.argmin(s))
+    if s[k] >= snr_pair:
+        return meta
+    meta["dropped"].append(
+        dict(index=idx[k], y=used[k][0], x=used[k][1], reason="pair_floor", snr=_r4(s[k]))
+    )
+    meta.update(
+        positions_used=[],
+        flag_index=None,
+        threshold=None,
+        status="review",
+        review_reason="pair_floor",
+    )
+    return meta
+
+
+def snr_at(snr_map: Optional[np.ndarray], positions, pixel_scale: float) -> Optional[List[Optional[float]]]:
+    """The SNR-map value at each (y, x) position's pixel (None off the frame); None without a map."""
+    if snr_map is None:
+        return None
+    return [_snr_near(snr_map, float(y), float(x), pixel_scale, radius_pix=0) for y, x in np.asarray(positions, float).reshape(-1, 2)]
+
+
+def gate_result(positions, light_centre, snrs=None, version: Optional[str] = None) -> "FinderResult":
+    """
+    The phase 1 gate plus the pair floor on one position set, as a
+    :class:`FinderResult` (``method: "gate"``). The seeded path
+    (``scripts/tools/positions_gate.py``, positions from ``positions.json``)
+    and the unseeded writer (:func:`find_positions_gate`, positions from the
+    flux map) both end here.
+    """
+    pos = np.asarray(positions, float).reshape(-1, 2)
+    meta = apply_pair_floor(gate_positions(pos, light_centre, version), snrs)
+    snr_list = None if snrs is None else [_r4(v) if v is not None and np.isfinite(v) else None for v in snrs]
+    return FinderResult(
+        positions=meta["positions_used"],
+        threshold=meta["threshold"],
+        s_final=meta["s_min"],
+        n_rounds=0,
+        dropped=meta["dropped"],
+        review_reason=meta["review_reason"],
+        params=meta["params"],
+        status=meta["status"],
+        J=meta["J"],
+        s_seed=meta["s_min_all"],
+        light_centre=tuple(meta["light_centre"]),
+        seed=[[_r4(v) for v in p] for p in pos],
+        method="gate",
+        flag_index=meta["flag_index"],
+        snr=snr_list,
+    )
+
+
+def find_positions_gate(
+    source_flux: np.ndarray,
+    snr_map: Optional[np.ndarray],
+    light_centre=None,
+    pixel_scale: float = 0.1,
+    n_positions: int = N_POSITIONS,
+    lens_flux: Optional[np.ndarray] = None,
+    mask_centre=(0.0, 0.0),
+) -> "FinderResult":
+    """
+    The production multiple-image finder (the gate-based writer).
+
+    1. candidates (:func:`gate_candidates`): source-flux local maxima with
+       ``SNR >= 3`` outside the 0.15" light-centre disc, peaks within 0.15" of a
+       brighter one merged, the brightest ``n_positions`` kept -- no SNR
+       walk-down;
+    2. the phase 1 gate on that set (:func:`gate_positions`): quick fit,
+       leave-one-out outlier drop, plausibility flag, threshold
+       ``T = min(max(2 s, 0.3"), 0.5")`` and review reasons;
+    3. the pair floor (:func:`apply_pair_floor`).
+
+    ``light_centre`` is the fixed mass centre (``vis_lp``'s ``dataset_centre``);
+    by default the brightest ``lens_flux`` pixel, else ``mask_centre``.
+    ``snr_map=None`` treats every maximum as passing the floor.
+    """
+    source_flux = np.asarray(source_flux, float)
+    if light_centre is None:
+        light_centre = light_centre_from_maps(lens_flux, pixel_scale, mask_centre=mask_centre)
+    lc = (float(light_centre[0]), float(light_centre[1]))
+    snr = None if snr_map is None else np.asarray(snr_map, float)
+    cand = gate_candidates(source_flux, snr, pixel_scale, lc, n_positions=n_positions)
+    positions = [p.yx for p in cand]
+    snrs = None if snr is None else [p.snr for p in cand]
+    return gate_result(positions, lc, snrs)
+
+
+# ---------------------------------------------------------------------------
 # Reconcile loop
 # ---------------------------------------------------------------------------
 
@@ -695,13 +967,19 @@ def snr_map_from(source_flux: np.ndarray, noise_map: Optional[np.ndarray]) -> Op
 @dataclass
 class FinderResult:
     """
-    Outcome of :func:`find_positions`.
+    Outcome of the production writer (:func:`find_positions_gate` /
+    :func:`gate_result`, ``method == "gate"``) or of the diagnostic reconcile
+    loop (:func:`find_positions`, ``method == "finder"``).
 
     ``positions`` are the final (y, x) arcsec positions; ``status`` is ``keep``
-    (the seed set unchanged), ``drop`` / ``add`` / ``modify`` (positions dropped,
-    added, or both), ``review`` or ``n_lt_2``; ``review_reason`` is ``""`` or one
-    of ``no_converge``, ``empty``, ``implausible_J``, ``unseen_bright_image``,
-    ``over_cap``.
+    (the seed set unchanged), ``drop`` (positions dropped), ``flag``
+    (plausibility flag, gate only), ``add`` / ``modify`` (loop only: positions
+    added, or added and dropped), ``review`` or ``n_lt_2``. ``review_reason`` is
+    ``""`` or, for the gate, one of ``n2_fail``, ``no_single_drop``,
+    ``ambiguous``, ``over_cap``, ``pair_floor`` (``plausibility`` with
+    ``flag``); for the loop one of ``no_converge``, ``empty``,
+    ``implausible_J``, ``unseen_bright_image``, ``over_cap``. ``snr`` (gate
+    only) is the peak SNR of each ``seed`` position, None without an SNR map.
     """
 
     positions: List[List[float]]
@@ -720,6 +998,9 @@ class FinderResult:
     predicted: List[Dict] = field(default_factory=list)
     n_unseen_bright: int = 0
     history: List[Dict] = field(default_factory=list)
+    method: str = "finder"
+    flag_index: Optional[int] = None
+    snr: Optional[List[Optional[float]]] = None
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -888,7 +1169,12 @@ def find_positions(
     max_rounds: int = MAX_ROUNDS,
 ) -> FinderResult:
     """
-    The compute / fit / solve / reconcile loop (see the module docstring).
+    The compute / fit / solve / reconcile loop -- a NON-PRODUCTION diagnostic.
+
+    Not called by ``preprocess/segmentation.py``, ``util.py`` or
+    ``scripts/tools/positions_gate.py`` (they use :func:`find_positions_gate`);
+    kept for the witness script's ``--reconcile`` comparison and tooling. See
+    the module docstring for why it is not the production path.
 
     Parameters
     ----------
@@ -1155,16 +1441,46 @@ def positions_sha(dataset_dir) -> str:
 
 def meta_from_result(result: FinderResult, version: str = META_VERSION) -> Dict:
     """
-    The ``positions_meta.json`` dict (without the tile-level keys) for a finder run.
+    The ``positions_meta.json`` dict (without the tile-level keys) for a result.
 
     Keeps every key of the phase 1 gate contract (``positions_used``,
     ``threshold`` and ``status`` are what ``util.load_vis_dataset`` reads;
-    ``s_min_all`` is the seed set's ``s_min``, ``s_min`` the final set's), and
-    adds ``method``, ``finder_version``, ``s_final``, ``n_rounds``, ``added``,
-    ``predicted``, ``n_unseen_bright`` and ``rounds``. ``dropped`` entries carry
-    the seed ``index`` and a ``reason`` (``central_cut`` | ``unpredicted``)
-    plus the ``round`` that dropped them.
+    ``s_min_all`` is the seed set's ``s_min``, ``s_min`` the final set's).
+
+    For the production writer (``method: "gate"``) it adds ``method``,
+    ``finder_version``, ``s_final``, ``snr`` (peak SNR of each raw position)
+    and ``added`` (always empty: the writer never adds a position); ``dropped``
+    entries carry the raw ``index`` and a ``reason`` (``central_cut`` |
+    ``outlier_<why>`` | ``pair_floor``).
+
+    For the diagnostic reconcile loop (``method: "finder"``) it adds
+    ``finder_version``, ``s_final``, ``n_rounds``, ``added``, ``predicted``,
+    ``n_unseen_bright`` and ``rounds``.
     """
+    if result.method == "gate":
+        return dict(
+            version=version,
+            light_centre=list(result.light_centre),
+            n_raw=len(result.seed),
+            positions_used=result.positions,
+            dropped=result.dropped,
+            flag_index=result.flag_index,
+            s_min_all=result.s_seed,
+            s_min=result.s_final,
+            J=result.J,
+            threshold=result.threshold,
+            factor=FACTOR,
+            floor=FLOOR,
+            cap=CAP,
+            status=result.status,
+            review_reason=result.review_reason,
+            params=result.params,
+            method="gate",
+            finder_version=FINDER_VERSION,
+            s_final=result.s_final,
+            snr=result.snr,
+            added=[],
+        )
     return dict(
         version=version,
         method="finder",

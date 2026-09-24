@@ -29,16 +29,18 @@ WHAT THIS DOES
     5. **threshold** — ``T = min(max(2 s_final, 0.3"), 0.5")``; a tile whose
        ``2 s_final`` exceeds the cap goes to review.
 
-    **Finder path (phase 2).** When the tile ships its segmentation maps
-    (``segmentation/source_flux.fits`` and the VIS RMS map), steps 1-5 are
-    replaced by ``positions_finder.find_positions`` seeded with the raw
-    ``positions.json``: the same central cut, quick fit and threshold, plus a
-    forward solve of the fitted model that keeps predicted positions, drops
-    unpredicted ones, adds model-predicted (weak) counter-images and flags
-    bright predicted images over empty sky, iterated to a stable set. Its extra
-    fields (``method``, ``added``, ``n_rounds``, ``s_final``, ``predicted``,
-    ``rounds``) are written alongside the phase 1 keys. ``--no-finder`` forces
-    the phase 1 steps.
+    6. **pair floor** (phase 2) — when the tile ships its segmentation maps
+       (``segmentation/source_flux.fits`` and the VIS RMS map), a final set of
+       exactly two positions needs both peak source-flux SNRs >= 3; otherwise
+       the fainter is dropped (``pair_floor``) and the tile goes to review with
+       no positions.
+
+    Steps 1-6 are ``positions_finder.gate_result``, the same call that ends
+    the production positions writer (``positions_finder.find_positions_gate``,
+    used by ``preprocess/segmentation.py`` and the ``util`` fallback), so
+    existing and new tiles share one logic. Extra sidecar keys over phase 1:
+    ``method`` (``gate``), ``finder_version``, ``s_final``, ``snr`` and
+    ``added`` (always empty).
 
     The result is written next to ``positions.json`` as ``positions_meta.json``,
     which ``util.load_vis_dataset`` reads (positions used + threshold). A batch
@@ -104,45 +106,29 @@ from positions_finder import (  # noqa: E402,F401
     _sep_fit,
     _starts,
     brightest_sub_pixel_centre,
+    DJ_FLAG,
+    apply_pair_floor,
     central_cut,
-    find_positions,
+    gate_result,
     leave_one_out,
     max_separation,
     meta_from_result,
     outlier_drop,
+    plausibility_flag,
     quick_fit,
+    snr_at,
     snr_map_from,
     source_positions,
     threshold_from,
 )
+from positions_finder import gate_positions as _pf_gate_positions  # noqa: E402
 
-# 2.0: the finder path and its extra keys (method, added, n_rounds, ...).
+# 2.1: phase 1 steps + the pair floor, shared with the production writer
+# (2.0 was the reconcile-loop finder path, now a diagnostic only).
 GATE_VERSION = META_VERSION
-
-# Step 4: plausibility flag when one drop lowers J by at least DJ_FLAG.
-DJ_FLAG = 10.0
 
 REVIEW_CSV = "positions_review.csv"
 SUBMIT_TXT = "positions_submit.txt"
-
-
-# ---------------------------------------------------------------------------
-# Gate steps
-# ---------------------------------------------------------------------------
-
-
-def plausibility_flag(fit: Dict, loo: List[Dict]) -> Optional[int]:
-    """
-    Step 4 (list only): the local index whose removal lowers ``J`` by >= ``DJ_FLAG``
-    and beats every other removal by >= ``DJ``, else None.
-    """
-    if not loo or len(loo) < 3:
-        return None
-    Jd = np.array([f["J"] for f in loo])
-    i = int(np.argmin(Jd))
-    if fit["J"] - Jd[i] >= DJ_FLAG and np.sort(Jd)[1] - Jd[i] >= DJ:
-        return i
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -156,90 +142,13 @@ def _r4(v):
 
 def gate_positions(positions, centre) -> Dict:
     """
-    Run the full gate on one position set; returns the ``positions_meta.json`` dict
-    (without the tile-level keys). ``positions`` are raw (y, x) arcsec, ``centre``
-    the light centre.
+    Run the phase 1 gate (steps 1-5) on one position set; returns the
+    ``positions_meta.json`` dict (without the tile-level keys). ``positions``
+    are raw (y, x) arcsec, ``centre`` the light centre. The steps live in
+    ``positions_finder.gate_positions``, shared with the production writer;
+    :func:`gate_tile` adds the pair floor.
     """
-    pos_raw = np.asarray(positions, float).reshape(-1, 2)
-    centre = (float(centre[0]), float(centre[1]))
-    kept, cut = central_cut(pos_raw, centre)
-    dropped = [
-        dict(index=i, y=_r4(pos_raw[i, 0]), x=_r4(pos_raw[i, 1]), reason="central_cut")
-        for i in cut
-    ]
-    meta = dict(
-        version=GATE_VERSION,
-        light_centre=[_r4(centre[0]), _r4(centre[1])],
-        n_raw=len(pos_raw),
-        positions_used=[],
-        dropped=dropped,
-        flag_index=None,
-        s_min_all=None,
-        s_min=None,
-        J=None,
-        threshold=None,
-        factor=FACTOR,
-        floor=FLOOR,
-        cap=CAP,
-        status="keep",
-        review_reason="",
-        params=None,
-    )
-    used_idx = list(kept)
-    if len(used_idx) < 2:
-        meta.update(
-            positions_used=[[_r4(v) for v in pos_raw[i]] for i in used_idx],
-            status="n_lt_2",
-            review_reason="n_lt_2",
-        )
-        return meta
-
-    pos = pos_raw[used_idx]
-    fit = quick_fit(pos, centre)
-    meta["s_min_all"] = _r4(fit["s_min"])
-    decision = outlier_drop(pos, centre, fit)
-    final_fit = fit
-    status, reason, flag_index = "keep", "", None
-    if decision["action"] == "review":
-        status, reason = "review", decision["reason"]
-    elif decision["action"] == "drop":
-        j = decision["index"]
-        raw_i = used_idx[j]
-        dropped.append(
-            dict(
-                index=raw_i,
-                y=_r4(pos_raw[raw_i, 0]),
-                x=_r4(pos_raw[raw_i, 1]),
-                reason=f"outlier_{decision['reason']}",
-            )
-        )
-        final_fit = decision["loo"][j]
-        used_idx = [i for i in used_idx if i != raw_i]
-    elif len(pos) >= 3 and fit["J"] >= DJ_FLAG:
-        loo = decision["loo"] or leave_one_out(pos, centre)
-        k = plausibility_flag(fit, loo)
-        if k is not None:
-            flag_index = used_idx[k]
-            status, reason = "flag", "plausibility"
-
-    threshold, over_cap = threshold_from(final_fit["s_min"])
-    if over_cap and status != "review":
-        status, reason = "review", "over_cap"
-    if status == "keep" and dropped:
-        status = "drop"
-
-    meta.update(
-        positions_used=[[_r4(v) for v in pos_raw[i]] for i in used_idx],
-        dropped=dropped,
-        flag_index=flag_index,
-        s_min=_r4(final_fit["s_min"]),
-        J=_r4(final_fit["J"]),
-        threshold=_r4(threshold),
-        status=status,
-        review_reason=reason,
-        params={k: _r4(v) for k, v in zip(PARAM_NAMES, final_fit["params"])},
-    )
-    return meta
+    return _pf_gate_positions(positions, centre, GATE_VERSION)
 
 
 def read_positions(dataset_dir) -> Optional[np.ndarray]:
@@ -342,16 +251,17 @@ def finder_maps_from_dataset(dataset_dir, image_tag: str = "_BGSUB") -> Optional
     )
 
 
-def gate_tile(
-    dataset_dir, light_centre=None, write: bool = True, finder: bool = True
-) -> Optional[Dict]:
+def gate_tile(dataset_dir, light_centre=None, write: bool = True) -> Optional[Dict]:
     """
     Gate one tile directory and (by default) write its ``positions_meta.json``.
 
-    With the tile's segmentation maps present (and ``finder``) the gate runs the
-    model-guided finder (``positions_finder.find_positions``) with the raw
-    ``positions.json`` as the seed set (``method: finder``); otherwise the
-    phase 1 steps 1-5 above (``method: gate``). Both write the same contract.
+    Runs the phase 1 steps 1-5 above on the raw ``positions.json`` and then
+    the pair floor (``positions_finder.apply_pair_floor``: a final pair needs
+    both peak SNRs >= 3 on the segmentation SNR map, else review with no
+    positions). The same ``positions_finder.gate_result`` call ends the
+    production writer, so a tile whose ``positions.json`` equals its SNR >= 3
+    peak set gets the same verdict either way. Without the segmentation maps
+    the pair floor cannot be judged and the phase 1 verdict stands.
 
     Returns None (and writes nothing) when the tile has no ``positions.json`` or
     fewer than two raw positions: ``util.load_vis_dataset`` then keeps today's
@@ -364,20 +274,10 @@ def gate_tile(
     if light_centre is None:
         light_centre = light_centre_from_dataset(d)
     t0 = time.process_time()
-    maps = finder_maps_from_dataset(d) if finder else None
-    if maps is not None:
-        result = find_positions(
-            maps["source_flux"],
-            maps["snr_map"],
-            maps["lens_flux"],
-            maps["pixel_scale"],
-            seed=positions,
-            light_centre=light_centre,
-        )
-        meta = meta_from_result(result, GATE_VERSION)
-    else:
-        meta = gate_positions(positions, light_centre)
-        meta["method"] = "gate"
+    maps = finder_maps_from_dataset(d)
+    snrs = None if maps is None else snr_at(maps["snr_map"], positions, maps["pixel_scale"])
+    result = gate_result(positions, light_centre, snrs, GATE_VERSION)
+    meta = meta_from_result(result, GATE_VERSION)
     meta = dict(tile=d.name, positions_sha=_positions_sha(d), **meta)
     meta["cpu_s"] = round(time.process_time() - t0, 2)
     if write:
@@ -387,7 +287,7 @@ def gate_tile(
 
 
 def _gate_one(args):
-    d, force, finder = args
+    d, force = args
     d = Path(d)
     try:
         if not force and (d / META_NAME).exists() and (d / "positions.json").exists():
@@ -396,13 +296,13 @@ def _gate_one(args):
             if old.get("version") == GATE_VERSION and old.get("positions_sha") == _positions_sha(d):
                 return d.name, old, None
         if not (d / "positions.json").exists() and (d / META_NAME).exists():
-            # The segmentation writer's finder left no positions (review/empty):
+            # The segmentation writer left no positions (review / pair_floor):
             # its sidecar still decides the tile.
             with open(d / META_NAME) as f:
                 old = json.load(f)
             if old.get("version") == GATE_VERSION:
                 return d.name, old, None
-        return d.name, gate_tile(d, finder=finder), None
+        return d.name, gate_tile(d), None
     except Exception as exc:  # one broken tile must not stop a batch
         return d.name, None, repr(exc)
 
@@ -429,7 +329,6 @@ def gate_batch(
     nproc: int = 1,
     force: bool = False,
     tiles: Optional[Sequence[str]] = None,
-    finder: bool = True,
 ) -> List[Dict]:
     """
     Gate every tile directory under ``root``; write ``positions_review.csv`` and
@@ -442,7 +341,7 @@ def gate_batch(
     """
     root = Path(root)
     names = sorted(tiles) if tiles else sorted(p.name for p in root.iterdir() if p.is_dir())
-    jobs = [(root / n, force, finder) for n in names if (root / n).is_dir()]
+    jobs = [(root / n, force) for n in names if (root / n).is_dir()]
     if nproc > 1:
         from multiprocessing import Pool
 
@@ -509,15 +408,10 @@ def main(argv=None):
     )
     parser.add_argument("--nproc", type=int, default=1, help="worker processes (default 1)")
     parser.add_argument("--force", action="store_true", help="re-fit even if the sidecar is current")
-    parser.add_argument(
-        "--no-finder",
-        action="store_true",
-        help="phase 1 gate only, even where the tile ships segmentation maps",
-    )
     args = parser.parse_args(argv)
 
     if args.tile:
-        meta = gate_tile(args.tile, finder=not args.no_finder)
+        meta = gate_tile(args.tile)
         if meta is None:
             print(f"{args.tile}: no positions.json or < 2 positions; no sidecar written")
             return 0
@@ -534,7 +428,6 @@ def main(argv=None):
         include_review=args.include_review,
         nproc=args.nproc,
         force=args.force,
-        finder=not args.no_finder,
         tiles=tiles,
     )
     counts: Dict[str, int] = {}
