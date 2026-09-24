@@ -423,8 +423,8 @@ def test_compute_positions_filters_below_the_signal_to_noise_threshold():
 
 def test_compute_positions_caps_at_n_positions():
     # A synthetic SIE + shear quad drawn as four single-pixel peaks (brightness
-    # ~ |mu|). The finder seeds with the brightest three, the model predicts the
-    # fourth, and the output is capped back at the brightest three.
+    # ~ |mu|, all SNR >= 3). The writer keeps the brightest n_positions peaks and
+    # the gate's quick fit traces both the three- and the four-image set.
     import positions_finder
 
     images, mu = positions_finder.solve_images(

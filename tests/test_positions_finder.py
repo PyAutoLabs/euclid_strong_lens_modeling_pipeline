@@ -1,5 +1,8 @@
 """
-Tests for the model-guided multiple-image finder (``positions_finder.py``).
+Tests for ``positions_finder.py``: the production gate-based writer
+(``find_positions_gate``: SNR >= 3 peaks, the phase 1 gate steps, the pair
+floor), the seeded gate path that shares it, and the non-production diagnostic
+reconcile loop (``find_positions``) and forward solver (``solve_images``).
 
 The finder is numpy/scipy only. Synthetic image sets are generated with its own
 tracer (``tests/test_positions_gate.py`` pins that tracer to ``al.Tracer``), and
@@ -343,7 +346,7 @@ def test_util_reads_the_finder_meta(quad, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("scene", ["quad", "weak", "arc"])
+@pytest.mark.parametrize("scene", ["quad", "weak", "arc", "faint"])
 def test_segmentation_and_util_writers_agree(quad, scene):
     import util
 
@@ -355,6 +358,9 @@ def test_segmentation_and_util_writers_agree(quad, scene):
         flux = render(images, 3.0 * np.abs(mu))
     elif scene == "weak":
         flux = render(images, [10.0, 10.0, 10.0, 1.5])
+    elif scene == "faint":
+        # The fourth image at SNR 2.5 (noise 0.5): no walk-down picks it up.
+        flux = render(images, [10.0, 10.0, 10.0, 1.25])
     else:
         flux = render([[CENTRE[0] + 1.0, CENTRE[1] + 0.3], [CENTRE[0] + 0.9, CENTRE[1] + 0.7]], [3, 3])
     noise = np.full_like(flux, 0.5)
@@ -369,6 +375,11 @@ def test_segmentation_and_util_writers_agree(quad, scene):
     )
     assert via_seg == via_util
     assert len(via_util) >= 2
+    # Both are the production writer, not the diagnostic loop.
+    full = util._positions_result_from_source_flux(flux, noise, PS, lens_flux=lens_flux)
+    assert full.method == "gate" and full.positions == via_util
+    if scene == "faint":
+        assert len(via_util) == 3 and not near(via_util, images[3])
     # Both default to the brightest lens-flux pixel as the light centre.
     assert pf.light_centre_from_maps(lens_flux, PS) == pytest.approx(CENTRE)
 
@@ -411,42 +422,6 @@ def json_dumps(v):
     return json.dumps(v)
 
 
-def test_gate_runs_the_finder_seeded_from_positions_json(quad, tmp_path):
-    import json
-
-    sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "tools"))
-    import positions_gate as gate
-
-    images, _ = quad
-    # Seed = the pixelised quad + a neighbour; the fourth image is weak on the map
-    # and missing from the seed.
-    pix = np.array([pf.pixel_to_arcsec(*pf.arcsec_to_pixel(y, x, N_PIX, N_PIX, PS), N_PIX, N_PIX, PS) for y, x in images])
-    neighbour = [CENTRE[0] + 2.6, CENTRE[1] + 1.9]
-    seed = np.vstack([pix[:3], [neighbour]])
-    flux = render(images, [10.0, 10.0, 10.0, 1.5]) * 0.5
-    noise = np.full_like(flux, 0.5)
-    lens_flux = render([CENTRE], [100.0], sigma=3.0)
-    d = _write_tile(tmp_path, "TileSynthetic", flux, noise, lens_flux, seed)
-
-    meta = gate.gate_tile(d)
-    assert meta["method"] == "finder" and meta["version"] == gate.GATE_VERSION
-    assert PHASE1_KEYS <= set(meta)
-    assert meta["status"] == "modify"
-    assert [(x["index"], x["reason"]) for x in meta["dropped"]] == [(3, "unpredicted")]
-    assert [a["reason"] for a in meta["added"]] == ["predicted_weak"]
-    assert len(meta["positions_used"]) == 4 and near(meta["positions_used"], pix[3])
-    assert meta["threshold"] == pf.FLOOR
-    assert json.loads((d / gate.META_NAME).read_text())["status"] == "modify"
-
-    # --no-finder keeps the phase 1 behaviour on the same tile.
-    phase1 = gate.gate_tile(d, finder=False)
-    assert phase1["method"] == "gate" and "added" not in phase1
-
-    # The segmentation-map inputs match the segmentation writer's SNR map.
-    maps = gate.finder_maps_from_dataset(d)
-    np.testing.assert_allclose(maps["snr_map"], pf.snr_map_from(flux, noise), rtol=1e-5, atol=1e-6)
-
-
 def test_gate_exemplars_without_maps_keep_the_phase1_verdicts(tmp_path):
     # The five output_locked exemplar fixtures ship no segmentation maps, so the
     # gate keeps the phase 1 path on them (tests/test_positions_gate.py pins the
@@ -470,3 +445,193 @@ def test_gate_exemplars_without_maps_keep_the_phase1_verdicts(tmp_path):
         2,
         "outlier_unique",
     )
+
+
+# ---------------------------------------------------------------------------
+# Production writer: find_positions_gate (SNR >= 3 peaks + gate + pair floor)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def double():
+    images, mu = pf.solve_images(DOUBLE_PARAMS, DOUBLE_SOURCE, half_width=3.0)
+    return images + np.array(CENTRE), mu
+
+
+def write_gate(flux, **kw):
+    # Unit noise: the SNR map is the flux map.
+    return pf.find_positions_gate(flux, flux, light_centre=CENTRE, pixel_scale=PS, **kw)
+
+
+def test_writer_selects_the_snr3_peaks_of_a_clean_quad(quad):
+    images, _ = quad
+    result = write_gate(render(images, [10.0] * 4))
+    assert result.method == "gate"
+    assert result.status == "keep" and result.review_reason == ""
+    assert len(result.positions) == 4 and all(near(result.positions, p) for p in images)
+    assert result.s_final <= 0.1 and result.threshold == pf.FLOOR
+    assert result.snr == pytest.approx([10.0] * 4, abs=0.5)
+
+
+def test_writer_has_no_snr_walk_down(quad, double):
+    images, _ = quad
+    # The quad's fourth image at SNR 2.5 is not a candidate...
+    result = write_gate(render(images, [10.0, 10.0, 10.0, 2.5]))
+    assert len(result.positions) == 3 and not near(result.positions, images[3])
+    assert all(near(result.positions, p) for p in images[:3])
+    cands = pf.gate_candidates(render(images, [10.0, 10.0, 10.0, 2.5]), render(images, [10.0, 10.0, 10.0, 2.5]), PS, CENTRE)
+    assert all(p.snr >= pf.SNR_MIN for p in cands)
+    # ...and a double whose counter-image sits at SNR 2.5 is never completed:
+    # one candidate, penalty off (n_lt_2, no threshold).
+    dimg, _ = double
+    one = write_gate(render(dimg, [10.0, 2.5]))
+    assert len(one.positions) == 1 and not near(one.positions, dimg[1])
+    assert one.status == "n_lt_2" and one.threshold is None
+
+
+def test_writer_excludes_the_light_centre_disc(quad):
+    images, _ = quad
+    nucleus = [CENTRE[0] + 0.1, CENTRE[1]]
+    flux = render(images, [10.0] * 4)
+    flux[pf.arcsec_to_pixel(*nucleus, N_PIX, N_PIX, PS)] = 50.0
+    cands = pf.gate_candidates(flux, flux, PS, CENTRE)
+    assert not near([p.yx for p in cands], nucleus, tol=0.05)
+    result = write_gate(flux)
+    assert not near(result.positions, nucleus, tol=0.14)
+    assert len(result.positions) == 4 and result.status == "keep"
+
+
+def test_writer_merges_peaks_within_one_psf_fwhm():
+    flux = np.zeros((N_PIX, N_PIX))
+    flux[10, 10], flux[11, 11] = 10.0, 9.0
+    flux[10, 40], flux[13, 40] = 10.0, 9.0
+    cands = pf.gate_candidates(flux, flux, PS, CENTRE)
+    assert [p.flux for p in cands] == [10.0, 10.0, 9.0]
+
+
+def test_writer_caps_at_the_brightest_n_positions(quad):
+    images, mu = quad
+    amps = 3.0 * np.abs(mu) + 3.0
+    result = write_gate(render(images, amps), n_positions=3)
+    assert len(result.positions) == 3
+    assert all(near(result.positions, p) for p in images[np.argsort(-amps)[:3]])
+
+
+def test_pair_floor_drops_a_2_sigma_partner(double):
+    dimg, _ = double
+    result = pf.gate_result(dimg, CENTRE, snrs=[10.0, 2.0])
+    assert result.status == "review" and result.review_reason == "pair_floor"
+    assert result.positions == [] and result.threshold is None
+    assert [(d["index"], d["reason"]) for d in result.dropped] == [(1, "pair_floor")]
+    meta = pf.meta_from_result(result)
+    assert meta["positions_used"] == [] and meta["added"] == []
+
+
+def test_pair_with_both_above_the_floor_is_kept(double):
+    dimg, _ = double
+    result = pf.gate_result(dimg, CENTRE, snrs=[10.0, 3.0])
+    assert result.status == "keep" and result.review_reason == ""
+    assert len(result.positions) == 2 and result.threshold == pf.FLOOR
+    # And through the writer on a flux map.
+    written = write_gate(render(dimg, [10.0, 3.0]))
+    assert written.status == "keep" and len(written.positions) == 2
+
+
+def test_pair_floor_applies_after_an_outlier_drop(double):
+    # A nucleus-like inner position (0.25" from the centre, outside the cut)
+    # forces the gate's outlier drop; the surviving pair then meets the floor.
+    # Without SNRs (no maps) the phase 1 verdict stands.
+    dimg, _ = double
+    seed = np.vstack([dimg, [[CENTRE[0] + 0.25, CENTRE[1]]]])
+    base = pf.gate_positions(seed, CENTRE)
+    assert base["status"] == "drop" and base["dropped"][0]["reason"] == "outlier_geom_inner"
+    no_maps = pf.gate_result(seed, CENTRE, snrs=None)
+    assert no_maps.status == "drop" and no_maps.positions == base["positions_used"]
+    bright = pf.gate_result(seed, CENTRE, snrs=[10.0, 5.0, 1.0])
+    assert bright.status == "drop" and len(bright.positions) == 2
+    faint = pf.gate_result(seed, CENTRE, snrs=[10.0, 2.0, 1.0])
+    assert faint.status == "review" and faint.review_reason == "pair_floor"
+    assert [d["reason"] for d in faint.dropped] == ["outlier_geom_inner", "pair_floor"]
+    assert faint.positions == []
+
+
+def test_writer_meta_keeps_the_phase1_contract(quad, tmp_path):
+    import util
+
+    images, _ = quad
+    meta = pf.meta_from_result(write_gate(render(images, [10.0] * 4)))
+    assert PHASE1_KEYS <= set(meta)
+    assert meta["method"] == "gate" and meta["version"] == pf.META_VERSION == "2.1"
+    assert meta["added"] == [] and "rounds" not in meta and "predicted" not in meta
+    pf.write_meta(tmp_path, meta)
+    found, lh = util.positions_likelihood_list_from_meta(tmp_path)
+    assert found and len(lh[0].positions) == 4 and lh[0].threshold == pytest.approx(pf.FLOOR)
+
+
+# ---------------------------------------------------------------------------
+# Seeded gate path (positions_gate.gate_tile) vs the unseeded writer
+# ---------------------------------------------------------------------------
+
+
+def _gate_module():
+    sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "tools"))
+    import positions_gate as gate
+
+    return gate
+
+
+COMPARED = ("positions_used", "status", "review_reason", "threshold", "s_min", "s_min_all", "flag_index")
+
+
+@pytest.mark.parametrize("scene", ["quad", "neighbour"])
+def test_seeded_and_unseeded_paths_agree_when_positions_json_is_the_peak_set(quad, tmp_path, scene):
+    gate = _gate_module()
+    images, _ = quad
+    points, amps = list(images), [5.0, 5.0, 5.0, 5.0]
+    if scene == "neighbour":
+        points, amps = list(images[:3]) + [[CENTRE[0] + 2.6, CENTRE[1] + 1.9]], [5.0, 5.0, 5.0, 4.0]
+    flux = render(points, amps) * 0.5
+    noise = np.full_like(flux, 0.5)
+    lens_flux = render([CENTRE], [100.0], sigma=3.0)
+    d = _write_tile(tmp_path, "TileSeeded", flux, noise, lens_flux, [[0.0, 0.0], [1.0, 1.0]])
+    centre = gate.light_centre_from_dataset(d)
+    snr = pf.snr_map_from(flux, noise)
+    peaks = pf.gate_candidates(flux, snr, PS, centre)
+    # positions.json := the SNR >= 3 peak set, brightest first.
+    d2 = _write_tile(tmp_path, "TileSeeded2", flux, noise, lens_flux, [p.yx for p in peaks])
+
+    seeded = gate.gate_tile(d2, light_centre=centre, write=False)
+    unseeded = pf.meta_from_result(pf.find_positions_gate(flux, snr, light_centre=centre, pixel_scale=PS))
+    for k in COMPARED:
+        assert seeded[k] == unseeded[k], k
+    assert seeded["method"] == unseeded["method"] == "gate"
+    assert seeded["version"] == gate.GATE_VERSION == "2.1"
+    if scene == "neighbour":
+        assert seeded["status"] == "drop" and len(seeded["positions_used"]) == 3
+    else:
+        assert seeded["status"] == "keep" and len(seeded["positions_used"]) == 4
+
+
+def test_gate_tile_applies_the_pair_floor_from_the_snr_map(double, tmp_path):
+    import json
+
+    gate = _gate_module()
+    dimg, _ = double
+    pix = [pf.pixel_to_arcsec(*pf.arcsec_to_pixel(y, x, N_PIX, N_PIX, PS), N_PIX, N_PIX, PS) for y, x in dimg]
+    noise = np.full((N_PIX, N_PIX), 0.5)
+    lens_flux = render([CENTRE], [100.0], sigma=3.0)
+    # Partner at SNR 2.0: review, no positions.
+    d = _write_tile(tmp_path, "TilePairFaint", render(dimg, [5.0, 1.0]), noise, lens_flux, pix)
+    meta = gate.gate_tile(d)
+    assert meta["status"] == "review" and meta["review_reason"] == "pair_floor"
+    assert meta["positions_used"] == [] and meta["threshold"] is None
+    assert meta["dropped"][-1]["reason"] == "pair_floor" and meta["dropped"][-1]["index"] == 1
+    assert json.loads((d / gate.META_NAME).read_text())["review_reason"] == "pair_floor"
+    # Partner at SNR 4: kept.
+    d = _write_tile(tmp_path, "TilePairBright", render(dimg, [5.0, 2.0]), noise, lens_flux, pix)
+    meta = gate.gate_tile(d)
+    assert meta["status"] == "keep" and len(meta["positions_used"]) == 2
+    assert meta["added"] == [] and meta["method"] == "gate"
+    # The segmentation-map inputs match the segmentation writer's SNR map.
+    maps = gate.finder_maps_from_dataset(d)
+    np.testing.assert_allclose(maps["snr_map"], pf.snr_map_from(render(dimg, [5.0, 2.0]), noise), rtol=1e-5, atol=1e-6)
