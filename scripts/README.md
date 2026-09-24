@@ -114,6 +114,22 @@ All fitting pipelines share one argument parser (`util.parse_fit_args`) —
   `hpc/batch_cpu/submit_positions_gate`. Research and census behind every
   parameter: `euclid_dr1` project, `inspect/positions_census/research/`
   (`SYNTHESIS.md`, `B_final_method.md`, `A_central_radius.md`).
+  **Finder path:** when the tile ships `segmentation/source_flux.fits` and the
+  VIS RMS map, the gate instead runs `positions_finder.find_positions` (package
+  root, pure numpy) seeded with `positions.json`: the same cut, quick fit and
+  threshold, plus a forward solve of the fitted model that keeps predicted
+  positions, drops unpredicted ones, adds model-predicted (weak, SNR 1-2)
+  counter-images and sends to review a set whose model predicts a bright image
+  over empty sky, iterated to a stable set (<= 5 rounds). Extra sidecar keys:
+  `method`, `added`, `n_rounds`, `s_final`, `predicted`, `rounds`; statuses add
+  `add` / `modify`. `--no-finder` keeps the phase 1 steps. The same finder writes
+  new tiles' `positions.json` (`preprocess/segmentation.py`) and the
+  `load_vis_dataset` fallback.
+- `tools/positions_finder_witness.py`: Runs the finder (seeded, as the gate does,
+  and unseeded, as the segmentation writer does) over every tile of a
+  calibration sample (`--root`, any depth) without writing inside the tiles;
+  prints the per-tile old / new table and writes `witness_table.md`,
+  `witness.json` and `overlays/` under `<root>/witness`.
 
 # Catalogue orchestration
 
