@@ -374,7 +374,12 @@ def test_segmentation_and_util_writers_agree(quad, scene):
         flux, snr, N_PIX, N_PIX, PS, lens_flux=lens_flux
     )
     assert via_seg == via_util
-    assert len(via_util) >= 2
+    if scene == "arc":
+        # The two arc blobs are 0.41" apart (< MIN_SEPARATION): both writers
+        # collapse them to one candidate.
+        assert len(via_util) == 1
+    else:
+        assert len(via_util) >= 2
     # Both are the production writer, not the diagnostic loop.
     full = util._positions_result_from_source_flux(flux, noise, PS, lens_flux=lens_flux)
     assert full.method == "gate" and full.positions == via_util
@@ -505,8 +510,54 @@ def test_writer_merges_peaks_within_one_psf_fwhm():
     flux = np.zeros((N_PIX, N_PIX))
     flux[10, 10], flux[11, 11] = 10.0, 9.0
     flux[10, 40], flux[13, 40] = 10.0, 9.0
-    cands = pf.gate_candidates(flux, flux, PS, CENTRE)
+    # The merge alone (de-duplication off): 0.14" merges, 0.3" does not.
+    cands = pf.gate_candidates(flux, flux, PS, CENTRE, min_separation=0.0)
     assert [p.flux for p in cands] == [10.0, 10.0, 9.0]
+
+
+def _point_flux(points_snrs):
+    flux = np.zeros((N_PIX, N_PIX))
+    for (y, x), v in points_snrs:
+        flux[pf.arcsec_to_pixel(y, x, N_PIX, N_PIX, PS)] = v
+    return flux
+
+
+def test_candidates_same_arc_peaks_within_min_separation_keep_the_brighter():
+    # Two SNR >= 3 peaks 0.4" apart on one arc: only the brighter survives.
+    flux = _point_flux([((1.05, -0.05), 8.0), ((1.05, 0.35), 6.0)])
+    cands = pf.gate_candidates(flux, flux, PS, CENTRE)
+    assert pf.MIN_SEPARATION == 0.7
+    assert [p.flux for p in cands] == [8.0]
+    assert near([p.yx for p in cands], (1.05, -0.05), tol=0.01)
+
+
+def test_candidates_counter_image_beats_fainter_same_arc_peaks():
+    # Three same-arc peaks 0.3" apart, all brighter than a counter-image 1.4"
+    # away: the arc keeps one slot and the counter-image is kept ahead of the
+    # other two arc peaks.
+    arc = [((0.75, -0.35), 12.0), ((0.75, -0.05), 11.0), ((0.75, 0.25), 10.0)]
+    counter = ((-0.65, -0.05), 4.0)
+    flux = _point_flux(arc + [counter])
+    cands = pf.gate_candidates(flux, flux, PS, CENTRE, n_positions=2)
+    assert [p.flux for p in cands] == [12.0, 4.0]
+    assert near([p.yx for p in cands], counter[0], tol=0.01)
+    # Without the de-duplication the cap fills with the arc.
+    raw = pf.gate_candidates(flux, flux, PS, CENTRE, n_positions=2, min_separation=0.0)
+    assert [p.flux for p in raw] == [12.0, 11.0]
+
+
+def test_candidates_cap_applies_after_de_duplication():
+    # Six peaks >= 0.7" apart plus one 0.3" from the brightest: de-dup drops the
+    # close one, then the cap keeps the brightest n of the survivors.
+    pts = [((1.05, -1.05), 20.0), ((1.05, -0.75), 19.0), ((1.05, 0.95), 18.0),
+           ((-0.95, -1.05), 17.0), ((-0.95, 0.95), 16.0), ((0.05, 1.95), 15.0),
+           ((0.05, -2.05), 14.0)]
+    flux = _point_flux(pts)
+    all_c = pf.gate_candidates(flux, flux, PS, CENTRE, n_positions=10)
+    assert [p.flux for p in all_c] == [20.0, 18.0, 17.0, 16.0, 15.0, 14.0]
+    capped = pf.gate_candidates(flux, flux, PS, CENTRE)
+    assert [p.flux for p in capped] == [20.0, 18.0, 17.0, 16.0]
+    assert len(capped) == pf.N_POSITIONS
 
 
 def test_writer_caps_at_the_brightest_n_positions(quad):

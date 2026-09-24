@@ -123,7 +123,8 @@ All fitting pipelines share one argument parser (`util.parse_fit_args`) —
   `positions_finder.find_positions_gate` (package root, pure numpy), which
   writes new tiles' `positions.json` (`preprocess/segmentation.py`) and the
   `load_vis_dataset` fallback: SNR >= 3 source-flux peaks outside 0.15" of the
-  light centre (merged within 0.15", brightest four, no SNR walk-down), then the
+  light centre (merged within 0.15", de-duplicated to one peak per 0.7" so an
+  arc cannot crowd out its counter-image, brightest four, no SNR walk-down), then the
   gate steps and the pair floor, so a tile whose `positions.json` equals its
   SNR >= 3 peak set gets the same verdict seeded or unseeded. The
   model-guided reconcile loop (`positions_finder.find_positions`) and forward

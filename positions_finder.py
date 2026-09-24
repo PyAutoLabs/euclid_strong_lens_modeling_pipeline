@@ -16,8 +16,10 @@ PRODUCTION PATH (the gate-based writer, :func:`find_positions_gate`)
        ``segmentation/source_flux.fits`` with SNR >= ``SNR_MIN`` (3) outside a
        ``CENTRAL_RADIUS`` (0.15", one VIS PSF FWHM) disc around the light
        centre (the brightest lens-flux pixel, else the mask centre), a peak
-       within 0.15" of a brighter one merged into it, the brightest
-       ``n_positions`` kept. There is no SNR walk-down of any kind (the old
+       within 0.15" of a brighter one merged into it, a peak within
+       ``MIN_SEPARATION`` (0.7") of a brighter kept one rejected (so one arc
+       cannot crowd out its counter-image), the brightest ``n_positions``
+       kept. There is no SNR walk-down of any kind (the old
        writers' walk-down to SNR 0 was the defect that put nuclei,
        companions and neighbours into ``positions.json``);
     2. **phase 1 gate** (:func:`gate_positions`) -- central cut, the
@@ -706,6 +708,10 @@ SNR_MIN = 3.0
 SNR_PAIR = 3.0
 # Step 4 (list only): plausibility flag when one drop lowers J by at least DJ_FLAG.
 DJ_FLAG = 10.0
+# Candidate de-duplication: a peak within MIN_SEPARATION (arcsec) of a brighter
+# kept candidate is rejected before the brightest-N cap, so an arc cannot fill
+# every slot and crowd out its counter-image (see :func:`gate_candidates`).
+MIN_SEPARATION = 0.7
 
 
 def gate_candidates(
@@ -717,19 +723,31 @@ def gate_candidates(
     snr_min: float = SNR_MIN,
     central_radius: float = CENTRAL_RADIUS,
     merge_radius: float = CENTRAL_RADIUS,
+    min_separation: float = MIN_SEPARATION,
 ) -> List[Peak]:
     """
     The production writer's candidate set: local maxima of ``source_flux`` with
     ``SNR >= snr_min`` outside ``central_radius`` of the light centre, a peak
     within ``merge_radius`` (one VIS PSF FWHM) of a brighter kept peak merged
-    into it, brightest (by flux) first, capped at ``n_positions``.
+    into it, then a minimum-separation de-duplication, brightest (by flux)
+    first, capped at ``n_positions``.
+
+    De-duplication is greedy in the same brightest-first order: a merged peak
+    closer than ``min_separation`` (``MIN_SEPARATION``, 0.7") to an
+    already-kept peak is rejected, and only then is the list capped. Without
+    it, on an arc the ``n_positions`` brightest peaks all lie along that one
+    arc and the counter-image is never a candidate. 0.7" recovers every
+    reachable ``positions.json`` image on the good five tiles of the
+    2026-09-24 calibration sample, evaluated against one-peak-per-connected-
+    component and 0.5" / 1.0" alternatives. Two images of one lens closer than
+    0.7" collapse to the brighter; ``min_separation=0`` disables the step.
 
     There is no SNR walk-down of any kind: a peak below ``snr_min`` is never a
     candidate. Without an SNR map every maximum passes the floor (SNR ``inf``).
     """
     source_flux = np.asarray(source_flux, float)
     ny, nx = source_flux.shape
-    out: List[Peak] = []
+    merged: List[Peak] = []
     for v, r, c in find_local_maxima(source_flux):
         if snr_map is None:
             snr = np.inf
@@ -740,9 +758,13 @@ def gate_candidates(
         y, x = pixel_to_arcsec(r, c, ny, nx, pixel_scale)
         if np.hypot(y - light_centre[0], x - light_centre[1]) < central_radius:
             continue
-        if any(np.hypot(y - p.y, x - p.x) < merge_radius for p in out):
+        if any(np.hypot(y - p.y, x - p.x) < merge_radius for p in merged):
             continue
-        out.append(Peak(float(y), float(x), float(v), snr))
+        merged.append(Peak(float(y), float(x), float(v), snr))
+    out: List[Peak] = []
+    for p in merged:
+        if all(np.hypot(p.y - q.y, p.x - q.x) >= min_separation for q in out):
+            out.append(p)
     return out[:n_positions]
 
 
@@ -943,8 +965,9 @@ def find_positions_gate(
 
     1. candidates (:func:`gate_candidates`): source-flux local maxima with
        ``SNR >= 3`` outside the 0.15" light-centre disc, peaks within 0.15" of a
-       brighter one merged, the brightest ``n_positions`` kept -- no SNR
-       walk-down;
+       brighter one merged, peaks within ``MIN_SEPARATION`` (0.7") of a
+       brighter kept one rejected, the brightest ``n_positions`` kept -- no
+       SNR walk-down;
     2. the phase 1 gate on that set (:func:`gate_positions`): quick fit,
        leave-one-out outlier drop, plausibility flag, threshold
        ``T = min(max(2 s, 0.3"), 0.5")`` and review reasons;
