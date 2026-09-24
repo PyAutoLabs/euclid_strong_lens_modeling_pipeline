@@ -32,9 +32,10 @@ WHAT IT DOES
        positions within ``R_MATCH`` (0.3"): matched positions are kept; an
        unmatched predicted image with a candidate (or only a weak) peak within
        ``R_MATCH`` adds that peak; an observed position no predicted image
-       claims is dropped; a bright predicted image (``|mu|`` at least
-       ``MU_BRIGHT_FRAC`` of the faintest matched image's) over empty sky
-       (SNR < ``SNR_WEAK`` within one pixel) counts against the set;
+       claims is dropped; a bright predicted image (one the matched images'
+       SNR-per-magnification says would be seen at SNR >= ``SNR_FLOOR``) over
+       empty sky (SNR < ``SNR_WEAK`` within one pixel) counts against the model
+       and, if no plausible model avoids one, against the set;
     5. **iterate** 2-4 until the set is unchanged, at most ``MAX_ROUNDS`` (5).
 
     The tile goes to review on non-convergence (``no_converge``), an empty set
@@ -112,7 +113,6 @@ SOLVE_DEDUP = 0.1
 # sits below SOLVE_TOL without being images.
 SOLVE_ROOT_TOL = 1e-4
 # Reconcile judgement calls (not fixed by the plan; see find_positions).
-MU_BRIGHT_FRAC = 0.5
 # Source-plane match: an observed position tracing within S_MATCH of beta is
 # predicted even when its solved image is further than R_MATCH away (a
 # source-plane offset d moves a highly magnified image by up to |mu| d along the
@@ -835,8 +835,17 @@ def _reconcile(obs, lc, params, model_rel, pool, snr, pixel_scale, half_width, r
     match, kept = _match(obs, delta, pred, r_match)
     claimed = set(match.values())
     taken = {_key(p) for p in obs}
-    # "Bright" is judged against the faintest image that *is* seen.
-    mu_ref = min((abs(mu[j]) for j in claimed), default=0.0)
+    # "Bright": the predicted image's expected SNR, |mu| times the lowest
+    # observed SNR per unit |mu| among the matched images (point-image flux
+    # scales with |mu|), reaches the candidate floor.
+    snr_per_mu = None
+    if snr is not None and match:
+        ratios = []
+        for i, j in match.items():
+            s_obs = _snr_near(snr, obs[i, 0], obs[i, 1], pixel_scale, radius_pix=0)
+            if s_obs is not None and np.isfinite(mu[j]) and abs(mu[j]) > 0:
+                ratios.append(s_obs / abs(mu[j]))
+        snr_per_mu = min(ratios) if ratios else None
     add, n_unseen = [], 0
     for j in range(len(pred)):
         if j in claimed:
@@ -849,7 +858,12 @@ def _reconcile(obs, lc, params, model_rel, pool, snr, pixel_scale, half_width, r
             add.append(best)
             continue
         s = _snr_near(snr, py, px, pixel_scale)
-        if s is not None and s < SNR_WEAK and mu_ref > 0 and abs(mu[j]) >= MU_BRIGHT_FRAC * mu_ref:
+        if (
+            s is not None
+            and s < SNR_WEAK
+            and snr_per_mu is not None
+            and abs(mu[j]) * snr_per_mu >= SNR_FLOOR
+        ):
             n_unseen += 1
     return dict(pred=pred, pred_rel=pred_rel, mu=mu, kept=kept, add=add, n_unseen=n_unseen, beta=beta)
 
@@ -888,15 +902,30 @@ def find_positions(
     half_width
         Solver half-width about the light centre (default: the frame half-size).
 
-    Judgement calls not fixed by the plan: the model solved is the ``J`` fit
-    when it traces the set, else the ``s_min`` fit (:func:`_model_for_prediction`);
-    an untraceable set of three or more is modelled through the gate's
-    one-image outlier drop (:func:`outlier_drop`); matching is one-to-one; an
-    unmatched predicted image takes the highest-SNR candidate within
-    ``r_match`` before a weak one; "bright" is ``|mu| >= MU_BRIGHT_FRAC`` times
-    the faintest matched image's ``|mu|``; a repeated set ends the
-    loop as ``no_converge``; with a flux-derived seed the output is ordered by
-    flux and capped at ``n_positions``.
+    Judgement calls not fixed by the plan (recorded in the issue's witness
+    report):
+
+    - an untraceable set of three or more is modelled through the phase 1
+      gate's one-image outlier drop (:func:`outlier_drop`) -- the fit to the
+      traceable subset is solved, and the left-out position is judged by the
+      reconcile step;
+    - a set of two or three positions under-constrains the model, so the model
+      solved is chosen among the models that trace it (:func:`_candidate_models`):
+      fewest bright predicted images over empty sky first, then lowest
+      plausibility cost, widening to a 75-start grid (cost < ``J_MAX``) only
+      when the quick fit's own models all predict one;
+    - matching is one-to-one, and also through the source plane (``S_MATCH``,
+      ``R_CLAIM``) because a small source-plane offset moves a highly
+      magnified image a long way along its arc;
+    - an unmatched predicted image takes the highest-SNR candidate within
+      ``r_match`` before a weak one;
+    - "bright" means an expected SNR >= ``SNR_FLOOR``: ``|mu|`` times the
+      lowest observed SNR per ``|mu|`` among the matched images;
+    - a repeated set ends the loop as ``no_converge``; a set emptied by the
+      reconcile step goes to review with no positions (``empty``), while fewer
+      than two seeds after the central cut keep the phase 1 ``n_lt_2`` status;
+    - with a flux-derived seed the output is ordered by flux and capped at
+      ``n_positions``.
     """
     source_flux = np.asarray(source_flux, float)
     ny, nx = source_flux.shape
@@ -1023,6 +1052,12 @@ def find_positions(
         seen.append(key)
     else:
         reason = "no_converge"
+
+    # A set the reconcile step emptied keeps no positions at all.
+    if len(current) < 2 and len(seed_idx) >= 2:
+        for p in current:
+            dropped.append(dict(index=p[2], y=_r4(p[0]), x=_r4(p[1]), reason="empty_set", round=result.n_rounds))
+        current = []
 
     # With a flux-derived seed the output is ordered by flux and capped at
     # n_positions (the faintest positions over the cap are dropped).
