@@ -136,7 +136,8 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
+@catalogue_util.reported("deblending")
+def main(counts):
     """
     __One Aggregator Per Lens, And The Skip__
 
@@ -153,9 +154,9 @@ def main():
     after *re-fitting* a lens, delete its two FITS files (or its whole folder) to
     force them to be rebuilt.
 
-    Failures are per lens too: a lens with no completed search under the tag
-    makes ``AggregateFITS`` raise ``ValueError``, which is caught, reported and
-    skipped so the rest of the sample still gets bundled.
+    A lens with no completed search, or a selected band without either FITS
+    input, is warned and skipped. Malformed assets and unrelated errors still
+    raise. Both products are extracted and staged before either is published.
     """
     args = parse_args()
     output_path, inspect_path = catalogue_util.resolve_paths(args)
@@ -168,17 +169,19 @@ def main():
     dataset_name_list = catalogue_util.dataset_names_from(sample_root)
 
     for dataset_name in dataset_name_list:
-
         # Idempotency: skip a lens whose two FITS bundles are already present.
         target_pre_psf = inspect_path / dataset_name / "pre_psf.fits"
         target_model = inspect_path / dataset_name / "model.fits"
         if target_pre_psf.exists() and target_model.exists():
+            counts.already_present += 1
             continue
 
         print(dataset_name)
 
         agg = Aggregator.from_directory(
-            directory=sample_root / dataset_name, completed_only=True, unzip_temporary=True
+            directory=sample_root / dataset_name,
+            completed_only=True,
+            unzip_temporary=True,
         )
 
         agg_query = agg.query(agg.unique_tag == args.unique_tag)
@@ -195,11 +198,14 @@ def main():
             ),
         )
 
-        try:
-            agg_fits = af.AggregateFITS(aggregator=agg_query)
-        except ValueError as e:
-            print(f"skipping {dataset_name}: {e}")
+        if not catalogue_util.lens_assets_available(
+            agg_query,
+            counts,
+            dataset_name,
+            fits=("galaxy_images", "model_galaxy_images"),
+        ):
             continue
+        agg_fits = af.AggregateFITS(aggregator=agg_query)
 
         waveband_list = [search.name for search in agg_query.values("search")]
 
@@ -257,15 +263,19 @@ def main():
         one of the pair exists and the other does not: the skip above would not
         have fired, and the surviving file is replaced rather than erroring.
         """
-        hdu_list = agg_fits.extract_fits(
-            hdus=pre_psf_hdus, extname_prefix_list=waveband_list
-        )
-        hdu_list.writeto(output_dataset_path / "pre_psf.fits", overwrite=True)
-
-        hdu_list = agg_fits.extract_fits(
-            hdus=model_hdus, extname_prefix_list=waveband_list
-        )
-        hdu_list.writeto(output_dataset_path / "model.fits", overwrite=True)
+        products = {}
+        try:
+            products["pre_psf.fits"] = agg_fits.extract_fits(
+                hdus=pre_psf_hdus, extname_prefix_list=waveband_list
+            )
+            products["model.fits"] = agg_fits.extract_fits(
+                hdus=model_hdus, extname_prefix_list=waveband_list
+            )
+            catalogue_util.write_fits_products(products, output_dataset_path)
+        finally:
+            for hdus in products.values():
+                hdus.close()
+        counts.built += 1
 
 
 if __name__ == "__main__":

@@ -12,7 +12,15 @@ Panel order (single row):
   4. artefact_flux.fits
   5. artefact_binary.fits
 
-Also writes ``positions.json`` (consumed by ``util.load_vis_dataset``).
+Also writes ``positions.json`` and its ``positions_meta.json`` sidecar (the
+threshold, status and bookkeeping), both consumed by
+``util.load_vis_dataset``. The positions come from the gate-based production
+writer ``positions_finder.find_positions_gate``: SNR >= 3 source-flux peaks
+outside 0.15" of the light centre, the positions gate's quick fit, outlier
+drop and threshold, and the pair floor. That step is ``write_positions``, which
+``scripts/tools/rewrite_positions.py`` also calls to rewrite existing tiles.
+No PyAutoLens import: ``positions.json`` is written in ``al.output_to_json``'s
+exact format with plain ``json``.
 
 Run from the project root::
 
@@ -31,7 +39,7 @@ import numpy as np
 from astropy.io import fits
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import autolens as al
+import positions_finder  # noqa: E402
 
 N_POSITIONS = 4
 
@@ -43,20 +51,7 @@ N_POSITIONS = 4
 
 def find_local_maxima(flux: np.ndarray) -> list[tuple[float, int, int]]:
     """Return (value, row, col) for every interior local maximum, sorted descending."""
-    ny, nx = flux.shape
-    maxima = []
-    for r in range(1, ny - 1):
-        for c in range(1, nx - 1):
-            v = flux[r, c]
-            if (
-                v > flux[r - 1, c]
-                and v > flux[r + 1, c]
-                and v > flux[r, c - 1]
-                and v > flux[r, c + 1]
-            ):
-                maxima.append((float(v), r, c))
-    maxima.sort(reverse=True)
-    return maxima
+    return positions_finder.find_local_maxima(flux)
 
 
 def pixel_to_arcsec(
@@ -148,54 +143,187 @@ def apply_arcsec_ticks(ax: plt.Axes, extent: list[float]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def compute_positions_result(
+    flux: np.ndarray,
+    snr_map: np.ndarray | None,
+    pixel_scale: float,
+    lens_flux: np.ndarray | None = None,
+    light_centre=None,
+) -> positions_finder.FinderResult:
+    """
+    The production writer's full result for one lens (``positions_finder.find_positions_gate``).
+
+    ``light_centre`` is the fixed mass centre (``vis_lp``'s ``dataset_centre``);
+    by default the brightest ``lens_flux`` pixel.
+    """
+    return positions_finder.find_positions_gate(
+        flux,
+        snr_map,
+        light_centre=light_centre,
+        pixel_scale=pixel_scale,
+        n_positions=N_POSITIONS,
+        lens_flux=lens_flux,
+    )
+
+
 def compute_positions(
     flux: np.ndarray,
     snr_map: np.ndarray | None,
     ny: int,
     nx: int,
     pixel_scale: float,
+    lens_flux: np.ndarray | None = None,
+    light_centre=None,
 ) -> list[list[float]]:
-    """Return up to N_POSITIONS arcsec positions from the brightest local maxima."""
-    SNR_THRESHOLD = 3.0
-    SNR_STEP = 0.1
-    all_maxima = find_local_maxima(flux)
-    maxima = [
-        (v, r, c)
-        for v, r, c in all_maxima
-        if snr_map is None or snr_map[r, c] > SNR_THRESHOLD
-    ]
+    """
+    Up to ``N_POSITIONS`` multiple-image positions from the source-flux map.
 
-    if not maxima:
-        return []
+    A thin wrapper over ``positions_finder.find_positions_gate``: SNR >= 3
+    peaks outside 0.15" of the light centre (no SNR walk-down), then the
+    positions gate's fixed-centre SIE + shear quick fit, leave-one-out outlier
+    drop and threshold, then the pair floor (a pair needs both SNRs >= 3).
+    ``ny``/``nx`` are kept for the call signature (the shape is read off
+    ``flux``).
+    """
+    return compute_positions_result(flux, snr_map, pixel_scale, lens_flux, light_centre).positions
 
-    selected = maxima[:N_POSITIONS]
-    positions = [pixel_to_arcsec(r, c, ny, nx, pixel_scale) for _, r, c in selected]
 
-    # If no counter-image found, lower the SNR threshold one step at a time
-    has_counter = any(
-        p[0] * positions[0][0] < 0 or p[1] * positions[0][1] < 0 for p in positions[1:]
+# ---------------------------------------------------------------------------
+# positions.json + positions_meta.json writer
+# ---------------------------------------------------------------------------
+
+
+def positions_json_dict(position_list: list[list[float]]) -> dict:
+    """
+    The ``positions.json`` payload for ``position_list``.
+
+    Exactly what ``al.output_to_json(obj=al.Grid2DIrregular(values=position_list))``
+    writes (``tests/test_rewrite_positions.py`` pins the bytes), built without
+    importing PyAutoLens so this writer and ``scripts/tools/rewrite_positions.py``
+    stay numpy / scipy / astropy only; ``al.from_json`` reads it back.
+    """
+    return {
+        "type": "instance",
+        "class_path": "autoarray.structures.grids.irregular_2d.Grid2DIrregular",
+        "arguments": {
+            "values": {
+                "type": "ndarray",
+                "array": np.asarray(position_list, dtype=np.float64).tolist(),
+                "dtype": "float64",
+            }
+        },
+    }
+
+
+def write_positions_json(lens_dir: Path, position_list: list[list[float]]) -> Path:
+    """Write ``position_list`` as the tile's ``positions.json`` (``al.output_to_json`` format)."""
+    path = Path(lens_dir) / "positions.json"
+    with open(path, "w+") as f:
+        json.dump(positions_json_dict(position_list), f, indent=4)
+    return path
+
+
+def write_positions(
+    lens_dir: Path,
+    pixel_scale: float | None = None,
+    mask_centre=None,
+    source_flux: np.ndarray | None = None,
+    require_noise: bool = False,
+    verbose: bool = True,
+) -> tuple[positions_finder.FinderResult, dict]:
+    """
+    Run the production positions writer on one tile and write its outputs.
+
+    Loads the tile's inputs (``segmentation/source_flux.fits``, the VIS RMS map
+    for the SNR map, ``segmentation/lens_flux.fits`` and the VIS image for the
+    light centre), runs ``positions_finder.find_positions_gate`` and writes
+
+    - ``positions.json``, only when the finder returns at least one position
+      (an existing file is otherwise left untouched: removing a stale set is
+      the caller's decision, see ``scripts/tools/rewrite_positions.py``);
+    - ``positions_meta.json``, always (``positions_finder.meta_from_result`` plus
+      ``tile`` and ``positions_sha``, the sha of the ``positions.json`` just
+      written, or None when none was).
+
+    ``pixel_scale`` / ``mask_centre`` default to the tile's ``info.json``;
+    ``source_flux`` to the segmentation map on disk. A missing or unreadable VIS
+    RMS map leaves ``snr_map=None`` (every maximum passes the SNR floor) with a
+    warning, as ``process_lens`` always has; ``require_noise=True`` raises
+    instead.
+
+    Returns ``(result, meta)``, ``meta`` being the dict written to the sidecar.
+    """
+    lens_dir = Path(lens_dir)
+    lens_name = lens_dir.name
+    seg_dir = lens_dir / "segmentation"
+    fits_name = lens_name + ".fits"
+
+    if pixel_scale is None or mask_centre is None:
+        with open(lens_dir / "info.json") as f:
+            info = json.load(f)
+        if pixel_scale is None:
+            pixel_scale = float(info["pixel_scale"])
+        if mask_centre is None:
+            mask_centre = list(info.get("mask_centre", [0.0, 0.0]))
+    if source_flux is None:
+        source_flux = fits.getdata(seg_dir / "source_flux.fits").astype(np.float32)
+
+    try:
+        noise_map = load_vis_noise_map(lens_dir, fits_name).astype(np.float32)
+        snr_map = positions_finder.snr_map_from(source_flux, noise_map)
+    except Exception as exc:
+        if require_noise:
+            raise
+        print(f"  [warn] {lens_name}: could not load noise map: {exc}")
+        snr_map = None
+
+    # The finder's fixed mass centre is vis_lp's: the lens-flux peak refined
+    # on the VIS image, as util.load_vis_dataset computes dataset_centre.
+    lf_path = seg_dir / "lens_flux.fits"
+    lens_flux_map = fits.getdata(lf_path).astype(np.float32) if lf_path.exists() else None
+    if lens_flux_map is not None and lens_flux_map.shape != source_flux.shape:
+        lens_flux_map = None
+    try:
+        vis_for_centre = np.asarray(load_vis_image(lens_dir, fits_name), float)
+        if vis_for_centre.shape != source_flux.shape:
+            vis_for_centre = None
+    except Exception:
+        vis_for_centre = None
+    light_centre = positions_finder.light_centre_from_maps(
+        lens_flux_map, pixel_scale, image=vis_for_centre, mask_centre=mask_centre
     )
-    if not has_counter and snr_map is not None:
-        threshold = SNR_THRESHOLD - SNR_STEP
-        while threshold >= 0:
-            lower_maxima = sorted(
-                [(v, r, c) for v, r, c in all_maxima if snr_map[r, c] > threshold],
-                reverse=True,
-            )
-            for v, r, c in lower_maxima:
-                candidate = pixel_to_arcsec(r, c, ny, nx, pixel_scale)
-                if candidate not in positions and (
-                    candidate[0] * positions[0][0] < 0
-                    or candidate[1] * positions[0][1] < 0
-                ):
-                    positions[-1] = candidate
-                    break
-            else:
-                threshold -= SNR_STEP
-                continue
-            break
 
-    return positions
+    result = compute_positions_result(
+        source_flux, snr_map, pixel_scale, lens_flux_map, light_centre
+    )
+    position_list = result.positions
+
+    if not position_list:
+        if verbose:
+            print(
+                f"  [warn] {lens_name}: no valid source positions found"
+                f" ({result.status}: {result.review_reason})"
+            )
+    else:
+        if verbose and len(position_list) < N_POSITIONS:
+            print(
+                f"  [warn] {lens_name}: only {len(position_list)} position(s) found (need {N_POSITIONS})"
+            )
+        write_positions_json(lens_dir, position_list)
+        if verbose:
+            print(
+                f"  [ok]   {lens_name}: {len(position_list)} positions written"
+                f" ({result.status}, T={result.threshold})"
+            )
+    meta = positions_finder.meta_from_result(result)
+    sha = (
+        positions_finder.positions_sha(lens_dir)
+        if position_list and (lens_dir / "positions.json").exists()
+        else None
+    )
+    meta = dict(tile=lens_name, positions_sha=sha, **meta)
+    positions_finder.write_meta(lens_dir, meta)
+    return result, meta
 
 
 # ---------------------------------------------------------------------------
@@ -391,28 +519,10 @@ def process_lens(lens_dir: Path, overview_dir: Path) -> None:
     position_list: list[list[float]] = []
     if source_flux_path.exists():
         source_flux = fits.getdata(source_flux_path).astype(np.float32)
-        ny, nx = source_flux.shape
-
-        try:
-            noise_map = load_vis_noise_map(lens_dir, fits_name).astype(np.float32)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                snr_map = np.where(noise_map > 0, source_flux / noise_map, 0.0)
-        except Exception as exc:
-            print(f"  [warn] {lens_name}: could not load noise map: {exc}")
-            snr_map = None
-
-        position_list = compute_positions(source_flux, snr_map, ny, nx, pixel_scale)
-
-        if not position_list:
-            print(f"  [warn] {lens_name}: no valid source positions found")
-        else:
-            if len(position_list) < N_POSITIONS:
-                print(
-                    f"  [warn] {lens_name}: only {len(position_list)} position(s) found (need {N_POSITIONS})"
-                )
-            positions = al.Grid2DIrregular(values=position_list)
-            al.output_to_json(obj=positions, file_path=lens_dir / "positions.json")
-            print(f"  [ok]   {lens_name}: {len(position_list)} positions written")
+        result, _ = write_positions(
+            lens_dir, pixel_scale=pixel_scale, mask_centre=mask_centre, source_flux=source_flux
+        )
+        position_list = result.positions
     else:
         print(f"  [warn] {lens_name}: source_flux.fits not found, skipping positions")
         source_flux = np.zeros((10, 10), dtype=np.float32)

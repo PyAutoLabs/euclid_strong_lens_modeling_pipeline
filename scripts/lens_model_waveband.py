@@ -76,6 +76,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import util
 from scripts.initial_lens_model import fit
 
+# Half-width of the uniform prior on both components of the band's
+# ``DatasetModel`` grid offset, in arcsec. ±0.5" is wider than one pixel of the
+# coarsest instrument the chain fits (NISP at 0.3"/pixel, DECam at ~0.26"), so a
+# real inter-instrument misregistration of a pixel or more is inside the prior
+# rather than truncated by it. `catalogue/scripts/astrometric_offsets.py` reads
+# these limits back off each result's own model to flag rows whose posterior
+# still reaches an edge.
+GRID_OFFSET_PRIOR_ARCSEC = 0.5
+
 
 def fit_waveband(
     dataset_name: str,
@@ -480,21 +489,31 @@ def fit_waveband(
 
         The one thing that is genuinely free. A ``DatasetModel`` extends the
         model with a (y, x) offset between this band's grid and the grid the VIS
-        model was fitted on, given a uniform prior of ±0.2" — two pixels at
-        0.1"/pixel.
+        model was fitted on, given a uniform prior of
+        ±``GRID_OFFSET_PRIOR_ARCSEC`` (0.5").
 
         It is needed because astrometric registration between instruments is
         rarely perfect at the precision a lens model works to, and an
         unmodelled shift of even a fraction of a pixel would be absorbed as
         residuals around the lens centre and arcs, biasing the very fluxes this
         fit is measuring. Two parameters is a cheap price for removing that.
+
+        The prior was ±0.2" — two VIS pixels at 0.1"/pixel — which is a VIS-sized
+        window imposed on bands that are not VIS: it is below one NISP pixel
+        (0.3") and below one DECam pixel (~0.26"), so a misregistration of a
+        single pixel of the band being fitted could not be represented at all.
+        Two independent DR1 deliveries (prelim and sep1) put the same tile/band
+        pairs on that limit, with 3σ bounds of exactly 0.2000 — the signature of
+        a posterior pressed against a prior edge rather than a measurement.
+        ±0.5" covers more than one pixel of the coarsest instrument in the chain
+        and leaves those posteriors free to land where the data put them.
         """
         dataset_model = af.Model(al.DatasetModel)
         dataset_model.grid_offset.grid_offset_0 = af.UniformPrior(
-            lower_limit=-0.2, upper_limit=0.2
+            lower_limit=-GRID_OFFSET_PRIOR_ARCSEC, upper_limit=GRID_OFFSET_PRIOR_ARCSEC
         )
         dataset_model.grid_offset.grid_offset_1 = af.UniformPrior(
-            lower_limit=-0.2, upper_limit=0.2
+            lower_limit=-GRID_OFFSET_PRIOR_ARCSEC, upper_limit=GRID_OFFSET_PRIOR_ARCSEC
         )
 
         """

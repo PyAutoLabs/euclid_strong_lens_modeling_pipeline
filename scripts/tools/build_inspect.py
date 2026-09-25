@@ -31,14 +31,15 @@ fitted before the pipeline started writing them simply has none:
 This script *collects*, it never re-renders: images come out of the result zip
 that PyAutoFit writes when a search finishes, or — when the results have not
 been zipped, as in a ``PYAUTO_TEST_MODE`` run — out of the unzipped result
-directory's ``image/`` folder. Zip members are streamed with ``zipfile``, so
-nothing is unpacked to disk and nothing is re-zipped.
+directory's ``image/`` folder. Selected zip members are streamed with
+``zipfile`` to staging files; the result archive is never expanded or rewritten.
 
 It is incremental: a lens whose targets all exist is reported as ``already`` and
-left alone. A lens whose ``vis_lp`` or ``vis_pix`` search has not finished is
-``skipped`` silently — that is the normal state of a sample still being fitted.
-A truncated or corrupt zip is reported as a ``WARN`` line and does not fail the
-run, because the later bundle stages still have work to do.
+validated before reuse. A lens whose ``vis_lp`` or ``vis_pix`` search has not
+finished is warned and skipped — a normal state of a sample still being fitted.
+Missing members produce per-lens warnings and skips. Corrupt ZIP, image or JSON
+assets and output-write errors fail the stage; existing complete products are
+validated before they count as already present.
 
 Stage 1 of ``scripts/build_inspection_bundle.sh``.
 
@@ -53,6 +54,7 @@ Usage
 """
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -61,6 +63,9 @@ import time
 import zipfile
 from pathlib import Path
 from typing import Optional
+from tempfile import TemporaryDirectory
+
+from PIL import Image
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -98,37 +103,55 @@ def latest_result_dir(directory: Path) -> Optional[Path]:
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
+def validate_asset(path: Path):
+    """Decode copied assets before publishing or accepting an existing product."""
+    if path.suffix.lower() == ".json":
+        with path.open() as stream:
+            json.load(stream)
+    else:
+        with Image.open(path) as image:
+            image.verify()
+        with Image.open(path) as image:
+            image.load()
+
+
+def copy_asset(source: Path, dest: Path):
+    """Validate and publish a file without leaving partially copied output."""
+    with TemporaryDirectory(prefix=".asset-", dir=dest.parent) as temporary:
+        staged = Path(temporary) / dest.name
+        shutil.copyfile(source, staged)
+        validate_asset(staged)
+        staged.replace(dest)
+
+
 def extract_zip_member(zip_path: Path, member: str, dest: Path) -> bool:
-    """
-    Stream one member out of a result zip into ``dest``. Returns whether it was
-    written.
-    """
-    try:
-        with zipfile.ZipFile(zip_path) as zf:
-            with zf.open(member) as src, dest.open("wb") as dst:
-                shutil.copyfileobj(src, dst)
-        return True
-    except KeyError:
-        return False
-    except zipfile.BadZipFile:
-        # Truncated/corrupted zip (e.g. an interrupted rsync). Do not crash the
-        # whole run — surface it to the caller as "could not extract".
-        print(f"  WARN: bad zip {zip_path}", flush=True)
-        return False
+    """Only an absent archive member is optional; decode/write errors propagate."""
+    with zipfile.ZipFile(zip_path) as archive:
+        try:
+            info = archive.getinfo(member)
+        except KeyError:
+            dest.unlink(missing_ok=True)
+            return False
+        with TemporaryDirectory(prefix=".asset-", dir=dest.parent) as temporary:
+            staged = Path(temporary) / dest.name
+            with archive.open(info) as source, staged.open("wb") as target:
+                shutil.copyfileobj(source, target)
+            validate_asset(staged)
+            staged.replace(dest)
+    return True
 
 
 def collect_member(source, member: str, dest: Path) -> bool:
-    """
-    Copy one result file to ``dest``, from a zip member or from the same
-    relative path inside an unzipped result directory.
-    """
+    """Collect one optional generated asset, invalidating an obsolete copy."""
     if source is None:
+        dest.unlink(missing_ok=True)
         return False
     if source.is_dir():
         src = source / member
         if not src.exists():
+            dest.unlink(missing_ok=True)
             return False
-        shutil.copy(src, dest)
+        copy_asset(src, dest)
         return True
     return extract_zip_member(source, member, dest)
 
@@ -157,6 +180,9 @@ def process_dataset(
     sersic_source = result_source(dataset_dir / "sersic_lens_model" / "vis")
 
     if vis_lp_source is None or vis_pix_source is None:
+        print(
+            f"WARNING {dataset_name}: skipping inspection images; missing vis_lp or vis_pix result"
+        )
         return "skipped"
 
     out_dir = inspect_dir / dataset_name
@@ -177,14 +203,18 @@ def process_dataset(
         targets["coolest_sersic.json"] = out_dir / "coolest_sersic.json"
 
     if all(path.exists() for path in targets.values()):
+        for path in targets.values():
+            validate_asset(path)
         return "already"
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if not collect_member(vis_lp_source, "image/fit.png", targets["vis_lp_fit.png"]):
-        return "error"
+        print(f"WARNING {dataset_name} band=vis stage=vis_lp: missing image/fit.png")
+        return "skipped"
     if not collect_member(vis_pix_source, "image/fit.png", targets["vis_pix_fit.png"]):
-        return "error"
+        print(f"WARNING {dataset_name} band=vis stage=vis_pix: missing image/fit.png")
+        return "skipped"
 
     # Best-effort: a lens without positions.json has no positions overlay.
     collect_member(
@@ -197,12 +227,12 @@ def process_dataset(
         for extension in (".jpg", ".png", ".jpeg"):
             rgb_fallback = dataset_main_dir / dataset_name / f"rgb_0{extension}"
             if rgb_fallback.exists():
-                shutil.copy(rgb_fallback, targets["rgb.png"])
+                copy_asset(rgb_fallback, targets["rgb.png"])
                 break
 
     segmentation_source = dataset_main_dir / dataset_name / "segmentation.png"
     if segmentation_source.exists():
-        shutil.copy(segmentation_source, targets["segmentation.png"])
+        copy_asset(segmentation_source, targets["segmentation.png"])
 
     # Best-effort: results fitted before the pipeline wrote COOLEST templates
     # carry no `files/coolest.json`, and a run whose `coolest` package was
@@ -215,6 +245,12 @@ def process_dataset(
             sersic_source, "files/coolest.json", targets["coolest_sersic.json"]
         )
 
+    missing = [name for name, path in targets.items() if not path.exists()]
+    if missing:
+        print(
+            f"WARNING {dataset_name} band=vis: incomplete inspection images; missing {', '.join(missing)}"
+        )
+        return "skipped"
     return "built"
 
 
@@ -298,16 +334,16 @@ def main() -> int:
     )
     print(f"Scanning {len(dataset_dirs)} datasets in {results_dir}...", flush=True)
 
-    for dataset_dir in dataset_dirs:
-        counts[process_dataset(dataset_dir, dataset_main_dir, inspect_dir)] += 1
-
-    print(f"Done in {time.time() - started:.1f}s", flush=True)
-    print(f"  built:   {counts['built']}", flush=True)
-    print(f"  already: {counts['already']}", flush=True)
-    print(
-        f"  skipped: {counts['skipped']} (vis_lp or vis_pix not finished)", flush=True
-    )
-    print(f"  error:   {counts['error']}", flush=True)
+    try:
+        for dataset_dir in dataset_dirs:
+            counts[process_dataset(dataset_dir, dataset_main_dir, inspect_dir)] += 1
+    except Exception:
+        counts["error"] += 1
+        raise
+    finally:
+        print(f"Done in {time.time() - started:.1f}s", flush=True)
+        for name, count in counts.items():
+            print(f"  {name}: {count}", flush=True)
 
     if args.tar_to:
         tar_path = Path(args.tar_to)
@@ -321,8 +357,8 @@ def main() -> int:
             f"Tar done in {time.time() - started:.1f}s ({size_mb:.1f} MB)", flush=True
         )
 
-    # Bad zips and missing members are surfaced as WARN lines but must not fail
-    # the wrapper — the downstream bundle stages still want to run.
+    # Missing optional members skip a lens; corrupt archives and write errors
+    # propagate so the wrapper cannot report a structurally broken build as OK.
     return 0
 
 

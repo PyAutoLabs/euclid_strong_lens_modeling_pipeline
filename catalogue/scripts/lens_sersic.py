@@ -90,7 +90,8 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
+@catalogue_util.reported("lens_sersic", "rows")
+def main(counts):
     """
     __Query: A Different Pipeline Tag__
 
@@ -120,7 +121,9 @@ def main():
         print(f"no sample directory at {sample_root}; nothing to do")
         return
 
-    agg = Aggregator.from_directory(directory=sample_root, completed_only=True, unzip_temporary=True)
+    agg = Aggregator.from_directory(
+        directory=sample_root, completed_only=True, unzip_temporary=True
+    )
 
     agg_query = agg.query(agg.unique_tag == args.unique_tag)
     agg_query = agg_query.query(agg_query.search.name == args.search_name)
@@ -128,26 +131,21 @@ def main():
     """
     __An Empty Query Is Not An Error__
 
-    ``AggregateCSV`` raises ``ValueError("The aggregator is empty.")`` when the
-    two queries above match nothing — a results tree holding only the other
-    stage, which is the ordinary case for a ``vis_lp``-only tree scraped with
-    the default ``--search_name=vis_pix``.
-
-    That is caught and reported rather than raised, exactly as
-    ``deblending.py`` and ``magnitudes.py`` already do, because
-    ``scripts/build_inspection_bundle.sh`` runs under ``set -e``: a raised
-    ``ValueError`` here aborts every later stage of the bundle over a lens
-    stage that simply has not run yet. Returning early leaves no CSV, which is
-    the honest record of "nothing matched" and is what the later stages and the
-    per-lens split both already handle.
+    Empty queries are detected before constructing ``AggregateCSV`` so a
+    stage with no matching results does not abort the shell bundle. Other
+    construction and serialization errors propagate. A refresh with no usable
+    rows clears this producer's stale CSV rows and per-lens splits.
     """
-    try:
-        agg_csv = af.AggregateCSV(aggregator=agg_query)
-    except ValueError as e:
-        print(
-            f"no completed {args.unique_tag}/{args.search_name} results: {e}"
-        )
+    agg_query = catalogue_util.available_results(
+        agg_query,
+        counts,
+        values=(),
+    )
+    if not len(agg_query):
+        print(f"no usable completed {args.unique_tag} results")
+        catalogue_util.clear_csv_rows(inspect_path, "lens_sersic.csv")
         return
+    agg_csv = af.AggregateCSV(aggregator=agg_query)
 
     """
     __Row Identity And Value Flavours__
@@ -209,7 +207,8 @@ def main():
     self-contained. Same contract as ``lens_mass.py``, same helper.
     """
     out_csv = inspect_path / "lens_sersic.csv"
-    agg_csv.save(path=out_csv)
+    catalogue_util.save_csv(agg_csv, out_csv)
+    counts.built = len(lens_name_list)
     print(f"wrote {out_csv} ({len(lens_name_list)} rows)")
 
     written = catalogue_util.write_per_tile_csv(

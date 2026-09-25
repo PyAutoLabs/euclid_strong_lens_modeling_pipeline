@@ -160,14 +160,14 @@ def write_mass_maps(agg_fits, output_dataset_path: Path, products=None):
     output_dataset_path = Path(output_dataset_path)
     output_dataset_path.mkdir(parents=True, exist_ok=True)
 
-    written = []
-    for filename, hdus in products.items():
-        hdu_list = agg_fits.extract_fits(hdus=hdus)
-        target = output_dataset_path / filename
-        hdu_list.writeto(target, overwrite=True)
-        written.append(target)
-
-    return written
+    extracted = {}
+    try:
+        for filename, hdus in products.items():
+            extracted[filename] = agg_fits.extract_fits(hdus=hdus)
+        return catalogue_util.write_fits_products(extracted, output_dataset_path)
+    finally:
+        for hdus in extracted.values():
+            hdus.close()
 
 
 def parse_args():
@@ -196,7 +196,8 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
+@catalogue_util.reported("lens_mass_maps")
+def main(counts):
     """
     __One Aggregator Per Lens, And The Skip__
 
@@ -205,12 +206,9 @@ def main():
     so the aggregator handed to ``AggregateFITS`` must contain that lens and
     nothing else.
 
-    Failures are per lens too. A lens with no completed search under the tag and
-    search name makes ``af.AggregateFITS`` raise ``ValueError`` ("The aggregator
-    is empty."), and one whose fit wrote no ``tracer.fits`` raises
-    ``FileNotFoundError`` at extraction; both are caught, reported and skipped so
-    the rest of the sample still gets bundled — that is what lets a sample still
-    being fitted produce a partial bundle rather than a broken one.
+    Empty queries and absent tracer FITS are warned and skipped per lens.
+    Corrupt inputs, invalid HDUs and write errors remain fatal. All products
+    are extracted and staged before any published map is replaced.
     """
     args = parse_args()
     output_path, inspect_path = catalogue_util.resolve_paths(args)
@@ -224,11 +222,11 @@ def main():
     dataset_name_list = catalogue_util.dataset_names_from(sample_root)
 
     for dataset_name in dataset_name_list:
-
         output_dataset_path = inspect_path / dataset_name
 
         # Idempotency: skip a lens whose three mass maps are already present.
         if mass_maps_exist(output_dataset_path, products):
+            counts.already_present += 1
             continue
 
         print(dataset_name)
@@ -243,12 +241,16 @@ def main():
         if args.search_name is not None:
             agg_query = agg_query.query(agg_query.search.name == args.search_name)
 
-        try:
-            agg_fits = af.AggregateFITS(aggregator=agg_query)
-            write_mass_maps(agg_fits, output_dataset_path, products=products)
-        except (ValueError, FileNotFoundError) as e:
-            print(f"skipping {dataset_name}: {e}")
+        if not catalogue_util.lens_assets_available(
+            agg_query,
+            counts,
+            dataset_name,
+            fits=("tracer",),
+        ):
             continue
+        agg_fits = af.AggregateFITS(aggregator=agg_query)
+        write_mass_maps(agg_fits, output_dataset_path, products=products)
+        counts.built += 1
 
 
 if __name__ == "__main__":

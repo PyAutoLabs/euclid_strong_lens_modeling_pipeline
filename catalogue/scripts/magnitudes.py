@@ -176,7 +176,8 @@ def latest_result_per_lens_band(aggregator, sample_root: Path):
     )
 
 
-def main():
+@catalogue_util.reported("magnitudes", "rows")
+def main(counts):
     """
     __Query: Every Band Under One Tag__
 
@@ -189,10 +190,10 @@ def main():
     search for every lens in the sample — which is why the master CSV has one row
     per ``(lens, waveband)`` rather than one row per lens.
 
-    ``AggregateCSV`` raises ``ValueError`` when handed an empty aggregator, which
-    is the ordinary case for a sample whose SED chain has not run yet. That is
-    caught and reported rather than raised: stage 9 of the bundle builder should
-    leave a partial bundle alone, not abort it.
+    Results without WCS or latent output are warned and excluded after newest
+    result selection. The remaining rows supply both labels and values. An
+    empty selection returns normally, clearing stale rows from a prior build;
+    malformed assets and structural errors still fail the stage.
     """
     args = parse_args()
     output_path, inspect_path = catalogue_util.resolve_paths(args)
@@ -206,15 +207,22 @@ def main():
         print(f"no sample directory at {sample_root}; nothing to do")
         return
 
-    agg = Aggregator.from_directory(directory=sample_root, completed_only=True, unzip_temporary=True)
+    agg = Aggregator.from_directory(
+        directory=sample_root, completed_only=True, unzip_temporary=True
+    )
     agg_query = agg.query(agg.unique_tag == args.unique_tag)
     agg_query = latest_result_per_lens_band(agg_query, sample_root=sample_root)
 
-    try:
-        agg_csv = af.AggregateCSV(aggregator=agg_query)
-    except ValueError as e:
-        print(f"no completed {args.unique_tag} results: {e}")
+    agg_query = catalogue_util.available_results(
+        agg_query,
+        counts,
+        values=("wcs", "latent.latent_summary"),
+    )
+    if not len(agg_query):
+        print(f"no usable completed {args.unique_tag} results")
+        catalogue_util.clear_csv_rows(inspect_path, "magnitudes.csv")
         return
+    agg_csv = af.AggregateCSV(aggregator=agg_query)
 
     """
     __Three Label Columns__
@@ -347,7 +355,8 @@ def main():
     table, self-contained beside its ``fit_multi_wavelength.png``.
     """
     out_csv = inspect_path / "magnitudes.csv"
-    agg_csv.save(path=out_csv)
+    catalogue_util.save_csv(agg_csv, out_csv)
+    counts.built = len(lens_name_list)
     print(f"wrote {out_csv} ({len(lens_name_list)} rows)")
 
     written = catalogue_util.write_per_tile_csv(

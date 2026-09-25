@@ -16,6 +16,11 @@ import autolens as al
 import autolens.plot as aplt
 from autoarray.inversion.mappings.mapping import connected_components_from
 
+try:
+    import positions_finder
+except ImportError:  # imported as a member of the package
+    from . import positions_finder
+
 
 def _find_local_maxima(flux: np.ndarray) -> List[tuple]:
     """
@@ -24,20 +29,7 @@ def _find_local_maxima(flux: np.ndarray) -> List[tuple]:
     A pixel is a local maximum if it is strictly brighter than its four
     orthogonal neighbours. Border pixels are skipped.
     """
-    ny, nx = flux.shape
-    maxima = []
-    for r in range(1, ny - 1):
-        for c in range(1, nx - 1):
-            v = flux[r, c]
-            if (
-                v > flux[r - 1, c]
-                and v > flux[r + 1, c]
-                and v > flux[r, c - 1]
-                and v > flux[r, c + 1]
-            ):
-                maxima.append((float(v), r, c))
-    maxima.sort(reverse=True)
-    return maxima
+    return positions_finder.find_local_maxima(flux)
 
 
 def _pixel_to_arcsec(
@@ -52,25 +44,50 @@ def _pixel_to_arcsec(
     return [y, x]
 
 
+def _positions_result_from_source_flux(
+    source_flux: np.ndarray,
+    noise_map: Optional[np.ndarray],
+    pixel_scale: float,
+    n_positions: int = 4,
+    lens_flux: Optional[np.ndarray] = None,
+    light_centre=None,
+):
+    """
+    The production writer's full result (``positions_finder.FinderResult``,
+    ``method: "gate"``) for a source-flux map; the same call
+    ``preprocess/segmentation.py`` makes.
+    """
+    return positions_finder.find_positions_gate(
+        source_flux,
+        positions_finder.snr_map_from(source_flux, noise_map),
+        light_centre=light_centre,
+        pixel_scale=pixel_scale,
+        n_positions=n_positions,
+        lens_flux=lens_flux,
+    )
+
+
 def _compute_positions_from_source_flux(
     source_flux: np.ndarray,
     noise_map: Optional[np.ndarray],
     pixel_scale: float,
     n_positions: int = 4,
+    lens_flux: Optional[np.ndarray] = None,
+    light_centre=None,
 ) -> List[List[float]]:
     """
     Compute up to *n_positions* multiple-image positions from a source flux map.
 
-    Mirrors the logic in ``preprocess/segmentation.py``, which is the canonical
-    writer of ``positions.json``. This function is the fallback used by
+    A thin wrapper over ``positions_finder.find_positions_gate``, the
+    production writer ``preprocess/segmentation.py`` (the canonical writer of
+    ``positions.json``) also calls. This function is the fallback used by
     `load_vis_dataset` when no ``positions.json`` is present but the dataset
     ships a ``segmentation/source_flux.fits`` map.
 
-    Local maxima above a signal-to-noise threshold of 3.0 are taken as candidate
-    multiple images. If none of the selected positions lies on the opposite side
-    of the lens from the brightest one (i.e. there is no counter-image), the
-    threshold is walked down in steps of 0.1 until a counter-image is found,
-    which then replaces the weakest position.
+    Local maxima with signal-to-noise >= 3 outside 0.15" of the light centre
+    (no SNR walk-down; the brightest ``n_positions``) go through the positions
+    gate's steps -- fixed-centre SIE + shear quick fit, leave-one-out outlier
+    drop, threshold -- and the pair floor (a final pair needs both SNRs >= 3).
 
     Parameters
     ----------
@@ -83,59 +100,18 @@ def _compute_positions_from_source_flux(
         Pixel scale in arcsec used to convert pixel indices to arcsec.
     n_positions
         Maximum number of positions returned.
+    lens_flux, light_centre
+        The segmentation lens-flux map and / or the fixed mass centre; by
+        default the brightest lens-flux pixel, else the frame centre.
 
     Returns
     -------
     list[list[float]]
         List of ``[y, x]`` arcsec positions, brightest first.
     """
-    SNR_THRESHOLD = 3.0
-    SNR_STEP = 0.1
-    ny, nx = source_flux.shape
-
-    if noise_map is not None:
-        with np.errstate(divide="ignore", invalid="ignore"):
-            snr_map = np.where(noise_map > 0, source_flux / noise_map, 0.0)
-    else:
-        snr_map = None
-
-    all_maxima = _find_local_maxima(source_flux)
-    maxima = [
-        (v, r, c)
-        for v, r, c in all_maxima
-        if snr_map is None or snr_map[r, c] > SNR_THRESHOLD
-    ]
-
-    if not maxima:
-        return []
-
-    selected = maxima[:n_positions]
-    positions = [_pixel_to_arcsec(r, c, ny, nx, pixel_scale) for _, r, c in selected]
-
-    has_counter = any(
-        p[0] * positions[0][0] < 0 or p[1] * positions[0][1] < 0 for p in positions[1:]
-    )
-    if not has_counter and snr_map is not None:
-        threshold = SNR_THRESHOLD - SNR_STEP
-        while threshold >= 0:
-            lower_maxima = sorted(
-                [(v, r, c) for v, r, c in all_maxima if snr_map[r, c] > threshold],
-                reverse=True,
-            )
-            for v, r, c in lower_maxima:
-                candidate = _pixel_to_arcsec(r, c, ny, nx, pixel_scale)
-                if candidate not in positions and (
-                    candidate[0] * positions[0][0] < 0
-                    or candidate[1] * positions[0][1] < 0
-                ):
-                    positions[-1] = candidate
-                    break
-            else:
-                threshold -= SNR_STEP
-                continue
-            break
-
-    return positions
+    return _positions_result_from_source_flux(
+        source_flux, noise_map, pixel_scale, n_positions, lens_flux, light_centre
+    ).positions
 
 
 def subplot_rgb(
@@ -416,8 +392,8 @@ class VisualizerImaging(al.VisualizerImaging):
             model=model,
         )
 
-        # Load the images. DR1 tile dumps ship `.jpg` thumbnails, earlier
-        # datasets `.png`, so try each extension in turn.
+        # DR1 images ship as either one RGB or the earlier rgb_0/rgb_1 pair.
+        # Each form may use PNG or JPEG.
         def _open_rgb(stem):
             for ext in (".png", ".jpg", ".jpeg"):
                 path = dataset_main_path / f"{stem}{ext}"
@@ -425,33 +401,39 @@ class VisualizerImaging(al.VisualizerImaging):
                     return np.array(Image.open(path))
             return None
 
-        img0 = _open_rgb("rgb_0")
-        img1 = _open_rgb("rgb_1")
-        if img0 is None or img1 is None:
-            return
+        single_rgb = _open_rgb("rgb")
+        if single_rgb is not None:
+            images = [single_rgb]
+            titles = ["RGB"]
+        else:
+            img0 = _open_rgb("rgb_0")
+            img1 = _open_rgb("rgb_1")
+            if img0 is None or img1 is None:
+                return
+            images = [img0, img1]
+            titles = ["RGB 0", "RGB 1"]
 
-        mask = al.Mask2D.all_false(
-            shape_native=(img0.shape[0], img0.shape[1]),
-            pixel_scales=dataset.pixel_scales,
-            origin=dataset.mask.origin,
-        )
-
-        img0 = al.Array2DRGB(values=img0, mask=mask)
-        img1 = al.Array2DRGB(values=img1, mask=mask)
-
-        mask_rgb = al.Mask2D.circular(
-            shape_native=(img0.shape[0], img0.shape[1]),
-            pixel_scales=dataset.pixel_scales,
-            radius=dataset.mask.circular_radius,
-            origin=dataset.mask.origin,
-        )
-
-        img0_masked = al.Array2DRGB(values=img0, mask=mask_rgb)
-        img1_masked = al.Array2DRGB(values=img1, mask=mask_rgb)
+        originals = []
+        masked = []
+        for image in images:
+            shape = image.shape[:2]
+            mask = al.Mask2D.all_false(
+                shape_native=shape,
+                pixel_scales=dataset.pixel_scales,
+                origin=dataset.mask.origin,
+            )
+            mask_rgb = al.Mask2D.circular(
+                shape_native=shape,
+                pixel_scales=dataset.pixel_scales,
+                radius=dataset.mask.circular_radius,
+                origin=dataset.mask.origin,
+            )
+            originals.append(al.Array2DRGB(values=image, mask=mask))
+            masked.append(al.Array2DRGB(values=image, mask=mask_rgb))
 
         subplot_rgb(
-            arrays=[img0, img1, img0_masked, img1_masked],
-            titles=["RGB 0", "RGB 1", "RGB 0 Masked", "RGB 1 Masked"],
+            arrays=originals + masked,
+            titles=titles + [f"{title} Masked" for title in titles],
             output_path=paths.image_path,
             output_filename="rgb",
             output_format="png",
@@ -696,11 +678,9 @@ class AnalysisImaging(al.AnalysisImaging):
         array_2d = xp.zeros(image.mask.shape, dtype=image.dtype)
 
         if xp is np:
-
             array_2d[image.mask.slim_to_native_tuple] = image.array
 
         else:
-
             array_2d = array_2d.at[image.mask.slim_to_native_tuple].set(image.array)
 
         return array_2d
@@ -1308,6 +1288,37 @@ def coolest_json_from(
 # ---------------------------------------------------------------------------
 
 
+POSITIONS_META_NAME = "positions_meta.json"
+
+
+def positions_likelihood_list_from_meta(dataset_main_path):
+    """
+    Read the positions gate's ``positions_meta.json`` sidecar, if there is one.
+
+    The gate (``scripts/tools/positions_gate.py``) leaves ``positions.json`` raw
+    and writes the positions it kept plus a per-tile ``PositionsLH`` threshold
+    ``T = min(max(2 s_min, 0.3"), 0.5")`` beside it.
+
+    Returns
+    -------
+    (bool, list | None)
+        ``(False, None)`` when no sidecar exists (the caller keeps its default
+        behaviour); ``(True, None)`` when the gate left fewer than two positions
+        (status ``n_lt_2``: fit with the positions penalty off); otherwise
+        ``(True, [al.PositionsLH(threshold=T, positions=positions_used)])``.
+    """
+    path = Path(dataset_main_path) / POSITIONS_META_NAME
+    if not path.exists():
+        return False, None
+    with open(path) as f:
+        meta = json.load(f)
+    used = meta.get("positions_used") or []
+    if meta.get("status") == "n_lt_2" or len(used) < 2 or meta.get("threshold") is None:
+        return True, None
+    positions = al.Grid2DIrregular(values=[tuple(p) for p in used])
+    return True, [al.PositionsLH(threshold=float(meta["threshold"]), positions=positions)]
+
+
 @dataclass
 class EuclidDataset:
     """
@@ -1559,44 +1570,60 @@ def load_vis_dataset(
         psf_lowest_resolution = None
         psf_lowest_resolution_fwhm = None
 
-    try:
-        positions = al.Grid2DIrregular(
-            values=al.from_json(file_path=dataset_main_path / "positions.json")
-        )
-        # A single position is not a multiple-image constraint; treat as absent.
-        if len(positions) == 1:
-            raise FileNotFoundError
-        positions_likelihood_list = [al.PositionsLH(threshold=0.2, positions=positions)]
-    except FileNotFoundError:
-        # No `positions.json`: derive positions from the segmentation source
-        # flux map and the VIS noise map, mirroring `preprocess/segmentation.py`.
-        source_flux_path = dataset_main_path / "segmentation" / "source_flux.fits"
-        if (
-            source_flux_path.exists()
-            and fits.getdata(source_flux_path).shape == dataset.shape_native
-        ):
-            source_flux = fits.getdata(source_flux_path).astype(np.float32)
-            try:
-                noise_map = fits.getdata(
-                    dataset_main_path / dataset_fits_name,
-                    ext=vis_index * 3 + 3,
-                ).astype(np.float32)
-            except Exception:
-                noise_map = None
-            pos_list = _compute_positions_from_source_flux(
-                source_flux=source_flux,
-                noise_map=noise_map,
-                pixel_scale=pixel_scale,
+    # A `positions_meta.json` sidecar written by the positions gate
+    # (`scripts/tools/positions_gate.py`) overrides the raw `positions.json`: it
+    # carries the positions that survived the gate and a per-tile threshold. With
+    # no sidecar the behaviour is unchanged (raw positions, threshold 0.2).
+    has_positions_meta, positions_likelihood_list = positions_likelihood_list_from_meta(
+        dataset_main_path
+    )
+    if not has_positions_meta:
+        try:
+            positions = al.Grid2DIrregular(
+                values=al.from_json(file_path=dataset_main_path / "positions.json")
             )
-            if len(pos_list) >= 2:
-                positions = al.Grid2DIrregular(values=pos_list)
-                positions_likelihood_list = [
-                    al.PositionsLH(threshold=0.2, positions=positions)
-                ]
+            # A single position is not a multiple-image constraint; treat as absent.
+            if len(positions) == 1:
+                raise FileNotFoundError
+            positions_likelihood_list = [al.PositionsLH(threshold=0.2, positions=positions)]
+        except FileNotFoundError:
+            # No `positions.json`: derive positions from the segmentation source
+            # flux map and the VIS noise map with the production writer
+            # `preprocess/segmentation.py` uses, and its per-tile threshold.
+            source_flux_path = dataset_main_path / "segmentation" / "source_flux.fits"
+            if (
+                source_flux_path.exists()
+                and fits.getdata(source_flux_path).shape == dataset.shape_native
+            ):
+                source_flux = fits.getdata(source_flux_path).astype(np.float32)
+                try:
+                    noise_map = fits.getdata(
+                        dataset_main_path / dataset_fits_name,
+                        ext=vis_index * 3 + 3,
+                    ).astype(np.float32)
+                except Exception:
+                    noise_map = None
+                lens_flux_map = None
+                if lens_flux_path.exists():
+                    lens_flux_map = fits.getdata(lens_flux_path).astype(np.float32)
+                    if lens_flux_map.shape != source_flux.shape:
+                        lens_flux_map = None
+                result = _positions_result_from_source_flux(
+                    source_flux=source_flux,
+                    noise_map=noise_map,
+                    pixel_scale=pixel_scale,
+                    lens_flux=lens_flux_map,
+                    light_centre=tuple(dataset_centre),
+                )
+                if len(result.positions) >= 2 and result.threshold is not None:
+                    positions = al.Grid2DIrregular(values=result.positions)
+                    positions_likelihood_list = [
+                        al.PositionsLH(threshold=result.threshold, positions=positions)
+                    ]
+                else:
+                    positions_likelihood_list = None
             else:
                 positions_likelihood_list = None
-        else:
-            positions_likelihood_list = None
 
     return EuclidDataset(
         dataset=dataset,

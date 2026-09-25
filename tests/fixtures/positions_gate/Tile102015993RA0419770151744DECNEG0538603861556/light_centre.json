@@ -1,0 +1,7 @@
+{
+  "light_centre": [
+    0.126093,
+    0.132565
+  ],
+  "source": "positions_gate.light_centre_from_dataset on the euclid_dr1 dr1_sep1_rest tile (= util.load_vis_dataset dataset_centre)"
+}
