@@ -29,6 +29,19 @@ WHAT THIS DOES
     5. **threshold** — ``T = min(max(2 s_final, 0.3"), 0.5")``; a tile whose
        ``2 s_final`` exceeds the cap goes to review.
 
+    6. **pair floor** (phase 2) — when the tile ships its segmentation maps
+       (``segmentation/source_flux.fits`` and the VIS RMS map), a final set of
+       exactly two positions needs both peak source-flux SNRs >= 3; otherwise
+       the fainter is dropped (``pair_floor``) and the tile goes to review with
+       no positions.
+
+    Steps 1-6 are ``positions_finder.gate_result``, the same call that ends
+    the production positions writer (``positions_finder.find_positions_gate``,
+    used by ``preprocess/segmentation.py`` and the ``util`` fallback), so
+    existing and new tiles share one logic. Extra sidecar keys over phase 1:
+    ``method`` (``gate``), ``finder_version``, ``s_final``, ``snr`` and
+    ``added`` (always empty).
+
     The result is written next to ``positions.json`` as ``positions_meta.json``,
     which ``util.load_vis_dataset`` reads (positions used + threshold). A batch
     run also writes ``positions_review.csv`` (review, flag and ``n_lt_2`` tiles)
@@ -42,7 +55,9 @@ WHAT THIS DOES
     ``quickfit3.py`` / ``trace.py`` / ``eval_sample.py`` prototype.
 
     Pure numpy / scipy / astropy: no PyAutoLens import, so it runs in seconds per
-    tile on a login node or a small CPU array job.
+    tile on a login node or a small CPU array job. The tracer, quick fit,
+    threshold rule and light-centre port are shared with the segmentation writer
+    and the ``util`` fallback through ``positions_finder.py`` at the package root.
 
 USAGE
     python scripts/tools/positions_gate.py --tile dataset/<sample>/<tile>
@@ -60,364 +75,60 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-from scipy.optimize import least_squares, minimize
 
-GATE_VERSION = "1.0"
+# The tracer, quick fit, threshold rule and light centre live in the shared
+# pure-numpy finder module at the package root.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from positions_finder import (  # noqa: E402,F401
+    CAP,
+    CENTRAL_RADIUS,
+    META_VERSION,
+    D_OUT,
+    DJ,
+    E_MAX,
+    EASY,
+    FACTOR,
+    FLOOR,
+    G_MAX,
+    META_NAME,
+    NM_BAND,
+    PARAM_NAMES,
+    SIG_E,
+    SIG_G,
+    SIG_S,
+    TE_MAX,
+    _bounds,
+    _chi2_fit,
+    _nm_fit,
+    _nm_objective,
+    _pairwise,
+    _resid,
+    _sep_fit,
+    _starts,
+    brightest_sub_pixel_centre,
+    DJ_FLAG,
+    apply_pair_floor,
+    central_cut,
+    gate_result,
+    leave_one_out,
+    max_separation,
+    meta_from_result,
+    outlier_drop,
+    plausibility_flag,
+    quick_fit,
+    snr_at,
+    snr_map_from,
+    source_positions,
+    threshold_from,
+)
+from positions_finder import gate_positions as _pf_gate_positions  # noqa: E402
 
-# Step 1: hard cut around the light centre (one VIS PSF FWHM).
-CENTRAL_RADIUS = 0.15
-# Step 3: a set is "traceable" when s_min <= D_OUT (the vis_lp default threshold).
-D_OUT = 0.2
-# Step 3: a leave-one-out candidate wins on cost when it beats the runner-up by DJ.
-DJ = 4.0
-# Step 4: plausibility flag when one drop lowers J by at least DJ_FLAG.
-DJ_FLAG = 10.0
-# Step 5: T = min(max(FACTOR * s_final, FLOOR), CAP).
-FACTOR = 2.0
-FLOOR = 0.3
-CAP = 0.5
+# 2.1: phase 1 steps + the pair floor, shared with the production writer
+# (2.0 was the reconcile-loop finder path, now a diagnostic only).
+GATE_VERSION = META_VERSION
 
-# Quick-fit model space (vis_lp: Isothermal + ExternalShear, config/priors).
-TE_MAX = 8.0
-G_MAX = 0.3
-E_MAX = 0.95
-# Plausibility cost J: source-plane scatter, ell_comps prior, weak shear prior.
-SIG_S = 0.05
-SIG_E = 0.3
-SIG_G = 0.1
-# A seed already tracing the set this well skips the minimax polish.
-EASY = 0.02
-# The census Nelder-Mead fit (~3 CPU-s) is only run when the least-squares/SLSQP
-# s_min falls where an optimiser miss could change a decision: below 0.15" the
-# threshold sits at the floor and the set passes whatever NM finds; above 0.75"
-# no plausible miss (the worst the research saw was 0.37" vs 0.16") reaches the
-# 0.2" pass line or the 0.25" floor-to-cap band.
-NM_BAND = (0.15, 0.75)
-
-META_NAME = "positions_meta.json"
 REVIEW_CSV = "positions_review.csv"
 SUBMIT_TXT = "positions_submit.txt"
-
-PARAM_NAMES = ("einstein_radius", "ell_comps_0", "ell_comps_1", "gamma_1", "gamma_2")
-
-
-# ---------------------------------------------------------------------------
-# Ray tracing (numpy SIE + external shear, PyAutoLens conventions)
-# ---------------------------------------------------------------------------
-
-
-def source_positions(positions: np.ndarray, params: Sequence[float]) -> np.ndarray:
-    """
-    Trace image-plane positions to the source plane through an SIE + shear.
-
-    ``positions`` are (y, x) arcsec *relative to the mass centre*; ``params`` is
-    ``(einstein_radius, ell_comps_0, ell_comps_1, gamma_1, gamma_2)`` in the
-    PyAutoGalaxy parameterisation (``al.mp.Isothermal`` + ``al.mp.ExternalShear``).
-    Reproduces ``al.Tracer.traced_grid_2d_list_from(...)[-1]`` up to a constant
-    shift (the shear centre), which cancels in every pairwise separation.
-    """
-    te, e0, e1, g1, g2 = params[:5]
-    y, x = positions[:, 0], positions[:, 1]
-    f = min(np.hypot(e0, e1), 0.999)
-    q = min(max((1 - f) / (1 + f), 1e-4), 0.99999)
-    ang = 0.5 * np.arctan2(e0, e1)
-    c, s = np.cos(ang), np.sin(ang)
-    xr = x * c + y * s
-    yr = -x * s + y * c
-    sq = np.sqrt(1 - q * q)
-    psi = np.sqrt(q * q * xr * xr + yr * yr) + 1e-12
-    fac = 2.0 * (te / (1 + q)) * q / sq
-    ay = fac * np.arctanh(np.clip(sq * yr / psi, -0.999999, 0.999999))
-    ax = fac * np.arctan(sq * xr / psi)
-    ax2 = ax * c - ay * s
-    ay2 = ax * s + ay * c
-    sy = -g1 * y + g2 * x
-    sx = g1 * x + g2 * y
-    return np.stack([y - ay2 - sy, x - ax2 - sx], 1)
-
-
-def _pairwise(beta: np.ndarray) -> np.ndarray:
-    iu = np.triu_indices(len(beta), 1)
-    return np.hypot(beta[iu[0], 0] - beta[iu[1], 0], beta[iu[0], 1] - beta[iu[1], 1])
-
-
-def max_separation(positions: np.ndarray, params: Sequence[float]) -> float:
-    """Maximum pairwise source-plane separation (the ``PositionsLH`` statistic)."""
-    return float(_pairwise(source_positions(positions, params)).max())
-
-
-# ---------------------------------------------------------------------------
-# Quick fit
-# ---------------------------------------------------------------------------
-
-
-def _bounds() -> Tuple[np.ndarray, np.ndarray]:
-    ell = E_MAX / np.sqrt(2) * 1.3
-    lo = np.array([0.0, -ell, -ell, -G_MAX, -G_MAX])
-    hi = np.array([TE_MAX, ell, ell, G_MAX, G_MAX])
-    return lo, hi
-
-
-def _starts(positions: np.ndarray) -> List[np.ndarray]:
-    """quickfit3 starts (3 ellipticities x {1, 0.6} r_mean) + a thetaE grid (0.5, 2 r_mean)."""
-    r = np.hypot(positions[:, 0], positions[:, 1]).mean()
-    out = []
-    for e in ((0.0, 0.0), (0.3, 0.0), (0.0, 0.3)):
-        for te in (r, 0.6 * r):
-            out.append(np.array([te, e[0], e[1], 0.0, 0.0]))
-    for te in (0.5 * r, 2.0 * r):
-        out.append(np.array([te, 0.0, 0.0, 0.0, 0.0]))
-    return out
-
-
-def _resid(p, positions, shear_prior):
-    b = source_positions(positions, p)
-    r = [((b - b.mean(0)) / SIG_S).ravel(), [p[1] / SIG_E, p[2] / SIG_E]]
-    if shear_prior:
-        r.append([p[3] / SIG_G, p[4] / SIG_G])
-    return np.concatenate(r)
-
-
-def _chi2_fit(positions, shear_prior, seeds):
-    lo, hi = _bounds()
-    sols = []
-    for s in seeds:
-        s = np.clip(s, lo + 1e-9, hi - 1e-9)
-        res = least_squares(
-            _resid,
-            s,
-            args=(positions, shear_prior),
-            bounds=(lo, hi),
-            method="trf",
-            max_nfev=150,
-        )
-        sols.append((2 * res.cost, res.x))
-    sols.sort(key=lambda t: t[0])
-    return sols
-
-
-def _sep_fit(positions, seeds):
-    """SLSQP minimax: min t s.t. every pairwise source-plane distance <= t."""
-    lo, hi = _bounds()
-    best = (np.inf, None)
-    for x0 in seeds:
-        z0 = np.append(x0, _pairwise(source_positions(positions, x0)).max())
-        cons = [
-            {"type": "ineq", "fun": lambda z: z[-1] - _pairwise(source_positions(positions, z[:-1]))},
-            {"type": "ineq", "fun": lambda z: E_MAX - np.hypot(z[1], z[2])},
-        ]
-        bnds = list(zip(lo, hi)) + [(0, None)]
-        res = minimize(
-            lambda z: z[-1],
-            z0,
-            method="SLSQP",
-            constraints=cons,
-            bounds=bnds,
-            options=dict(maxiter=200, ftol=1e-9),
-        )
-        p = np.clip(res.x[:-1], lo, hi)
-        s = max_separation(positions, p)
-        s0 = max_separation(positions, x0)
-        if s0 < s:
-            s, p = s0, x0
-        if s < best[0]:
-            best = (s, p)
-    return float(best[0]), best[1]
-
-
-def _nm_objective(p, positions, soft):
-    te, e0, e1, g1, g2 = p
-    pen = 0.0
-    pen += max(0, -te) * 100 + max(0, te - TE_MAX) * 100
-    pen += max(0, np.hypot(e0, e1) - E_MAX) * 100
-    pen += max(0, abs(g1) - G_MAX) * 100 + max(0, abs(g2) - G_MAX) * 100
-    te = min(max(te, 0), TE_MAX)
-    b = source_positions(
-        positions, (te, e0, e1, np.clip(g1, -G_MAX, G_MAX), np.clip(g2, -G_MAX, G_MAX))
-    )
-    d = _pairwise(b)
-    if soft:
-        return np.sqrt((d**2).mean()) + pen
-    return d.max() + pen
-
-
-def _nm_fit(positions):
-    """The 2026-09-23 census fit (census/trace.py): multi-start Nelder-Mead."""
-    lo, hi = _bounds()
-    r = np.hypot(positions[:, 0], positions[:, 1])
-    best = (np.inf, None)
-    for e in ((0, 0), (0.3, 0), (0, 0.3), (-0.3, 0), (0, -0.3)):
-        for te in (r.mean(), np.median(r), 0.5 * r.mean()):
-            s = (te, e[0], e[1], 0.0, 0.0)
-            res = minimize(
-                _nm_objective,
-                s,
-                args=(positions, True),
-                method="Nelder-Mead",
-                options=dict(maxiter=400, xatol=1e-4, fatol=1e-5),
-            )
-            res2 = minimize(
-                _nm_objective,
-                res.x,
-                args=(positions, False),
-                method="Nelder-Mead",
-                options=dict(maxiter=400, xatol=1e-4, fatol=1e-5),
-            )
-            # Evaluate the exact statistic inside the real bounds (the NM penalty
-            # can leave it marginally outside).
-            p = np.array(res2.x)
-            p[0] = np.clip(p[0], 0, TE_MAX)
-            p[3:5] = np.clip(p[3:5], -G_MAX, G_MAX)
-            if np.hypot(p[1], p[2]) > E_MAX:
-                continue
-            sep = max_separation(positions, p)
-            if sep < best[0]:
-                best = (sep, p)
-            if best[0] < 0.1:
-                return float(best[0]), best[1]
-    return float(best[0]), best[1]
-
-
-def quick_fit(positions, centre=(0.0, 0.0), nseed: int = 3) -> Dict:
-    """
-    Fit a fixed-centre SIE + shear to a set of positions (``vis_lp``'s mass model).
-
-    Parameters
-    ----------
-    positions
-        (N, 2) array of (y, x) arcsec image-plane positions, N >= 2.
-    centre
-        (y, x) mass centre, fixed (the light centre ``vis_lp`` pins its mass to).
-    nseed
-        Number of best least-squares solutions polished by the minimax fit.
-
-    Returns
-    -------
-    dict
-        ``s_min`` (minimum achievable max pairwise source-plane separation),
-        ``params`` (the parameters reaching it), ``J`` (plausibility cost) and
-        ``params_J`` (its parameters).
-    """
-    pos = np.asarray(positions, float) - np.asarray(centre, float)
-    if len(pos) < 2:
-        raise ValueError("quick_fit needs at least two positions")
-    starts = _starts(pos)
-    # Uniform shear prior (the real fit's) for the separation seeds.
-    sols_np = _chi2_fit(pos, shear_prior=False, seeds=starts)
-    seeds = [x for _, x in sols_np[:nseed]]
-    ss = [max_separation(pos, x) for x in seeds]
-    k = int(np.argmin(ss))
-    if ss[k] < EASY:
-        s_min, p_sep = float(ss[k]), seeds[k]
-    else:
-        s_min, p_sep = _sep_fit(pos, seeds)
-        if NM_BAND[0] < s_min <= NM_BAND[1]:
-            s_nm, p_nm = _nm_fit(pos)
-            if s_nm < s_min:
-                s_min, p_sep = s_nm, p_nm
-    sols = _chi2_fit(pos, shear_prior=True, seeds=seeds[:2] + [starts[0]])
-    J, p_J = sols[0]
-    return dict(
-        s_min=float(s_min),
-        params=[float(v) for v in p_sep],
-        J=float(J),
-        params_J=[float(v) for v in p_J],
-    )
-
-
-# ---------------------------------------------------------------------------
-# Gate steps
-# ---------------------------------------------------------------------------
-
-
-def central_cut(positions, centre, r: float = CENTRAL_RADIUS) -> Tuple[List[int], List[int]]:
-    """Return ``(kept_indices, cut_indices)``: positions within ``r`` of ``centre`` are cut."""
-    pos = np.asarray(positions, float).reshape(-1, 2)
-    dist = np.hypot(pos[:, 0] - centre[0], pos[:, 1] - centre[1])
-    kept = [i for i in range(len(pos)) if dist[i] >= r]
-    cut = [i for i in range(len(pos)) if dist[i] < r]
-    return kept, cut
-
-
-def threshold_from(
-    s_final: float, factor: float = FACTOR, floor: float = FLOOR, cap: float = CAP
-) -> Tuple[float, bool]:
-    """``T = min(max(factor * s, floor), cap)``; the bool is True when ``factor * s > cap`` (review)."""
-    raw = factor * float(s_final)
-    return float(min(max(raw, floor), cap)), bool(raw > cap)
-
-
-def leave_one_out(positions, centre) -> List[Dict]:
-    """``quick_fit`` of every set with one position removed (index-aligned)."""
-    pos = np.asarray(positions, float)
-    return [quick_fit(np.delete(pos, i, 0), centre, nseed=2) for i in range(len(pos))]
-
-
-def outlier_drop(positions, centre, fit: Dict, loo: Optional[List[Dict]] = None) -> Dict:
-    """
-    Decide whether one position must be dropped for the set to trace (step 3).
-
-    Returns a dict with ``action`` (``keep`` | ``drop`` | ``review``), ``index``
-    (the local index dropped, or None), ``reason`` (``unique`` | ``J`` |
-    ``geom_inner`` | ``geom_outer`` for a drop; ``no_single_drop`` | ``n2_fail`` |
-    ``ambiguous`` for review), ``s_final`` and ``loo`` (the leave-one-out fits, or
-    None when they were not needed).
-    """
-    pos = np.asarray(positions, float)
-    n = len(pos)
-    out = dict(action="keep", index=None, reason="", s_final=fit["s_min"], loo=loo)
-    if fit["s_min"] <= D_OUT:
-        return out
-    if n < 3:
-        out.update(action="review", reason="n2_fail")
-        return out
-    if loo is None:
-        loo = leave_one_out(pos, centre)
-    out["loo"] = loo
-    sd = np.array([f["s_min"] for f in loo])
-    Jd = np.array([f["J"] for f in loo])
-    cand = [i for i in range(n) if sd[i] <= D_OUT]
-    drop, why = None, ""
-    if not cand:
-        out.update(action="review", reason="no_single_drop")
-        return out
-    if len(cand) == 1:
-        drop, why = cand[0], "unique"
-    else:
-        order = sorted(cand, key=lambda i: Jd[i])
-        if Jd[order[1]] - Jd[order[0]] >= DJ:
-            drop, why = order[0], "J"
-        else:
-            rl = np.hypot(pos[:, 0] - centre[0], pos[:, 1] - centre[1])
-            near = int(np.argmin(rl))
-            far = int(np.argmax(rl))
-
-            def med(i):
-                return float(np.median(np.delete(rl, i)))
-
-            if near in cand and (rl[near] < 0.3 or rl[near] < 0.6 * med(near)):
-                drop, why = near, "geom_inner"
-            elif far in cand and rl[far] > 1.5 * med(far):
-                drop, why = far, "geom_outer"
-    if drop is None:
-        out.update(action="review", reason="ambiguous")
-        return out
-    out.update(action="drop", index=int(drop), reason=why, s_final=float(sd[drop]))
-    return out
-
-
-def plausibility_flag(fit: Dict, loo: List[Dict]) -> Optional[int]:
-    """
-    Step 4 (list only): the local index whose removal lowers ``J`` by >= ``DJ_FLAG``
-    and beats every other removal by >= ``DJ``, else None.
-    """
-    if not loo or len(loo) < 3:
-        return None
-    Jd = np.array([f["J"] for f in loo])
-    i = int(np.argmin(Jd))
-    if fit["J"] - Jd[i] >= DJ_FLAG and np.sort(Jd)[1] - Jd[i] >= DJ:
-        return i
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -431,90 +142,13 @@ def _r4(v):
 
 def gate_positions(positions, centre) -> Dict:
     """
-    Run the full gate on one position set; returns the ``positions_meta.json`` dict
-    (without the tile-level keys). ``positions`` are raw (y, x) arcsec, ``centre``
-    the light centre.
+    Run the phase 1 gate (steps 1-5) on one position set; returns the
+    ``positions_meta.json`` dict (without the tile-level keys). ``positions``
+    are raw (y, x) arcsec, ``centre`` the light centre. The steps live in
+    ``positions_finder.gate_positions``, shared with the production writer;
+    :func:`gate_tile` adds the pair floor.
     """
-    pos_raw = np.asarray(positions, float).reshape(-1, 2)
-    centre = (float(centre[0]), float(centre[1]))
-    kept, cut = central_cut(pos_raw, centre)
-    dropped = [
-        dict(index=i, y=_r4(pos_raw[i, 0]), x=_r4(pos_raw[i, 1]), reason="central_cut")
-        for i in cut
-    ]
-    meta = dict(
-        version=GATE_VERSION,
-        light_centre=[_r4(centre[0]), _r4(centre[1])],
-        n_raw=len(pos_raw),
-        positions_used=[],
-        dropped=dropped,
-        flag_index=None,
-        s_min_all=None,
-        s_min=None,
-        J=None,
-        threshold=None,
-        factor=FACTOR,
-        floor=FLOOR,
-        cap=CAP,
-        status="keep",
-        review_reason="",
-        params=None,
-    )
-    used_idx = list(kept)
-    if len(used_idx) < 2:
-        meta.update(
-            positions_used=[[_r4(v) for v in pos_raw[i]] for i in used_idx],
-            status="n_lt_2",
-            review_reason="n_lt_2",
-        )
-        return meta
-
-    pos = pos_raw[used_idx]
-    fit = quick_fit(pos, centre)
-    meta["s_min_all"] = _r4(fit["s_min"])
-    decision = outlier_drop(pos, centre, fit)
-    final_fit = fit
-    status, reason, flag_index = "keep", "", None
-    if decision["action"] == "review":
-        status, reason = "review", decision["reason"]
-    elif decision["action"] == "drop":
-        j = decision["index"]
-        raw_i = used_idx[j]
-        dropped.append(
-            dict(
-                index=raw_i,
-                y=_r4(pos_raw[raw_i, 0]),
-                x=_r4(pos_raw[raw_i, 1]),
-                reason=f"outlier_{decision['reason']}",
-            )
-        )
-        final_fit = decision["loo"][j]
-        used_idx = [i for i in used_idx if i != raw_i]
-    elif len(pos) >= 3 and fit["J"] >= DJ_FLAG:
-        loo = decision["loo"] or leave_one_out(pos, centre)
-        k = plausibility_flag(fit, loo)
-        if k is not None:
-            flag_index = used_idx[k]
-            status, reason = "flag", "plausibility"
-
-    threshold, over_cap = threshold_from(final_fit["s_min"])
-    if over_cap and status != "review":
-        status, reason = "review", "over_cap"
-    if status == "keep" and dropped:
-        status = "drop"
-
-    meta.update(
-        positions_used=[[_r4(v) for v in pos_raw[i]] for i in used_idx],
-        dropped=dropped,
-        flag_index=flag_index,
-        s_min=_r4(final_fit["s_min"]),
-        J=_r4(final_fit["J"]),
-        threshold=_r4(threshold),
-        status=status,
-        review_reason=reason,
-        params={k: _r4(v) for k, v in zip(PARAM_NAMES, final_fit["params"])},
-    )
-    return meta
+    return _pf_gate_positions(positions, centre, GATE_VERSION)
 
 
 def read_positions(dataset_dir) -> Optional[np.ndarray]:
@@ -575,37 +209,59 @@ def light_centre_from_dataset(dataset_dir, image_tag: str = "_BGSUB") -> Tuple[f
     return brightest_sub_pixel_centre(img, ps, mask_centre)
 
 
-def brightest_sub_pixel_centre(img: np.ndarray, ps: float, centre, half: float = 0.3, box: int = 2):
-    """numpy port of ``Array2D.brightest_sub_pixel_coordinate_in_region_from``."""
-    ny, nx = img.shape
-    cy, cx = centre
-    region = (cy - half, cy + half, cx - half, cx + half)
+def finder_maps_from_dataset(dataset_dir, image_tag: str = "_BGSUB") -> Optional[Dict]:
+    """
+    The finder's inputs for one tile, or None when the tile has no usable
+    ``segmentation/source_flux.fits``.
 
-    def to_pixel(y, x):
-        return int(-y / ps + (ny - 1) / 2 + 0.5), int(x / ps + (nx - 1) / 2 + 0.5)
+    Returns ``source_flux``, ``snr_map`` (``source_flux / VIS_RMS`` where the RMS
+    is positive, as ``preprocess/segmentation.py`` builds it), ``lens_flux`` (or
+    None) and ``pixel_scale``.
+    """
+    from astropy.io import fits
 
-    py_min, _ = to_pixel(region[1] - ps / 2.0, 0.0)
-    py_max, _ = to_pixel(region[0] + ps / 2.0, 0.0)
-    _, px_min = to_pixel(0.0, region[2] + ps / 2.0)
-    _, px_max = to_pixel(0.0, region[3] - ps / 2.0)
-    py_min, px_min = max(0, py_min), max(0, px_min)
-    py_max, px_max = min(ny - 1, py_max), min(nx - 1, px_max)
-    sub = img[py_min : py_max + 1, px_min : px_max + 1]
-    rr, cc = np.argwhere(sub == np.max(sub))[0]
-    # The library round-trips the pixel through scaled coordinates; same pixel.
-    y, x = py_min + rr, px_min + cc
-    y0, y1 = max(0, y - box), min(ny, y + box + 1)
-    x0, x1 = max(0, x - box), min(nx, x + box + 1)
-    w = img[y0:y1, x0:x1]
-    yi, xi = np.meshgrid(range(y0, y1), range(x0, x1), indexing="ij")
-    sy = np.sum(w * yi) / np.sum(w)
-    sx = np.sum(w * xi) / np.sum(w)
-    return float(-ps * (sy - (ny - 1) / 2)), float(ps * (sx - (nx - 1) / 2))
+    d = Path(dataset_dir)
+    sf_path = d / "segmentation" / "source_flux.fits"
+    if not sf_path.exists() or not (d / "info.json").exists():
+        return None
+    with open(d / "info.json") as f:
+        ps = float(json.load(f)["pixel_scale"])
+    source_flux = np.asarray(fits.getdata(sf_path), np.float32)
+    noise = None
+    with fits.open(d / f"{d.name}.fits") as hdul:
+        names = [h.name for h in hdul]
+        for tag in (image_tag, "_FLUX", "_BGSUB"):
+            bands = [n[: -len(tag)].lower() for n in names if n.endswith(tag)]
+            if "vis" in bands:
+                noise = np.asarray(hdul[bands.index("vis") * 3 + 3].data, np.float32)
+                break
+    if noise is None or noise.shape != source_flux.shape:
+        return None
+    lens_flux = None
+    lf_path = d / "segmentation" / "lens_flux.fits"
+    if lf_path.exists():
+        lens_flux = np.asarray(fits.getdata(lf_path), np.float32)
+        if lens_flux.shape != source_flux.shape:
+            lens_flux = None
+    return dict(
+        source_flux=source_flux,
+        snr_map=snr_map_from(source_flux, noise),
+        lens_flux=lens_flux,
+        pixel_scale=ps,
+    )
 
 
 def gate_tile(dataset_dir, light_centre=None, write: bool = True) -> Optional[Dict]:
     """
     Gate one tile directory and (by default) write its ``positions_meta.json``.
+
+    Runs the phase 1 steps 1-5 above on the raw ``positions.json`` and then
+    the pair floor (``positions_finder.apply_pair_floor``: a final pair needs
+    both peak SNRs >= 3 on the segmentation SNR map, else review with no
+    positions). The same ``positions_finder.gate_result`` call ends the
+    production writer, so a tile whose ``positions.json`` equals its SNR >= 3
+    peak set gets the same verdict either way. Without the segmentation maps
+    the pair floor cannot be judged and the phase 1 verdict stands.
 
     Returns None (and writes nothing) when the tile has no ``positions.json`` or
     fewer than two raw positions: ``util.load_vis_dataset`` then keeps today's
@@ -618,7 +274,10 @@ def gate_tile(dataset_dir, light_centre=None, write: bool = True) -> Optional[Di
     if light_centre is None:
         light_centre = light_centre_from_dataset(d)
     t0 = time.process_time()
-    meta = gate_positions(positions, light_centre)
+    maps = finder_maps_from_dataset(d)
+    snrs = None if maps is None else snr_at(maps["snr_map"], positions, maps["pixel_scale"])
+    result = gate_result(positions, light_centre, snrs, GATE_VERSION)
+    meta = meta_from_result(result, GATE_VERSION)
     meta = dict(tile=d.name, positions_sha=_positions_sha(d), **meta)
     meta["cpu_s"] = round(time.process_time() - t0, 2)
     if write:
@@ -635,6 +294,13 @@ def _gate_one(args):
             with open(d / META_NAME) as f:
                 old = json.load(f)
             if old.get("version") == GATE_VERSION and old.get("positions_sha") == _positions_sha(d):
+                return d.name, old, None
+        if not (d / "positions.json").exists() and (d / META_NAME).exists():
+            # The segmentation writer left no positions (review / pair_floor):
+            # its sidecar still decides the tile.
+            with open(d / META_NAME) as f:
+                old = json.load(f)
+            if old.get("version") == GATE_VERSION:
                 return d.name, old, None
         return d.name, gate_tile(d), None
     except Exception as exc:  # one broken tile must not stop a batch

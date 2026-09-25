@@ -422,15 +422,28 @@ def test_compute_positions_filters_below_the_signal_to_noise_threshold():
 
 
 def test_compute_positions_caps_at_n_positions():
+    # A synthetic SIE + shear quad drawn as four single-pixel peaks (brightness
+    # ~ |mu|, all SNR >= 3). The writer keeps the brightest n_positions peaks and
+    # the gate's quick fit traces both the three- and the four-image set.
+    import positions_finder
+
+    images, mu = positions_finder.solve_images(
+        (1.2, 0.15, 0.05, 0.04, -0.03), (0.03, 0.05), half_width=3.0
+    )
     flux = np.zeros((41, 41))
-    for row, value in ((6, 40.0), (14, 35.0), (26, 30.0), (34, 25.0), (38, 20.0)):
-        flux[row, 20] = value
+    for (y, x), m in zip(images, mu):
+        row, col = positions_finder.arcsec_to_pixel(y, x, 41, 41, 0.1)
+        flux[row, col] = 10.0 * abs(m)
 
     positions = util._compute_positions_from_source_flux(
         source_flux=flux, noise_map=np.ones_like(flux), pixel_scale=0.1, n_positions=3
     )
-
     assert len(positions) == 3
+
+    positions = util._compute_positions_from_source_flux(
+        source_flux=flux, noise_map=np.ones_like(flux), pixel_scale=0.1, n_positions=4
+    )
+    assert len(positions) == 4
 
 
 def test_compute_positions_without_a_noise_map_skips_filtering():

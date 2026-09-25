@@ -16,6 +16,11 @@ import autolens as al
 import autolens.plot as aplt
 from autoarray.inversion.mappings.mapping import connected_components_from
 
+try:
+    import positions_finder
+except ImportError:  # imported as a member of the package
+    from . import positions_finder
+
 
 def _find_local_maxima(flux: np.ndarray) -> List[tuple]:
     """
@@ -24,20 +29,7 @@ def _find_local_maxima(flux: np.ndarray) -> List[tuple]:
     A pixel is a local maximum if it is strictly brighter than its four
     orthogonal neighbours. Border pixels are skipped.
     """
-    ny, nx = flux.shape
-    maxima = []
-    for r in range(1, ny - 1):
-        for c in range(1, nx - 1):
-            v = flux[r, c]
-            if (
-                v > flux[r - 1, c]
-                and v > flux[r + 1, c]
-                and v > flux[r, c - 1]
-                and v > flux[r, c + 1]
-            ):
-                maxima.append((float(v), r, c))
-    maxima.sort(reverse=True)
-    return maxima
+    return positions_finder.find_local_maxima(flux)
 
 
 def _pixel_to_arcsec(
@@ -52,25 +44,50 @@ def _pixel_to_arcsec(
     return [y, x]
 
 
+def _positions_result_from_source_flux(
+    source_flux: np.ndarray,
+    noise_map: Optional[np.ndarray],
+    pixel_scale: float,
+    n_positions: int = 4,
+    lens_flux: Optional[np.ndarray] = None,
+    light_centre=None,
+):
+    """
+    The production writer's full result (``positions_finder.FinderResult``,
+    ``method: "gate"``) for a source-flux map; the same call
+    ``preprocess/segmentation.py`` makes.
+    """
+    return positions_finder.find_positions_gate(
+        source_flux,
+        positions_finder.snr_map_from(source_flux, noise_map),
+        light_centre=light_centre,
+        pixel_scale=pixel_scale,
+        n_positions=n_positions,
+        lens_flux=lens_flux,
+    )
+
+
 def _compute_positions_from_source_flux(
     source_flux: np.ndarray,
     noise_map: Optional[np.ndarray],
     pixel_scale: float,
     n_positions: int = 4,
+    lens_flux: Optional[np.ndarray] = None,
+    light_centre=None,
 ) -> List[List[float]]:
     """
     Compute up to *n_positions* multiple-image positions from a source flux map.
 
-    Mirrors the logic in ``preprocess/segmentation.py``, which is the canonical
-    writer of ``positions.json``. This function is the fallback used by
+    A thin wrapper over ``positions_finder.find_positions_gate``, the
+    production writer ``preprocess/segmentation.py`` (the canonical writer of
+    ``positions.json``) also calls. This function is the fallback used by
     `load_vis_dataset` when no ``positions.json`` is present but the dataset
     ships a ``segmentation/source_flux.fits`` map.
 
-    Local maxima above a signal-to-noise threshold of 3.0 are taken as candidate
-    multiple images. If none of the selected positions lies on the opposite side
-    of the lens from the brightest one (i.e. there is no counter-image), the
-    threshold is walked down in steps of 0.1 until a counter-image is found,
-    which then replaces the weakest position.
+    Local maxima with signal-to-noise >= 3 outside 0.15" of the light centre
+    (no SNR walk-down; the brightest ``n_positions``) go through the positions
+    gate's steps -- fixed-centre SIE + shear quick fit, leave-one-out outlier
+    drop, threshold -- and the pair floor (a final pair needs both SNRs >= 3).
 
     Parameters
     ----------
@@ -83,59 +100,18 @@ def _compute_positions_from_source_flux(
         Pixel scale in arcsec used to convert pixel indices to arcsec.
     n_positions
         Maximum number of positions returned.
+    lens_flux, light_centre
+        The segmentation lens-flux map and / or the fixed mass centre; by
+        default the brightest lens-flux pixel, else the frame centre.
 
     Returns
     -------
     list[list[float]]
         List of ``[y, x]`` arcsec positions, brightest first.
     """
-    SNR_THRESHOLD = 3.0
-    SNR_STEP = 0.1
-    ny, nx = source_flux.shape
-
-    if noise_map is not None:
-        with np.errstate(divide="ignore", invalid="ignore"):
-            snr_map = np.where(noise_map > 0, source_flux / noise_map, 0.0)
-    else:
-        snr_map = None
-
-    all_maxima = _find_local_maxima(source_flux)
-    maxima = [
-        (v, r, c)
-        for v, r, c in all_maxima
-        if snr_map is None or snr_map[r, c] > SNR_THRESHOLD
-    ]
-
-    if not maxima:
-        return []
-
-    selected = maxima[:n_positions]
-    positions = [_pixel_to_arcsec(r, c, ny, nx, pixel_scale) for _, r, c in selected]
-
-    has_counter = any(
-        p[0] * positions[0][0] < 0 or p[1] * positions[0][1] < 0 for p in positions[1:]
-    )
-    if not has_counter and snr_map is not None:
-        threshold = SNR_THRESHOLD - SNR_STEP
-        while threshold >= 0:
-            lower_maxima = sorted(
-                [(v, r, c) for v, r, c in all_maxima if snr_map[r, c] > threshold],
-                reverse=True,
-            )
-            for v, r, c in lower_maxima:
-                candidate = _pixel_to_arcsec(r, c, ny, nx, pixel_scale)
-                if candidate not in positions and (
-                    candidate[0] * positions[0][0] < 0
-                    or candidate[1] * positions[0][1] < 0
-                ):
-                    positions[-1] = candidate
-                    break
-            else:
-                threshold -= SNR_STEP
-                continue
-            break
-
-    return positions
+    return _positions_result_from_source_flux(
+        source_flux, noise_map, pixel_scale, n_positions, lens_flux, light_centre
+    ).positions
 
 
 def subplot_rgb(
@@ -1612,7 +1588,8 @@ def load_vis_dataset(
             positions_likelihood_list = [al.PositionsLH(threshold=0.2, positions=positions)]
         except FileNotFoundError:
             # No `positions.json`: derive positions from the segmentation source
-            # flux map and the VIS noise map, mirroring `preprocess/segmentation.py`.
+            # flux map and the VIS noise map with the production writer
+            # `preprocess/segmentation.py` uses, and its per-tile threshold.
             source_flux_path = dataset_main_path / "segmentation" / "source_flux.fits"
             if (
                 source_flux_path.exists()
@@ -1626,15 +1603,22 @@ def load_vis_dataset(
                     ).astype(np.float32)
                 except Exception:
                     noise_map = None
-                pos_list = _compute_positions_from_source_flux(
+                lens_flux_map = None
+                if lens_flux_path.exists():
+                    lens_flux_map = fits.getdata(lens_flux_path).astype(np.float32)
+                    if lens_flux_map.shape != source_flux.shape:
+                        lens_flux_map = None
+                result = _positions_result_from_source_flux(
                     source_flux=source_flux,
                     noise_map=noise_map,
                     pixel_scale=pixel_scale,
+                    lens_flux=lens_flux_map,
+                    light_centre=tuple(dataset_centre),
                 )
-                if len(pos_list) >= 2:
-                    positions = al.Grid2DIrregular(values=pos_list)
+                if len(result.positions) >= 2 and result.threshold is not None:
+                    positions = al.Grid2DIrregular(values=result.positions)
                     positions_likelihood_list = [
-                        al.PositionsLH(threshold=0.2, positions=positions)
+                        al.PositionsLH(threshold=result.threshold, positions=positions)
                     ]
                 else:
                     positions_likelihood_list = None
