@@ -1,0 +1,100 @@
+#!/bin/bash -l
+#
+# Positions gate, before any vis_lp submission: one array task per batch.
+#
+# WHAT THIS DOES
+#   Runs `scripts/tools/positions_gate.py --root dataset/<batch>` for one batch
+#   directory (a directory of tile directories, e.g. `dr1_sep1_rest`). For every
+#   tile it applies the 0.15" central cut, the fixed-centre SIE + shear quick fit
+#   and the one-image outlier drop, and writes `positions_meta.json` beside the
+#   (untouched) `positions.json`; `util.load_vis_dataset` then uses the gated
+#   positions and the per-tile threshold T = min(max(2 s_min, 0.3"), 0.5").
+#   Per batch it also writes
+#
+#     dataset/<batch>/positions_review.csv   review / flag / n_lt_2 tiles
+#     dataset/<batch>/positions_submit.txt   the tiles to submit to vis_lp
+#
+#   Review tiles are held back from positions_submit.txt; set INCLUDE_REVIEW=1
+#   to list them too. It fits no imaging: nothing here is JAX work.
+#
+# RESOURCES
+#   Numpy/scipy only, parallelised by a process pool over tiles. Measured ~0.5-1
+#   CPU-s for a traceable tile and ~5-15 CPU-s for a tile needing the
+#   leave-one-out; research estimate ~12 CPU-h for 14,032 DR1 tiles, so 16 CPUs
+#   finish a DR1-sized batch in about an hour. Memory is a few hundred MB.
+#   A re-run skips tiles whose sidecar is current (same gate version and same
+#   positions.json); FORCE=1 re-fits everything.
+#
+# HOW TO SUBMIT
+#   List the batch directories (relative to dataset/) below and widen --array to
+#   match, then from your machine:
+#
+#     hpc/sync push-submit cpu submit_positions_gate
+#
+#   or, in a shell on the cluster, from this directory:
+#
+#     sbatch --export=ALL,INCLUDE_REVIEW=1 submit_positions_gate
+#
+#   Pull the sidecars + CSVs back (or read positions_submit.txt on the cluster)
+#   before building the vis_lp submission's dataset list.
+
+#SBATCH -J euclid_positions_gate
+#SBATCH -n 1
+#SBATCH --cpus-per-task=16
+#SBATCH -o output/output.%A_%a.out
+#SBATCH -e error/error.%A_%a.err
+#SBATCH --partition=ral
+#SBATCH -t 04:00:00
+#SBATCH --mem=4gb
+#SBATCH --array=0-0
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=your.email@institution.ac.uk
+
+# -----------------------------------------------------------------------------
+# Environment (as submit_build_inspection_bundle: PROJECT_PATH defaults to the
+# project this script was submitted from, two levels above hpc/batch_cpu/).
+# -----------------------------------------------------------------------------
+export PROJECT_PATH="${PROJECT_PATH:-$(cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")}/../.." && pwd)}"
+export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
+
+source "$PROJECT_PATH/activate.sh"
+set -e
+
+export JAX_PLATFORM_NAME=cpu
+export JAX_PLATFORMS=cpu
+
+# One BLAS thread per worker: the parallelism is the process pool.
+THREADS=${SLURM_CPUS_PER_TASK:-1}
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
+# -----------------------------------------------------------------------------
+# Batches: each entry is a directory inside dataset/ whose subdirectories are
+# tiles. One array task per entry: three batches means --array=0-2.
+# -----------------------------------------------------------------------------
+batches=(
+dr1_sep1_rest
+)
+
+INDEX=${SLURM_ARRAY_TASK_ID:-0}
+batch="${batches[$INDEX]}"
+
+EXTRA=()
+[ "${INCLUDE_REVIEW:-0}" = "1" ] && EXTRA+=(--include-review)
+[ "${FORCE:-0}" = "1" ] && EXTRA+=(--force)
+
+echo "=========================================="
+echo "Array task : $INDEX / ${#batches[@]}"
+echo "Batch      : dataset/$batch"
+echo "Workers    : $THREADS"
+echo "Options    : ${EXTRA[*]:-<none>}"
+date
+
+python3 "$PROJECT_PATH/scripts/tools/positions_gate.py" \
+    --root "$PROJECT_PATH/dataset/$batch" --nproc "$THREADS" "${EXTRA[@]}"
+
+echo "Finished positions gate: $batch"
+date

@@ -90,6 +90,31 @@ All fitting pipelines share one argument parser (`util.parse_fit_args`) —
   every `vis_pix` result in a sample, reporting per-dataset OK/ERR plus a
   summary. Takes `--sample`, not `--dataset`.
 
+# Positions gate (before vis_lp)
+
+- `tools/positions_gate.py`: Pre-submit gate for the `vis_lp` positions penalty.
+  Per tile it reads the raw `positions.json` (never modified) and the light centre
+  `vis_lp` fixes its mass centre to (`util.load_vis_dataset`'s `dataset_centre`),
+  then: cuts positions within **0.15"** of the light centre (one PSF FWHM); fits a
+  fixed-centre SIE + external shear in exactly `vis_lp`'s model space
+  (`einstein_radius` [0, 8], `gamma_i` [-0.3, 0.3], `|ell_comps| < 0.95`) to get
+  `s_min`, the smallest achievable max pairwise source-plane separation (what
+  `PositionsLH` penalises), and a plausibility cost `J`; if `s_min > 0.2"` and
+  there are >= 3 positions, drops the single position that makes the set trace
+  (unique candidate; else lowest `J` by >= 4; else nearest if r < 0.3" or
+  < 0.6x the others' median radius, outermost if > 1.5x; else review); flags,
+  without dropping, a traceable set where one drop lowers `J` by >= 10; and sets
+  **T = min(max(2 s_final, 0.3"), 0.5")** (2 s_final > 0.5" -> review). It writes
+  `positions_meta.json` beside `positions.json` (positions used, drops and
+  reasons, `s_min`, `J`, `T`, `status` keep | drop | review | flag | n_lt_2), which
+  `util.load_vis_dataset` reads: gated positions + `T`, penalty off for `n_lt_2`,
+  and the old behaviour (raw positions, T = 0.2) when there is no sidecar. A
+  `--root` run also writes `positions_review.csv` and `positions_submit.txt`
+  (review tiles held back unless `--include-review`). RAL:
+  `hpc/batch_cpu/submit_positions_gate`. Research and census behind every
+  parameter: `euclid_dr1` project, `inspect/positions_census/research/`
+  (`SYNTHESIS.md`, `B_final_method.md`, `A_central_radius.md`).
+
 # Catalogue orchestration
 
 - `tools/build_inspect.py`: Collects the inspection bundle's PNGs out of the result
