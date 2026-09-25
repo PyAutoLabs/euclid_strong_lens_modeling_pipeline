@@ -1,0 +1,88 @@
+#!/bin/bash -l
+#
+# Multi-wavelength SED chain (VIS Sersic fit + one Sersic fit per NIR/DECam
+# band, JAX on CPU) for the first 250 lenses of `dataset/dr1_sep1_rest/`.
+#
+# THIS RUN
+#   Follow-up to arrays 350804 (vis_lp) and the vis_pix priority-250 array.
+#   Same manifest, `hpc/run_manifests/positions_priority_250.txt`. The vis_lp
+#   seed zip is copied from the NEW `output/` tree (finder-2.1 positions) into
+#   `output_sed/`, not from the retired dr1_full tree the rest_full_pNN
+#   scripts used. Tiles without DECam EXT imaging are refused (10 of 250), as
+#   in the rest_full production runs. Submitted with
+#   `--dependency=afterany:<vis_pix array>`.
+#
+#SBATCH -J euclid_dr1_sed_prio250
+#SBATCH -n 1
+#SBATCH --cpus-per-task=8
+#SBATCH -o output/output.%A_%a.out
+#SBATCH -e error/error.%A_%a.err
+#SBATCH --partition=ral
+#SBATCH -t 06:00:00
+#SBATCH --mem=64gb
+#SBATCH --array=0-249%60
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=james.w.nightingale@durham.ac.uk
+
+set -euo pipefail
+
+export PROJECT_PATH=/mnt/ral/jnightin/euclid_dr1
+export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
+export PYAUTO_OUTPUT_DIR=output_sed
+
+source "$PROJECT_PATH/activate.sh"
+
+sample=dr1_sep1_rest
+manifest="$PROJECT_PATH/hpc/run_manifests/positions_priority_250.txt"
+mapfile -t datasets < "$manifest"
+
+index=$SLURM_ARRAY_TASK_ID
+dataset="${datasets[$index]}"
+threads=$SLURM_CPUS_PER_TASK
+
+if [[ ${#datasets[@]} -ne 250 || -z "$dataset" ]]; then
+    echo "ERROR: expected a 250-tile manifest and a dataset at index $index" >&2
+    exit 1
+fi
+
+dataset_fits="$PROJECT_PATH/dataset/$sample/$dataset/$dataset.fits"
+if ! grep -a -q 'DECAM_G_BGSUB' "$dataset_fits"; then
+    echo "ERROR: $dataset has no EXT/DECam imaging; refusing a NIR-only run" >&2
+    exit 1
+fi
+
+# Seed output_sed with the completed VIS result so the chain cache-skips vis_lp.
+seed_source="$PROJECT_PATH/output/$sample/$dataset/initial_lens_model/vis_lp"
+seed_target="$PROJECT_PATH/$PYAUTO_OUTPUT_DIR/$sample/$dataset/initial_lens_model/vis_lp"
+mkdir -p "$seed_target"
+shopt -s nullglob
+seed_zips=("$seed_source"/*.zip)
+if [[ ${#seed_zips[@]} -ne 1 ]]; then
+    echo "ERROR: expected one completed vis_lp seed for $dataset, found ${#seed_zips[@]}" >&2
+    exit 1
+fi
+cp -a "${seed_zips[0]}" "$seed_target/"
+
+echo "Array task : $index / ${#datasets[@]}"
+echo "Sample     : $sample"
+echo "Dataset    : $dataset"
+echo "Bands      : VIS, NIR Y/J/H, DECam g/r/i/z"
+echo "Output dir : $PYAUTO_OUTPUT_DIR"
+date
+
+env JAX_PLATFORM_NAME=cpu JAX_PLATFORMS=cpu \
+    python3 -c 'import jax; raise SystemExit(0 if jax.default_backend() == "cpu" else 1)'
+
+env JAX_PLATFORM_NAME=cpu \
+    JAX_PLATFORMS=cpu \
+    OPENBLAS_NUM_THREADS="$threads" \
+    MKL_NUM_THREADS="$threads" \
+    OMP_NUM_THREADS="$threads" \
+    VECLIB_MAXIMUM_THREADS="$threads" \
+    NUMEXPR_NUM_THREADS="$threads" \
+    NPROC="$threads" \
+    python3 "$PROJECT_PATH/scripts/sersic_lens_model_waveband.py" \
+        --sample="$sample" --dataset="$dataset" --number_of_cores="$threads"
+
+echo "Finished: $dataset"
+date
