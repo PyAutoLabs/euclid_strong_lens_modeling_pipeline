@@ -8,8 +8,8 @@
 #   Same manifest, `hpc/run_manifests/positions_priority_250.txt`. The vis_lp
 #   seed zip is copied from the NEW `output/` tree (finder-2.1 positions) into
 #   `output_sed/`, not from the retired dr1_full tree the rest_full_pNN
-#   scripts used. Tiles without DECam EXT imaging are refused (10 of 250), as
-#   in the rest_full production runs. Submitted with
+#   scripts used. Tiles without DECam EXT imaging (10 of 250) fit VIS + NIR
+#   Y/J/H only. Submitted with
 #   `--dependency=afterany:<vis_pix array>`.
 #
 #SBATCH -J euclid_dr1_sed_prio250
@@ -46,9 +46,10 @@ if [[ ${#datasets[@]} -ne 250 || -z "$dataset" ]]; then
 fi
 
 dataset_fits="$PROJECT_PATH/dataset/$sample/$dataset/$dataset.fits"
+# A tile without EXT/DECam imaging still runs: the waveband chain fits every
+# `<BAND>_BGSUB` HDU the cut-out holds, so it fits VIS + NIR Y/J/H only.
 if ! grep -a -q 'DECAM_G_BGSUB' "$dataset_fits"; then
-    echo "ERROR: $dataset has no EXT/DECam imaging; refusing a NIR-only run" >&2
-    exit 1
+    echo "NOTE: $dataset has no EXT/DECam imaging; fitting VIS + NIR Y/J/H only"
 fi
 
 # Seed output_sed with the completed VIS result so the chain cache-skips vis_lp.
