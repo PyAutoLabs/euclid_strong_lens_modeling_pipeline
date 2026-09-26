@@ -125,7 +125,9 @@ def is_current(tile_dir) -> bool:
         return False
     pos = d / POSITIONS_NAME
     if meta.get("positions_used"):
-        return pos.exists() and meta.get("positions_sha") == positions_finder.positions_sha(d)
+        return pos.exists() and meta.get(
+            "positions_sha"
+        ) == positions_finder.positions_sha(d)
     return not pos.exists()
 
 
@@ -169,13 +171,17 @@ def rewrite_tile(tile_dir, force: bool = False) -> Dict:
             shutil.copy2(pos, backup)
             made_backup = True
 
-        result, meta = segmentation.write_positions(d, require_noise=True, verbose=False)
+        result, meta = segmentation.write_positions(
+            d, require_noise=True, verbose=False
+        )
         if not result.positions and pos.exists():
             # No positions: the backup holds the old set; leave none behind.
             pos.unlink()
         meta["backup"] = BACKUP_NAME if backup.exists() else None
         positions_finder.write_meta(d, meta)
-        return _row(d.name, "written", meta, backup=made_backup, seconds=time.time() - t0)
+        return _row(
+            d.name, "written", meta, backup=made_backup, seconds=time.time() - t0
+        )
     except Exception as exc:  # one broken tile must not stop a batch
         return _row(d.name, "error", seconds=time.time() - t0, error=repr(exc))
 
@@ -193,7 +199,11 @@ def select_tiles(
 ) -> List[str]:
     """Sorted tile names under ``root`` (or ``tiles``), then every ``nparts``-th from ``part``."""
     root = Path(root)
-    names = sorted(set(tiles)) if tiles else sorted(p.name for p in root.iterdir() if p.is_dir())
+    names = (
+        sorted(set(tiles))
+        if tiles
+        else sorted(p.name for p in root.iterdir() if p.is_dir())
+    )
     if part is not None and nparts > 1:
         names = [n for i, n in enumerate(names) if i % nparts == part]
     return names
@@ -269,12 +279,24 @@ def main(argv=None):
     src = parser.add_mutually_exclusive_group(required=True)
     src.add_argument("--tile", help="one tile directory")
     src.add_argument("--root", help="a sample directory whose subdirectories are tiles")
-    parser.add_argument("--tiles-file", help="with --root: only the tiles named in this file")
-    parser.add_argument("--part", type=int, help="with --root: this part (0-based) of --nparts")
-    parser.add_argument("--nparts", type=int, default=1, help="number of parts (default 1)")
-    parser.add_argument("--nproc", type=int, default=1, help="worker processes (default 1)")
-    parser.add_argument("--force", action="store_true", help="rewrite even if the tile is current")
-    parser.add_argument("--out-csv", help="CSV path (default <root>/positions_rewrite[_partI].csv)")
+    parser.add_argument(
+        "--tiles-file", help="with --root: only the tiles named in this file"
+    )
+    parser.add_argument(
+        "--part", type=int, help="with --root: this part (0-based) of --nparts"
+    )
+    parser.add_argument(
+        "--nparts", type=int, default=1, help="number of parts (default 1)"
+    )
+    parser.add_argument(
+        "--nproc", type=int, default=1, help="worker processes (default 1)"
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="rewrite even if the tile is current"
+    )
+    parser.add_argument(
+        "--out-csv", help="CSV path (default <root>/positions_rewrite[_partI].csv)"
+    )
     parser.add_argument(
         "--merge", action="store_true", help="with --root: merge the part CSVs and exit"
     )

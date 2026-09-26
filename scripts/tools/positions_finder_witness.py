@@ -70,7 +70,10 @@ def run_tile(d: Path, reconcile: bool = False) -> dict:
     t_seeded = time.process_time() - t0
     t0 = time.process_time()
     writer = pf.find_positions_gate(
-        maps["source_flux"], maps["snr_map"], light_centre=centre, pixel_scale=maps["pixel_scale"]
+        maps["source_flux"],
+        maps["snr_map"],
+        light_centre=centre,
+        pixel_scale=maps["pixel_scale"],
     )
     unseeded = pf.meta_from_result(writer)
     t_unseeded = time.process_time() - t0
@@ -88,9 +91,18 @@ def run_tile(d: Path, reconcile: bool = False) -> dict:
         cpu_s_unseeded=round(t_unseeded, 2),
     )
     if reconcile:
-        args = (maps["source_flux"], maps["snr_map"], maps["lens_flux"], maps["pixel_scale"])
-        out["reconcile_seeded"] = pf.find_positions(*args, seed=seed, light_centre=centre).to_dict()
-        out["reconcile_unseeded"] = pf.find_positions(*args, light_centre=centre).to_dict()
+        args = (
+            maps["source_flux"],
+            maps["snr_map"],
+            maps["lens_flux"],
+            maps["pixel_scale"],
+        )
+        out["reconcile_seeded"] = pf.find_positions(
+            *args, seed=seed, light_centre=centre
+        ).to_dict()
+        out["reconcile_unseeded"] = pf.find_positions(
+            *args, light_centre=centre
+        ).to_dict()
     return out
 
 
@@ -107,7 +119,13 @@ def _key(ps):
 
 
 def _dropped(ds):
-    return " ".join(f"#{d['index'] + 1 if d['index'] is not None else '?'}:{d['reason']}" for d in ds) or "-"
+    return (
+        " ".join(
+            f"#{d['index'] + 1 if d['index'] is not None else '?'}:{d['reason']}"
+            for d in ds
+        )
+        or "-"
+    )
 
 
 def gate_rows(results, which):
@@ -119,8 +137,15 @@ def gate_rows(results, which):
                 group=r["group"],
                 tile=r["tile"][:13],
                 old=_fmt_pos(r["old"]),
-                input=_fmt_pos(r["candidates"]) if which == "unseeded" else _fmt_pos(r["old"]),
-                snr=" ".join("-" if v is None else f"{v:.1f}" for v in (m.get("snr") or [])) or "-",
+                input=(
+                    _fmt_pos(r["candidates"])
+                    if which == "unseeded"
+                    else _fmt_pos(r["old"])
+                ),
+                snr=" ".join(
+                    "-" if v is None else f"{v:.1f}" for v in (m.get("snr") or [])
+                )
+                or "-",
                 new=_fmt_pos(m["positions_used"]),
                 s_all=_fmt_s(m["s_min_all"]),
                 s_final=_fmt_s(m["s_min"]),
@@ -128,7 +153,12 @@ def gate_rows(results, which):
                 dropped=_dropped(m["dropped"]),
                 status=m["status"],
                 review=m["review_reason"] or "-",
-                same="yes" if _key(r["seeded"]["positions_used"]) == _key(r["unseeded"]["positions_used"]) else "no",
+                same=(
+                    "yes"
+                    if _key(r["seeded"]["positions_used"])
+                    == _key(r["unseeded"]["positions_used"])
+                    else "no"
+                ),
                 cpu_s=f"{r['cpu_s_' + which]:.1f}",
             )
         )
@@ -157,14 +187,54 @@ def reconcile_rows(results, which):
     return rows
 
 
-SEEDED_COLUMNS = ("group", "tile", "old", "snr", "new", "s_all", "s_final", "T", "dropped", "status", "review", "cpu_s")
-UNSEEDED_COLUMNS = ("group", "tile", "input", "snr", "new", "s_all", "s_final", "T", "dropped", "status", "review", "same")
-RECONCILE_COLUMNS = ("group", "tile", "new", "s_seed", "s_final", "T", "rounds", "added", "dropped", "status", "review")
+SEEDED_COLUMNS = (
+    "group",
+    "tile",
+    "old",
+    "snr",
+    "new",
+    "s_all",
+    "s_final",
+    "T",
+    "dropped",
+    "status",
+    "review",
+    "cpu_s",
+)
+UNSEEDED_COLUMNS = (
+    "group",
+    "tile",
+    "input",
+    "snr",
+    "new",
+    "s_all",
+    "s_final",
+    "T",
+    "dropped",
+    "status",
+    "review",
+    "same",
+)
+RECONCILE_COLUMNS = (
+    "group",
+    "tile",
+    "new",
+    "s_seed",
+    "s_final",
+    "T",
+    "rounds",
+    "added",
+    "dropped",
+    "status",
+    "review",
+)
 
 
 def markdown(rows, columns):
     head = "| " + " | ".join(columns) + " |\n|" + "---|" * len(columns) + "\n"
-    return head + "".join("| " + " | ".join(r[c] for c in columns) + " |\n" for r in rows)
+    return head + "".join(
+        "| " + " | ".join(r[c] for c in columns) + " |\n" for r in rows
+    )
 
 
 def overlay(r, out_png: Path):
@@ -186,7 +256,12 @@ def overlay(r, out_png: Path):
     for ax, img, title in ((axes[0], vis, "VIS"), (axes[1], sf, "source_flux")):
         finite = img[np.isfinite(img)]
         lo, hi = np.percentile(finite, 1), np.percentile(np.abs(finite), 99.5)
-        ax.imshow(np.arcsinh((img - lo) / max(hi / 10, 1e-12)), origin="upper", extent=ext, cmap="gray")
+        ax.imshow(
+            np.arcsinh((img - lo) / max(hi / 10, 1e-12)),
+            origin="upper",
+            extent=ext,
+            cmap="gray",
+        )
         for i, (y, x) in enumerate(r["old"]):
             ax.plot(x, y, "o", mfc="none", mec="cyan", ms=16, mew=1.5)
             ax.text(x + 0.15, y + 0.15, str(i + 1), color="cyan", fontsize=10)
@@ -202,7 +277,11 @@ def overlay(r, out_png: Path):
         ax.set_title(title)
 
     def tag(m):
-        return m["status"] + (f" ({m['review_reason']})" if m["review_reason"] else "") + f" s {_fmt_s(m['s_min'])} T {_fmt_s(m['threshold'])}"
+        return (
+            m["status"]
+            + (f" ({m['review_reason']})" if m["review_reason"] else "")
+            + f" s {_fmt_s(m['s_min'])} T {_fmt_s(m['threshold'])}"
+        )
 
     fig.suptitle(
         f"{r['group']}/{r['tile'][:13]}  seeded: {tag(s)}   unseeded: {tag(u)}\n"
@@ -216,10 +295,16 @@ def overlay(r, out_png: Path):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Witness run of the production positions path over a calibration sample.")
-    parser.add_argument("--root", required=True, help="sample directory (tile directories at any depth)")
+    parser = argparse.ArgumentParser(
+        description="Witness run of the production positions path over a calibration sample."
+    )
+    parser.add_argument(
+        "--root", required=True, help="sample directory (tile directories at any depth)"
+    )
     parser.add_argument("--out", help="output directory (default <root>/witness)")
-    parser.add_argument("--no-overlays", action="store_true", help="skip the overlay PNGs")
+    parser.add_argument(
+        "--no-overlays", action="store_true", help="skip the overlay PNGs"
+    )
     parser.add_argument(
         "--reconcile",
         action="store_true",
@@ -245,7 +330,9 @@ def main(argv=None):
             "Diagnostic reconcile loop, seeded (not production):\n\n"
             + markdown(reconcile_rows(results, "reconcile_seeded"), RECONCILE_COLUMNS),
             "Diagnostic reconcile loop, unseeded (not production):\n\n"
-            + markdown(reconcile_rows(results, "reconcile_unseeded"), RECONCILE_COLUMNS),
+            + markdown(
+                reconcile_rows(results, "reconcile_unseeded"), RECONCILE_COLUMNS
+            ),
         ]
     md = "\n\n".join(parts)
     print(md)
@@ -256,7 +343,9 @@ def main(argv=None):
         for r in results:
             overlay(r, out / "overlays" / f"{r['group']}_{r['tile']}.png")
     total = sum(r["cpu_s_seeded"] for r in results)
-    print(f"{len(results)} tiles, seeded gate {total:.1f} CPU-s total ({total / len(results):.1f} s/tile); outputs in {out}")
+    print(
+        f"{len(results)} tiles, seeded gate {total:.1f} CPU-s total ({total / len(results):.1f} s/tile); outputs in {out}"
+    )
     return 0
 
 

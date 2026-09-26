@@ -165,10 +165,14 @@ def read_positions(dataset_dir) -> Optional[np.ndarray]:
 
 
 def _positions_sha(dataset_dir) -> str:
-    return hashlib.sha256((Path(dataset_dir) / "positions.json").read_bytes()).hexdigest()[:16]
+    return hashlib.sha256(
+        (Path(dataset_dir) / "positions.json").read_bytes()
+    ).hexdigest()[:16]
 
 
-def light_centre_from_dataset(dataset_dir, image_tag: str = "_BGSUB") -> Tuple[float, float]:
+def light_centre_from_dataset(
+    dataset_dir, image_tag: str = "_BGSUB"
+) -> Tuple[float, float]:
     """
     The light centre ``util.load_vis_dataset`` returns as ``dataset_centre``.
 
@@ -275,7 +279,11 @@ def gate_tile(dataset_dir, light_centre=None, write: bool = True) -> Optional[Di
         light_centre = light_centre_from_dataset(d)
     t0 = time.process_time()
     maps = finder_maps_from_dataset(d)
-    snrs = None if maps is None else snr_at(maps["snr_map"], positions, maps["pixel_scale"])
+    snrs = (
+        None
+        if maps is None
+        else snr_at(maps["snr_map"], positions, maps["pixel_scale"])
+    )
     result = gate_result(positions, light_centre, snrs, GATE_VERSION)
     meta = meta_from_result(result, GATE_VERSION)
     meta = dict(tile=d.name, positions_sha=_positions_sha(d), **meta)
@@ -293,7 +301,9 @@ def _gate_one(args):
         if not force and (d / META_NAME).exists() and (d / "positions.json").exists():
             with open(d / META_NAME) as f:
                 old = json.load(f)
-            if old.get("version") == GATE_VERSION and old.get("positions_sha") == _positions_sha(d):
+            if old.get("version") == GATE_VERSION and old.get(
+                "positions_sha"
+            ) == _positions_sha(d):
                 return d.name, old, None
         if not (d / "positions.json").exists() and (d / META_NAME).exists():
             # The segmentation writer left no positions (review / pair_floor):
@@ -340,7 +350,9 @@ def gate_batch(
     sidecar is not re-fitted unless ``force``.
     """
     root = Path(root)
-    names = sorted(tiles) if tiles else sorted(p.name for p in root.iterdir() if p.is_dir())
+    names = (
+        sorted(tiles) if tiles else sorted(p.name for p in root.iterdir() if p.is_dir())
+    )
     jobs = [(root / n, force) for n in names if (root / n).is_dir()]
     if nproc > 1:
         from multiprocessing import Pool
@@ -374,7 +386,9 @@ def gate_batch(
                     s_min=meta["s_min"],
                     J=meta["J"],
                     threshold=meta["threshold"],
-                    dropped=";".join(f"{x['index']}:{x['reason']}" for x in meta["dropped"]),
+                    dropped=";".join(
+                        f"{x['index']}:{x['reason']}" for x in meta["dropped"]
+                    ),
                     flag_index=meta["flag_index"],
                 )
             )
@@ -391,7 +405,7 @@ def gate_batch(
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description=(
-            "Positions gate: 0.15\" central cut, fixed-centre SIE+shear quick fit, "
+            'Positions gate: 0.15" central cut, fixed-centre SIE+shear quick fit, '
             "one-image outlier drop and a per-tile PositionsLH threshold, written "
             "to positions_meta.json beside each tile's (untouched) positions.json."
         )
@@ -399,21 +413,31 @@ def main(argv=None):
     src = parser.add_mutually_exclusive_group(required=True)
     src.add_argument("--tile", help="one tile directory (containing positions.json)")
     src.add_argument("--root", help="a sample directory whose subdirectories are tiles")
-    parser.add_argument("--tiles-file", help="with --root: only the tiles named in this file")
-    parser.add_argument("--out-csv", help=f"review CSV path (default <root>/{REVIEW_CSV})")
+    parser.add_argument(
+        "--tiles-file", help="with --root: only the tiles named in this file"
+    )
+    parser.add_argument(
+        "--out-csv", help=f"review CSV path (default <root>/{REVIEW_CSV})"
+    )
     parser.add_argument(
         "--include-review",
         action="store_true",
         help=f"list review tiles in {SUBMIT_TXT} too (held back by default)",
     )
-    parser.add_argument("--nproc", type=int, default=1, help="worker processes (default 1)")
-    parser.add_argument("--force", action="store_true", help="re-fit even if the sidecar is current")
+    parser.add_argument(
+        "--nproc", type=int, default=1, help="worker processes (default 1)"
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="re-fit even if the sidecar is current"
+    )
     args = parser.parse_args(argv)
 
     if args.tile:
         meta = gate_tile(args.tile)
         if meta is None:
-            print(f"{args.tile}: no positions.json or < 2 positions; no sidecar written")
+            print(
+                f"{args.tile}: no positions.json or < 2 positions; no sidecar written"
+            )
             return 0
         print(json.dumps(meta, indent=2))
         return 0
@@ -432,7 +456,11 @@ def main(argv=None):
     )
     counts: Dict[str, int] = {}
     for r in results:
-        key = "error" if r["error"] else ("no_sidecar" if r["meta"] is None else r["meta"]["status"])
+        key = (
+            "error"
+            if r["error"]
+            else ("no_sidecar" if r["meta"] is None else r["meta"]["status"])
+        )
         counts[key] = counts.get(key, 0) + 1
     print(f"gated {len(results)} tiles in {time.time() - t0:.0f} s: {counts}")
     return 0
