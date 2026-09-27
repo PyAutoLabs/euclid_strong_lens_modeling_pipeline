@@ -476,9 +476,12 @@ def fit(
     operator is applied at all: the pixelized inversion uses JAX's own linear
     algebra on the plain dataset, and applying the operator on top of that path
     replaces the linear algebra JAX is fastest at with one it is not.
+
+    The operator is applied further down, after ``apply_over_sampling``: that call
+    rebuilds the dataset and does not carry the operator across, so applying it
+    here first silently dropped it and the fit fell back to the dense mapping
+    route (~5x slower per evaluation, identical likelihood).
     """
-    if use_cpu:
-        dataset = dataset.apply_sparse_operator_cpu()
 
     """
     __Image Mesh__
@@ -625,6 +628,9 @@ def fit(
         over_sample_size_lp=dataset.grids.lp.over_sample_size,
         over_sample_size_pixelization=over_sample_size_pixelization,
     )
+
+    if use_cpu:
+        dataset = dataset.apply_sparse_operator_cpu()
 
     """
     __Analysis And Positions__
