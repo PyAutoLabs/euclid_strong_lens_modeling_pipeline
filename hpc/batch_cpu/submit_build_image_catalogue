@@ -1,0 +1,64 @@
+#!/bin/bash -l
+#
+# Build the slim per-lens image catalogue for one sample, on the cluster.
+#
+# WHAT THIS DOES
+#   Runs `scripts/tools/build_image_catalogue.py`, which copies three PNGs per
+#   lens (subplot_fit_lp.png, subplot_fit_pix.png, rgb.png) out of the vis_lp /
+#   vis_pix result zips into `inspect/<sample>_images/<tile>/`, then writes an
+#   uncompressed tar of that directory to `inspect/<sample>_images.tar`.
+#   It fits nothing. Lenses lacking a finished vis_lp or vis_pix result are
+#   warned and skipped.
+#
+# IDEMPOTENT
+#   A lens whose three PNGs already exist is validated and counted `already`,
+#   so re-submitting after more vis_pix fits finish picks up only the
+#   stragglers (and rewrites the tar over the full set).
+#
+# RESOURCES
+#   Serial, I/O bound: ~5000 lenses took an estimated ~3.5 h and ~6.5 GB
+#   (plus the same again for the tar). One task, 2 CPUs, 8 GB, 10 h.
+#
+# HOW TO SUBMIT
+#   hpc/sync submit cpu submit_build_image_catalogue
+#   hpc/sync submit cpu submit_build_image_catalogue --export=ALL,SAMPLE=dr1_sep1_rest
+#   or, from this directory on the cluster:  sbatch submit_build_image_catalogue
+#   If `ral` is saturated, `--partition=gpu` without --gres runs it CPU-only
+#   (the 2026-09-28 dr1_sep1_rest build, job 366737, ran that way).
+
+#SBATCH -J euclid_dr1_image_catalogue
+#SBATCH -n 1
+#SBATCH --cpus-per-task=2
+#SBATCH -o output/output.%A.out
+#SBATCH -e error/error.%A.err
+#SBATCH --partition=ral
+#SBATCH -t 10:00:00
+#SBATCH --mem=8gb
+
+export PROJECT_PATH="${PROJECT_PATH:-$(cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")}/../.." && pwd)}"
+export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
+
+source "$PROJECT_PATH/activate.sh"
+set -e
+
+export JAX_PLATFORM_NAME=cpu
+export JAX_PLATFORMS=cpu
+
+SAMPLE="${SAMPLE:-dr1_sep1_rest}"
+CATALOGUE_DIR="${CATALOGUE_DIR:-inspect/${SAMPLE}_images}"
+TAR_TO="${TAR_TO:-$PROJECT_PATH/inspect/${SAMPLE}_images.tar}"
+
+echo "Project     : $PROJECT_PATH"
+echo "Sample      : $SAMPLE"
+echo "Catalogue   : $CATALOGUE_DIR"
+echo "Tar         : $TAR_TO"
+date
+
+cd "$PROJECT_PATH"
+python3 scripts/tools/build_image_catalogue.py \
+    --sample="$SAMPLE" \
+    --catalogue_dir="$CATALOGUE_DIR" \
+    --tar_to="$TAR_TO"
+
+echo "Finished image catalogue: $SAMPLE"
+date
