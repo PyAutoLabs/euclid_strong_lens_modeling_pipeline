@@ -1,0 +1,91 @@
+#!/bin/bash -l
+#
+# Initial lens model, stage 2 of 2 on CPU: the `vis_pix` search (Numba sparse
+# CPU, forked pool, no JAX) for part 03 of the v2-grade batch of 5,000 lenses of
+# `dataset/dr1_sep1_rest/`.
+#
+# THIS RUN
+#   Follow-up to vis_lp array 367141 (`submit_initial_lens_model_vis_lp_v2grade_p03`).
+#   Same manifest, `hpc/run_manifests/vis_lp_v2grade_20260928_part03.txt`, so array
+#   task N continues the lens that task N of 367141 fitted. Submitted by
+#   `hpc/batch_cpu/submit_vis_pix_v2grade_overnight.sh` on RAL, in two parts:
+#     - one array over the indices whose vis_lp task had COMPLETED at submit
+#       time (no dependency: they start as soon as resources allow);
+#     - one single-task array per still-queued index N, with
+#       `--dependency=afterok:367141_N --kill-on-invalid-dep=yes`, so it starts
+#       when vis_lp task N succeeds and is cancelled if it fails or times out.
+#   (`--dependency=aftercorr:367141` over one 0-999 array was tried first and never
+#   fired: slurmctld purges completed task records after MinJobAge=300 s and
+#   the pending array stayed PENDING(Dependency) even for fresh completions.)
+#   Each task also checks that exactly one completed vis_lp zip exists in
+#   `output/` before starting; a vis_pix search that already completed is
+#   loaded, not re-fitted.
+#   Resources: 8 CPU / 16 GB, as the n5k vis_pix arrays after their scontrol
+#   repack (MaxRSS p99 10.9 GB, max 11.5 GB over 2,004 tasks). Walltime 24 h: under
+#   the old dense route the n5k p99 was 16.8 h (47 TIMEOUTs at 18 h); the sparse fix
+#   (clone 32fbf62) cut per-evaluation cost ~5.4x, so 24 h is headroom, not need.
+#   Partition ral,gpu: 19 of 28 ral nodes are admin-drained and the rest are busy
+#   with vis_lp; the gpu nodes run CPU-only work without --gres (no GPU reserved).
+#
+# SUBMIT
+#   bash hpc/batch_cpu/submit_vis_pix_v2grade_overnight.sh   (on RAL, all 5 parts)
+#   or by hand: hpc/sync submit cpu submit_initial_lens_model_vis_pix_v2grade_p03 --array=<indices>
+#
+#SBATCH -J euclid_dr1_vis_pix_v2g_p03
+#SBATCH -n 1
+#SBATCH --cpus-per-task=8
+#SBATCH -o output/output.%A_%a.out
+#SBATCH -e error/error.%A_%a.err
+#SBATCH --partition=ral,gpu
+#SBATCH -t 24:00:00
+#SBATCH --mem=16gb
+#SBATCH --array=0-999%60
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=james.w.nightingale@durham.ac.uk
+
+export PROJECT_PATH=/mnt/ral/jnightin/euclid_dr1
+export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
+
+source $PROJECT_PATH/activate.sh
+
+THREADS=$SLURM_CPUS_PER_TASK
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export NPROC=$THREADS
+
+sample=dr1_sep1_rest
+manifest="$PROJECT_PATH/hpc/run_manifests/vis_lp_v2grade_20260928_part03.txt"
+mapfile -t datasets < "$manifest"
+
+INDEX=$SLURM_ARRAY_TASK_ID
+dataset="${datasets[$INDEX]}"
+
+if [[ ${#datasets[@]} -ne 1000 || -z "$dataset" ]]; then
+    echo "ERROR: expected a 1000-tile manifest and a dataset at index $INDEX" >&2
+    exit 1
+fi
+shopt -s nullglob
+vis_lp_zips=("$PROJECT_PATH/output/$sample/$dataset/initial_lens_model/vis_lp"/*.zip)
+if [[ ${#vis_lp_zips[@]} -ne 1 ]]; then
+    echo "ERROR: expected one completed vis_lp zip for $dataset, found ${#vis_lp_zips[@]}" >&2
+    exit 1
+fi
+
+echo "=========================================="
+echo "Array task : $INDEX / ${#datasets[@]}"
+echo "Sample     : $sample"
+echo "Dataset    : $dataset"
+echo "Stage      : vis_pix (Numba CPU sparse, no JAX)"
+echo "Pool procs : $THREADS"
+echo "Node       : $(hostname) (partition $SLURM_JOB_PARTITION)"
+echo "vis_lp seed: ${vis_lp_zips[0]}"
+date
+
+python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \
+    --stage=vis_pix --use_cpu --number_of_cores=$THREADS --iterations_per_quick_update=1000
+
+echo "Finished vis_pix: $dataset"
+date
