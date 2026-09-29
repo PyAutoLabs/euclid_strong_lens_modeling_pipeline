@@ -1,0 +1,125 @@
+#!/bin/bash -l
+#
+# Add lens structure (Einstein radius, lens Sersic n / R_eff) and per-band
+# astrometric offsets to an existing magnitudes inspect bundle, on the cluster.
+#
+# WHAT THIS DOES — one catalogue producer per job, chosen by STAGE:
+#   STAGE=lens_mass            catalogue/scripts/lens_mass.py (bundle stage 4)
+#                              over `output/<sample>` initial_lens_model/vis_pix
+#                              -> lens_mass.csv (SIE + shear + effective_einstein_radius)
+#   STAGE=lens_sersic          catalogue/scripts/lens_sersic.py (stage 5) over
+#                              `output_sed/<sample>` sersic_lens_model/vis — the
+#                              VIS Sersic fit lives in the SED tree for dr1_sep1_rest,
+#                              not in `output/` -> lens_sersic.csv
+#   STAGE=astrometric_offsets  catalogue/scripts/astrometric_offsets.py (stage 10)
+#                              over `output_sed/<sample>` sersic_lens_model/<band>
+#                              -> astrometric_offsets.csv (row per lens x band)
+#   ASTRO_SCRIPT overrides the astrometric producer's path (e.g. a pinned copy of
+#   a specific revision placed beside the other producers in catalogue/scripts/).
+#
+#   Each producer writes into its OWN staging dir, $STAGE_ROOT/$STAGE, never
+#   into $INSPECT_DIR directly: `output/` holds more lenses than the bundle
+#   (every vis_pix fit, not just the SED sample), and the producers create a
+#   folder for every lens they find. After the producer finishes, the merge step
+#   below copies the master CSV into $INSPECT_DIR restricted to the lenses that
+#   already have a folder there, and copies each such lens's per-lens CSV into
+#   its folder. Nothing else in $INSPECT_DIR (magnitudes.csv, per-lens
+#   magnitudes copies, ...) is touched. The unrestricted master stays in the
+#   staging dir. Fits nothing; safe to re-run.
+#
+# HOW TO SUBMIT — three independent jobs, run in parallel
+#   for s in lens_mass lens_sersic astrometric_offsets; do
+#       hpc/sync submit cpu submit_structure_astrometry --export=ALL,STAGE=$s -J dr1_struct_$s
+#   done
+#   (`--partition=gpu` without --gres runs it CPU-only when `ral` is saturated)
+
+#SBATCH -J euclid_dr1_structure_astrometry
+#SBATCH -n 1
+#SBATCH --cpus-per-task=4
+#SBATCH -o output/output.%A.out
+#SBATCH -e error/error.%A.err
+#SBATCH --partition=ral
+#SBATCH -t 12:00:00
+#SBATCH --mem=32gb
+
+export PROJECT_PATH="${PROJECT_PATH:-$(cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")}/../.." && pwd)}"
+export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
+
+source "$PROJECT_PATH/activate.sh"
+set -e
+
+export JAX_PLATFORM_NAME=cpu
+export JAX_PLATFORMS=cpu
+THREADS=${SLURM_CPUS_PER_TASK:-4}
+export OPENBLAS_NUM_THREADS=$THREADS MKL_NUM_THREADS=$THREADS OMP_NUM_THREADS=$THREADS
+
+STAGE="${STAGE:?set STAGE=lens_mass|lens_sersic|astrometric_offsets}"
+SAMPLE="${SAMPLE:-dr1_sep1_rest}"
+INSPECT_DIR="${INSPECT_DIR:-inspect/${SAMPLE}_magnitudes}"
+STAGE_ROOT="${STAGE_ROOT:-inspect/${SAMPLE}_structure_astrometry_staging}"
+
+case "$STAGE" in
+    lens_mass)           SCRIPT=catalogue/scripts/lens_mass.py;   OUT="${MAIN_OUTPUT_DIR:-output}" ;;
+    lens_sersic)         SCRIPT=catalogue/scripts/lens_sersic.py; OUT="${SED_OUTPUT_DIR:-output_sed}" ;;
+    astrometric_offsets) SCRIPT="${ASTRO_SCRIPT:-catalogue/scripts/astrometric_offsets.py}"; OUT="${SED_OUTPUT_DIR:-output_sed}" ;;
+    *) echo "unknown STAGE=$STAGE" >&2; exit 2 ;;
+esac
+
+echo "Project    : $PROJECT_PATH"
+echo "Stage      : $STAGE ($SCRIPT)"
+echo "Sample     : $SAMPLE"
+echo "Results    : $OUT"
+echo "Staging    : $STAGE_ROOT/$STAGE"
+echo "Inspect dir: $INSPECT_DIR"
+date
+
+cd "$PROJECT_PATH"
+[ -d "$INSPECT_DIR" ] || { echo "no inspect dir $INSPECT_DIR" >&2; exit 2; }
+
+# The producers open the aggregator with unzip_temporary=True, which extracts
+# every result zip into $TMPDIR and holds them until exit — far beyond a node's
+# /tmp for a DR1-sized tree. Put the extraction on the project filesystem, one
+# directory per job so parallel stages never share it, and remove it afterwards.
+export TMPDIR="$PROJECT_PATH/.tmp_structure_${STAGE}_${SLURM_JOB_ID:-$$}"
+mkdir -p "$TMPDIR"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+STAGE_DIR="$STAGE_ROOT/$STAGE"
+mkdir -p "$STAGE_DIR"
+
+echo "==> $STAGE"
+python3 "$SCRIPT" --sample="$SAMPLE" --output_path="$OUT" --inspect_dir="$STAGE_DIR"
+date
+
+echo "==> merge $STAGE into $INSPECT_DIR (bundle lenses only)"
+python3 - "$STAGE_DIR/$STAGE.csv" "$INSPECT_DIR" "$STAGE.csv" <<'PY'
+import csv, shutil, sys
+from pathlib import Path
+
+master, inspect, name = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+bundle = {p.name for p in inspect.iterdir() if p.is_dir() and p.name.startswith("Tile")}
+
+with open(master, newline="") as f:
+    reader = csv.DictReader(f)
+    fields, rows = reader.fieldnames, list(reader)
+
+kept = [r for r in rows if r.get("lens_name") in bundle]
+staged = inspect / f".{name}.tmp"
+with open(staged, "w", newline="") as f:
+    writer = csv.DictWriter(f, fieldnames=fields)
+    writer.writeheader()
+    writer.writerows(kept)
+staged.replace(inspect / name)
+
+copied = 0
+for lens in sorted({r["lens_name"] for r in kept}):
+    shutil.copy2(master.parent / lens / name, inspect / lens / name)
+    copied += 1
+
+print(f"master rows {len(rows)} ({len({r.get('lens_name') for r in rows})} lenses); "
+      f"kept {len(kept)} rows for bundle lenses; per-lens files copied {copied} "
+      f"of {len(bundle)} bundle folders")
+PY
+
+echo "Finished $STAGE: $SAMPLE"
+date
