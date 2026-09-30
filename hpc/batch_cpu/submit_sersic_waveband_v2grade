@@ -1,0 +1,108 @@
+#!/bin/bash -l
+#
+# Multi-wavelength SED chain (VIS Sersic fit + one Sersic fit per NIR/DECam
+# band, JAX on CPU) for the v2-grade batch of 5,000 lenses of
+# `dataset/dr1_sep1_rest/`.
+#
+# THIS RUN
+#   Follow-up to the v2-grade vis_lp arrays 366938 (p01), 367039 (p02),
+#   367141 (p03), 367243 (p04), 367244 (p05), independent of vis_pix (no
+#   dependency). One array per part, --export=ALL,PART=01 .. 05, over
+#   `hpc/run_manifests/sed_v2grade_20260930_partNN.txt`: the tiles of
+#   `vis_lp_v2grade_20260928_partNN.txt` (original order) whose vis_lp task was
+#   COMPLETED in sacct on 2026-09-30 (4,982 of 5,000; the 18 TIMEOUT / still
+#   RUNNING tiles are left out). Pass --array=0-<n-1>%40: 200 concurrent at
+#   most across the five parts, so the ~2,650 pending v2g vis_pix tasks are
+#   not starved. The vis_lp seed zip is copied from `output/` into
+#   `output_sed/`. Tiles without DECam EXT imaging fit VIS + NIR Y/J/H only.
+#
+#   Walltime 3 h on purpose. The n5k SED arrays (356451-356453, 356555,
+#   356556) completed with p50 0.24 h, p90 0.65 h, p99 2.66 h (max 9.4 h) and
+#   MaxRSS ~3 GB, but 908 / 4,975 hit TIMEOUT at 6 h: they hang in one band's
+#   Nautilus search (no progress after "Running search with JAX
+#   vectorization"), and 45 / 46 re-runs at 18 h timed out again, so a longer
+#   wall only burns node-hours. Expect ~18 % TIMEOUT here; those tiles are
+#   left for a later fix of the hang and a rerun.
+#   Resources: 8 CPU / 16 GB (MaxRSS ~3 GB). Partition ral,gpu: the gpu nodes
+#   run CPU-only work without --gres (no GPU reserved).
+#
+# SUBMIT (on RAL, from hpc/batch_cpu so the -o/-e paths resolve)
+#   sbatch --export=ALL,PART=01 --array=0-997%40 submit_sersic_waveband_v2grade
+#   or: hpc/sync submit cpu submit_sersic_waveband_v2grade --export=ALL,PART=01 --array=0-997%40
+#
+#SBATCH -J euclid_dr1_sed_v2g
+#SBATCH -n 1
+#SBATCH --cpus-per-task=8
+#SBATCH -o output/output.%A_%a.out
+#SBATCH -e error/error.%A_%a.err
+#SBATCH --partition=ral,gpu
+#SBATCH -t 03:00:00
+#SBATCH --mem=16gb
+#SBATCH --array=0-997%40
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=james.w.nightingale@durham.ac.uk
+
+set -euo pipefail
+
+export PROJECT_PATH=/mnt/ral/jnightin/euclid_dr1
+export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
+export PYAUTO_OUTPUT_DIR=output_sed
+
+source "$PROJECT_PATH/activate.sh"
+
+sample=dr1_sep1_rest
+PART="${PART:?PART not set: --export=ALL,PART=01}"
+manifest="$PROJECT_PATH/hpc/run_manifests/sed_v2grade_20260930_part${PART}.txt"
+mapfile -t datasets < "$manifest"
+
+index=$SLURM_ARRAY_TASK_ID
+dataset="${datasets[$index]}"
+threads=$SLURM_CPUS_PER_TASK
+
+if [[ -z "$dataset" ]]; then
+    echo "ERROR: no dataset at index $index of $manifest (${#datasets[@]} tiles)" >&2
+    exit 1
+fi
+
+dataset_fits="$PROJECT_PATH/dataset/$sample/$dataset/$dataset.fits"
+# A tile without EXT/DECam imaging still runs: the waveband chain fits every
+# `<BAND>_BGSUB` HDU the cut-out holds, so it fits VIS + NIR Y/J/H only.
+if ! grep -a -q 'DECAM_G_BGSUB' "$dataset_fits"; then
+    echo "NOTE: $dataset has no EXT/DECam imaging; fitting VIS + NIR Y/J/H only"
+fi
+
+# Seed output_sed with the completed VIS result so the chain cache-skips vis_lp.
+seed_source="$PROJECT_PATH/output/$sample/$dataset/initial_lens_model/vis_lp"
+seed_target="$PROJECT_PATH/$PYAUTO_OUTPUT_DIR/$sample/$dataset/initial_lens_model/vis_lp"
+mkdir -p "$seed_target"
+shopt -s nullglob
+seed_zips=("$seed_source"/*.zip)
+if [[ ${#seed_zips[@]} -ne 1 ]]; then
+    echo "ERROR: expected one completed vis_lp seed for $dataset, found ${#seed_zips[@]}" >&2
+    exit 1
+fi
+cp -a "${seed_zips[0]}" "$seed_target/"
+
+echo "Array task : $index / ${#datasets[@]}"
+echo "Sample     : $sample"
+echo "Dataset    : $dataset"
+echo "Bands      : VIS, NIR Y/J/H, DECam g/r/i/z"
+echo "Output dir : $PYAUTO_OUTPUT_DIR"
+date
+
+env JAX_PLATFORM_NAME=cpu JAX_PLATFORMS=cpu \
+    python3 -c 'import jax; raise SystemExit(0 if jax.default_backend() == "cpu" else 1)'
+
+env JAX_PLATFORM_NAME=cpu \
+    JAX_PLATFORMS=cpu \
+    OPENBLAS_NUM_THREADS="$threads" \
+    MKL_NUM_THREADS="$threads" \
+    OMP_NUM_THREADS="$threads" \
+    VECLIB_MAXIMUM_THREADS="$threads" \
+    NUMEXPR_NUM_THREADS="$threads" \
+    NPROC="$threads" \
+    python3 "$PROJECT_PATH/scripts/sersic_lens_model_waveband.py" \
+        --sample="$sample" --dataset="$dataset" --number_of_cores="$threads"
+
+echo "Finished: $dataset"
+date
