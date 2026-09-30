@@ -58,6 +58,7 @@
 #SBATCH -o output/output.%A.out
 #SBATCH -e error/error.%A.err
 #SBATCH --partition=ral
+# NEVER add gpu here: CPU arrays on the gpu partition fill both A100 nodes' CPUs and idle all 8 GPUs.
 #SBATCH -t 06:00:00
 #SBATCH --mem=8gb
 #SBATCH --mail-type=END,FAIL
