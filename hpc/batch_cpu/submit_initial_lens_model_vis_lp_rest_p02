@@ -1,0 +1,87 @@
+#!/bin/bash -l
+#
+# Initial lens model, stage 1 of 2 on CPU: the `vis_lp` search only.
+#
+# THIS RUN
+#   Part 02 of 4 of the "rest" vis_lp batch of 3,779 lenses of `dataset/dr1_sep1_rest/`
+#   selected on 2026-09-30: every one of the 14,032 tiles NOT already given vis_lp by
+#   `vis_lp_next5000_20260925`, `vis_lp_v2grade_20260928` or `positions_priority_250`
+#   (3,782: v2 Grade B 3,204 / C 577 / X 1 in `catalogue/grades/tile_grades_dr1_sep1_v2.csv`),
+#   minus 3 B tiles whose info.json is empty locally and on RAL. None of the 3,779 had an
+#   `output/dr1_sep1_rest/<tile>/` directory on RAL at selection. Ordered by v2_score
+#   descending (ties by tile name) and split contiguously, so part01 holds the best.
+#   This part holds 945 v2 Grade B, v2_score 1.983 -> 1.899, read from
+#   `hpc/run_manifests/vis_lp_rest_20260930_part02.txt` (task N = line N).
+#   Positions are the finder-2.1 files, used exactly as next5000 / v2grade
+#   (n_lt_2 / no positions.json fit with no positions penalty).
+#   Resources: 4 CPU / 12 GB / 18 h, as the v2grade vis_lp (4,982 COMPLETED: elapsed p50
+#   2.1 h, p99 5.4 h; MaxRSS max 4.1 GB; 18 TIMEOUT). Partition ral,gpu (gpu nodes run
+#   CPU-only work without --gres; 18/28 ral nodes drained), as the vis_pix / SED arrays.
+#
+# WHAT THIS DOES
+#   Fits the light-profile source model (`vis_lp`) with JAX pinned to the CPU
+#   backend, then exits. It does NOT fit the pixelized source; see
+#   `submit_initial_lens_model_vis_lp_rest_01` for why the two stages are
+#   separate processes.
+#
+# SUBMIT
+#   hpc/sync submit cpu submit_initial_lens_model_vis_lp_rest_p02
+#
+#SBATCH -J euclid_dr1_vis_lp_rest_p02
+#SBATCH -n 1
+#SBATCH --cpus-per-task=4
+#SBATCH -o output/output.%A_%a.out
+#SBATCH -e error/error.%A_%a.err
+#SBATCH --partition=ral,gpu
+#SBATCH -t 18:00:00
+#SBATCH --mem=12gb
+#SBATCH --array=0-944%100
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=james.w.nightingale@durham.ac.uk
+
+export PROJECT_PATH=/mnt/ral/jnightin/euclid_dr1
+export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
+
+source $PROJECT_PATH/activate.sh
+
+export JAX_PLATFORM_NAME=cpu
+export JAX_PLATFORMS=cpu
+
+THREADS=$SLURM_CPUS_PER_TASK
+export OPENBLAS_NUM_THREADS=$THREADS
+export MKL_NUM_THREADS=$THREADS
+export OMP_NUM_THREADS=$THREADS
+export VECLIB_MAXIMUM_THREADS=$THREADS
+export NUMEXPR_NUM_THREADS=$THREADS
+export NPROC=$THREADS
+
+sample=dr1_sep1_rest
+manifest="$PROJECT_PATH/hpc/run_manifests/vis_lp_rest_20260930_part02.txt"
+mapfile -t datasets < "$manifest"
+
+INDEX=$SLURM_ARRAY_TASK_ID
+dataset="${datasets[$INDEX]}"
+
+if [[ ${#datasets[@]} -ne 945 || -z "$dataset" ]]; then
+    echo "ERROR: expected a 945-tile manifest and a dataset at index $INDEX" >&2
+    exit 1
+fi
+if [[ ! -f "$PROJECT_PATH/dataset/$sample/$dataset/$dataset.fits" ]]; then
+    echo "ERROR: dataset/$sample/$dataset/$dataset.fits is missing" >&2
+    exit 1
+fi
+
+echo "=========================================="
+echo "Array task : $INDEX / ${#datasets[@]}"
+echo "Sample     : $sample"
+echo "Dataset    : $dataset"
+echo "Stage      : vis_lp (JAX on CPU)"
+echo "CPUs       : $THREADS"
+echo "Positions  : $(cat $PROJECT_PATH/dataset/$sample/$dataset/positions_meta.json 2>/dev/null || echo 'no positions_meta.json')"
+date
+
+python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \
+    --stage=vis_lp --number_of_cores=$THREADS
+
+echo "Finished vis_lp: $dataset"
+date
