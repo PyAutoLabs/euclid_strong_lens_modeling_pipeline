@@ -10,18 +10,37 @@
 #   It fits nothing. Lenses lacking a finished vis_lp or vis_pix result are
 #   warned and skipped.
 #
+#   With MASS=1 (the default) it also adds the lens mass model, in this order:
+#     1. build_image_catalogue.py (incremental, no tar yet)
+#     2. catalogue/scripts/lens_mass.py over output/<sample> vis_pix into a
+#        STAGING dir, $MASS_STAGING — never into the catalogue directly, since
+#        output/ holds lenses the catalogue does not and lens_mass.py makes a
+#        folder for every lens it finds
+#     3. scripts/tools/add_mass_to_image_catalogue.py: restricts that master to
+#        the catalogue's lens folders and writes <catalogue>/mass.csv (lens_name,
+#        einstein_radius, einstein_radius_lower_1sigma,
+#        einstein_radius_upper_1sigma — the effective Einstein radius latent, in
+#        arcsec, the value the GUI shows) plus the full lens_mass.csv, both at
+#        the root and one row per lens folder; catalogue lenses missing from
+#        lens_mass are listed in the job log
+#     4. the tar, over the full set, so it carries the mass files too
+#   MASS=0 skips steps 2-3 (images only, as before).
+#
 # IDEMPOTENT
 #   A lens whose three PNGs already exist is validated and counted `already`,
 #   so re-submitting after more vis_pix fits finish picks up only the
-#   stragglers (and rewrites the tar over the full set).
+#   stragglers; the mass files are rewritten from a fresh scrape and the tar is
+#   rewritten over the full set.
 #
 # RESOURCES
 #   Serial, I/O bound: ~5000 lenses took an estimated ~3.5 h and ~6.5 GB
-#   (plus the same again for the tar). One task, 2 CPUs, 8 GB, 10 h.
+#   (plus the same again for the tar). The lens_mass scrape of ~5200 vis_pix
+#   results took ~1 h and <1 GB RSS (job 371299). One task, 2 CPUs, 16 GB, 12 h.
 #
 # HOW TO SUBMIT
 #   hpc/sync submit cpu submit_build_image_catalogue
 #   hpc/sync submit cpu submit_build_image_catalogue --export=ALL,SAMPLE=dr1_sep1_rest
+#   hpc/sync submit cpu submit_build_image_catalogue --export=ALL,MASS=0
 #   or, from this directory on the cluster:  sbatch submit_build_image_catalogue
 #   If `ral` is saturated, `--partition=gpu` without --gres runs it CPU-only
 #   (the 2026-09-28 dr1_sep1_rest build, job 366737, ran that way).
@@ -32,8 +51,8 @@
 #SBATCH -o output/output.%A.out
 #SBATCH -e error/error.%A.err
 #SBATCH --partition=ral
-#SBATCH -t 10:00:00
-#SBATCH --mem=8gb
+#SBATCH -t 12:00:00
+#SBATCH --mem=16gb
 
 export PROJECT_PATH="${PROJECT_PATH:-$(cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")}/../.." && pwd)}"
 export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
@@ -47,18 +66,65 @@ export JAX_PLATFORMS=cpu
 SAMPLE="${SAMPLE:-dr1_sep1_rest}"
 CATALOGUE_DIR="${CATALOGUE_DIR:-inspect/${SAMPLE}_images}"
 TAR_TO="${TAR_TO:-$PROJECT_PATH/inspect/${SAMPLE}_images.tar}"
+MASS="${MASS:-1}"
+MASS_STAGING="${MASS_STAGING:-inspect/${SAMPLE}_images_mass_staging}"
 
 echo "Project     : $PROJECT_PATH"
 echo "Sample      : $SAMPLE"
 echo "Catalogue   : $CATALOGUE_DIR"
 echo "Tar         : $TAR_TO"
+echo "Mass        : $MASS (staging $MASS_STAGING)"
 date
 
 cd "$PROJECT_PATH"
+
+echo "==> [1/4] images"
 python3 scripts/tools/build_image_catalogue.py \
     --sample="$SAMPLE" \
-    --catalogue_dir="$CATALOGUE_DIR" \
-    --tar_to="$TAR_TO"
+    --catalogue_dir="$CATALOGUE_DIR"
+date
+
+if [ "$MASS" = "1" ]; then
+    # lens_mass.py opens the aggregator with unzip_temporary=True, extracting
+    # every result zip into $TMPDIR until exit — far beyond a node's /tmp for a
+    # DR1-sized tree. Keep it on the project filesystem, per job, and remove it.
+    export TMPDIR="$PROJECT_PATH/.tmp_image_catalogue_mass_${SLURM_JOB_ID:-$$}"
+    mkdir -p "$TMPDIR" "$MASS_STAGING"
+    trap 'rm -rf "$TMPDIR"' EXIT
+
+    echo "==> [2/4] lens_mass -> $MASS_STAGING"
+    python3 catalogue/scripts/lens_mass.py \
+        --sample="$SAMPLE" \
+        --output_path="${MAIN_OUTPUT_DIR:-output}" \
+        --inspect_dir="$MASS_STAGING"
+    date
+
+    echo "==> [3/4] mass.csv + lens_mass.csv into $CATALOGUE_DIR (catalogue lenses only)"
+    python3 scripts/tools/add_mass_to_image_catalogue.py \
+        --lens_mass="$MASS_STAGING/lens_mass.csv" \
+        --catalogue_dir="$CATALOGUE_DIR"
+    date
+fi
+
+# Written last so it carries the mass files. Staged under a temporary name and
+# renamed, so a failed run never leaves a truncated tar in place of the last
+# good one. Members sit under inspect/<catalogue name>/, exactly as
+# build_image_catalogue.py --tar_to lays them out.
+echo "==> [4/4] tar -> $TAR_TO"
+python3 - "$CATALOGUE_DIR" "$TAR_TO" <<'PY'
+import sys, tarfile, time
+from pathlib import Path
+
+catalogue_dir, tar_path = Path(sys.argv[1]), Path(sys.argv[2])
+tar_path.parent.mkdir(parents=True, exist_ok=True)
+staged = tar_path.with_name(f".{tar_path.name}.tmp")
+started = time.time()
+with tarfile.open(staged, "w") as tf:
+    tf.add(catalogue_dir, arcname=f"inspect/{catalogue_dir.name}")
+staged.replace(tar_path)
+print(f"Tar done in {time.time() - started:.1f}s "
+      f"({tar_path.stat().st_size / 1024 / 1024:.1f} MB)", flush=True)
+PY
 
 echo "Finished image catalogue: $SAMPLE"
 date
