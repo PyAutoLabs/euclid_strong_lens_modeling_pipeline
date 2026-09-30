@@ -22,7 +22,7 @@
 #   search that already completed is loaded, not re-fitted.
 #   Resources: 8 CPU / 16 GB / 24 h, as vis_pix_v2g. Its 3,167 COMPLETED tasks
 #   (sparse route): elapsed p50 1.3 h, p99 2.5 h, max 18.2 h; MaxRSS p50 6.5 GB,
-#   p99 6.8 GB. Partition ral,gpu (gpu nodes run CPU-only work without --gres).
+#   p99 6.8 GB. Partition ral only (never gpu: CPU arrays there starve the A100s).
 #
 # SUBMIT
 #   bash hpc/batch_cpu/submit_vis_pix_rest_chain.sh [--dry-run]   (on RAL, all 4 parts)
