@@ -1,17 +1,22 @@
 #!/bin/bash
 #
-# Chain the vis_pix follow-up onto the "rest" vis_lp arrays (375700-375703, parts 01-04)
-# on RAL, one vis_pix task per tile. Idempotent: re-run it at any time to catch
-# stragglers (race casualties, requeued vis_lp tasks, indices added later).
+# Chain the vis_pix follow-up onto a CPU vis_lp batch on RAL, one vis_pix task per tile.
+# Idempotent: re-run it at any time to catch stragglers (race casualties, requeued
+# vis_lp tasks, indices added later).
+#
+# Batches (--batch=NAME, default rest; each is one config block below):
+#   rest   dr1_sep1_rest, vis_lp 375700-375703 (parts 01-04), vis_lp_rest_20260930_partNN.txt
+#   sep28  dr1_v2_new, vis_lp 384040 (part 01), vis_lp_sep28_20261001.txt
 #
 # Run ON RAL (ssh euclid_jump), from anywhere:
-#   bash /mnt/ral/jnightin/euclid_dr1/hpc/batch_cpu/submit_vis_pix_rest_chain.sh [--dry-run] [PART ...]
-#   e.g.  ... --dry-run          (all parts, print only)
-#         ... 01 02              (real run, parts 01 and 02 only)
+#   bash /mnt/ral/jnightin/euclid_dr1/hpc/batch_cpu/submit_vis_pix_rest_chain.sh [--batch=NAME] [--dry-run] [PART ...]
+#   e.g.  ... --dry-run                 (rest, all parts, print only)
+#         ... 01 02                     (rest, real run, parts 01 and 02 only)
+#         ... --batch=sep28 --dry-run   (sep28, print only)
 #
 # Per part, for every manifest index N (task N of vis_lp = line N of the manifest):
-#   (a) skip N if a vis_pix_rest job for N is queued / running / completed (squeue +
-#       sacct over jobs named euclid_dr1_vis_pix_rest_pNN), or if the tile already has
+#   (a) skip N if a vis_pix job for N is queued / running / completed (squeue +
+#       sacct over jobs named euclid_dr1_vis_pix_<batch>_pNN), or if the tile already has
 #       a vis_pix zip. A vis_pix task that ended FAILED / TIMEOUT / OUT_OF_MEMORY /
 #       NODE_FAIL is listed and NOT resubmitted (look at it first). A CANCELLED one
 #       (e.g. killed by --kill-on-invalid-dep) is treated as absent.
@@ -35,21 +40,41 @@
 set -uo pipefail
 
 DRY=0
+BATCH=rest
 PARTS=()
 for a in "$@"; do
     case "$a" in
         --dry-run) DRY=1 ;;
-        0[1-4]) PARTS+=("$a") ;;
+        --batch=*) BATCH=${a#--batch=} ;;
+        [0-9][0-9]) PARTS+=("$a") ;;
         *) echo "unknown argument: $a" >&2; exit 2 ;;
     esac
 done
-[[ ${#PARTS[@]} -eq 0 ]] && PARTS=(01 02 03 04)
 
 PROJECT_PATH=${PROJECT_PATH:-/mnt/ral/jnightin/euclid_dr1}
 BATCH_DIR=$PROJECT_PATH/hpc/batch_cpu
-SAMPLE=dr1_sep1_rest
-SINCE=2026-09-30T00:00
-declare -A VIS_LP=([01]=375700 [02]=375701 [03]=375702 [04]=375703)
+declare -A VIS_LP MANIFEST
+case "$BATCH" in
+    rest)
+        SAMPLE=dr1_sep1_rest
+        SINCE=2026-09-30T00:00
+        VIS_LP=([01]=375700 [02]=375701 [03]=375702 [04]=375703)
+        for p in 01 02 03 04; do MANIFEST[$p]=vis_lp_rest_20260930_part$p.txt; done
+        ;;
+    sep28)
+        SAMPLE=dr1_v2_new
+        SINCE=2026-10-01T00:00
+        VIS_LP=([01]=384040)
+        MANIFEST=([01]=vis_lp_sep28_20261001.txt)
+        ;;
+    *) echo "unknown batch: $BATCH (rest | sep28)" >&2; exit 2 ;;
+esac
+ALL_PARTS=($(printf '%s\n' "${!VIS_LP[@]}" | sort))
+[[ ${#PARTS[@]} -eq 0 ]] && PARTS=("${ALL_PARTS[@]}")
+for part in "${PARTS[@]}"; do
+    [[ -n "${VIS_LP[$part]:-}" ]] || { echo "batch $BATCH has no part $part (${ALL_PARTS[*]})" >&2; exit 2; }
+    [[ "${VIS_LP[$part]}" =~ ^[0-9]+$ ]] || { echo "batch $BATCH part $part: vis_lp job id not set (${VIS_LP[$part]})" >&2; exit 2; }
+done
 
 cd "$BATCH_DIR" || exit 1
 
@@ -79,9 +104,9 @@ sbatch_retry() {
 tot_imm=0; tot_dep=0
 for part in "${PARTS[@]}"; do
     lp=${VIS_LP[$part]}
-    script=submit_initial_lens_model_vis_pix_rest_p${part}
-    name=euclid_dr1_vis_pix_rest_p${part}
-    manifest=$PROJECT_PATH/hpc/run_manifests/vis_lp_rest_20260930_part${part}.txt
+    script=submit_initial_lens_model_vis_pix_${BATCH}_p${part}
+    name=euclid_dr1_vis_pix_${BATCH}_p${part}
+    manifest=$PROJECT_PATH/hpc/run_manifests/${MANIFEST[$part]}
     mapfile -t tiles < "$manifest"
     n=${#tiles[@]}
 
@@ -133,7 +158,7 @@ for part in "${PARTS[@]}"; do
     dep_idx=($(awk '$2=="dep"{print $1}' <<<"$classes"))
 
     n_have=$(awk '$2=="have"' <<<"$classes" | grep -c . || true)
-    echo "== part $part (vis_lp $lp, $n tiles): already_have_vis_pix=$n_have immediate=${#imm_idx[@]} dependent=${#dep_idx[@]}"
+    echo "== $BATCH part $part (vis_lp $lp, $n tiles): already_have_vis_pix=$n_have immediate=${#imm_idx[@]} dependent=${#dep_idx[@]}"
     echo "   vis_pix_zip_exists: ${#havezip[@]} [${havezip[*]:-}]"
     echo "   skipped vis_lp failed: [$(awk '$2=="lpbad"{printf "%s:%s ", $1, $3}' <<<"$classes")]"
     echo "   skipped vis_lp COMPLETED without one zip: [${nozip[*]:-}]"
