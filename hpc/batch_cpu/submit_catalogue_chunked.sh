@@ -6,7 +6,7 @@
 #   scripts/build_inspection_bundle.sh walks a sample serially at ~11 min per
 #   100 lenses on 4 CPUs (catalogue_test100_20261005), so the ~15,000-lens DR1
 #   catalogue (dr1_sep1_rest + dr1_v2_new) is ~27 h in one job — over the 24 h
-#   a single job should take. Split into N chunks (default 6) it is ~4.5 h of
+#   a single job should take. Split into N chunks (default 6) it is ~5-7 h of
 #   wall per chunk, all chunks running at once, plus the merge.
 #
 # WHAT IT DOES (run ON RAL, on the login node; it only writes lists and sbatches)
@@ -24,8 +24,10 @@
 #      ARCHIVE=chunked — the distribution zips in inspect/<CATALOGUE>_dist/.
 #
 #   Partition `ral` only (CPU work; never gpu). Walltime per chunk is computed
-#   from the chunk's lens count at MIN_PER_100 (default 22 = 2x the measured 11
-#   min per 100 lenses) plus 30 min, capped at 23:59.
+#   from the chunk's lens count at MIN_PER_100 (default 32 = 2x the ~16 min per
+#   100 lenses measured in catalogue_test110_chunked_20261005, 37-lens chunks in
+#   6.2-6.7 min) plus 30 min, capped at 23:59. N=6 over ~15,000 lenses: ~2,500
+#   per chunk, ~6.7 h expected, 13:52 requested.
 #
 # USAGE
 #   ssh euclid_jump
@@ -39,7 +41,7 @@
 #     N             number of chunks          (default 6)
 #     ARCHIVE       0 | chunked               (default 0)
 #     PART_MAX_GB   cap per distribution part (default 10)
-#     MIN_PER_100   walltime minutes per 100 lenses per chunk (default 22)
+#     MIN_PER_100   walltime minutes per 100 lenses per chunk (default 32)
 #     MERGE_TIME    merge walltime            (default 12:00:00)
 #     DRY=1         write the lists, print the sbatch lines, submit nothing
 #
@@ -62,7 +64,7 @@ SAMPLES=${SAMPLES:-"dr1_sep1_rest dr1_v2_new"}
 N=${N:-6}
 ARCHIVE=${ARCHIVE:-0}
 PART_MAX_GB=${PART_MAX_GB:-10}
-MIN_PER_100=${MIN_PER_100:-22}
+MIN_PER_100=${MIN_PER_100:-32}
 MERGE_TIME=${MERGE_TIME:-12:00:00}
 DRY=${DRY:-0}
 
