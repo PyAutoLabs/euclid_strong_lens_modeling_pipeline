@@ -19,7 +19,8 @@
 #   the login node is the wrong place for an hours-long walk over the tree.
 #
 # RESOURCES
-#   One task, four CPUs, 8 GB, six hours, partition `ral`. The producers are
+#   One task, four CPUs, 8 GB, six hours, partition `ral`. For the full DR1
+#   catalogue (~15k lenses, ~27 h serial) use submit_catalogue_chunked.sh. The producers are
 #   serial Python and the work is dominated by unzip-and-read I/O rather than by
 #   arithmetic, so more cores buy nothing; the four are for the odd threaded
 #   numpy call and for headroom. 8 GB is comfortably above the working set — one
@@ -98,6 +99,14 @@ set -e
 # a GPU that was not allocated, and Numba's on-disk cache is unreliable on NFS.
 export JAX_PLATFORM_NAME=cpu
 export JAX_PLATFORMS=cpu
+
+# The aggregators extract every result zip they open into $TMPDIR and hold them
+# until each producer exits — tens of GB for a DR1 sample, far beyond a node's
+# /tmp — so use a per-job directory on the project filesystem, removed on exit.
+export TMPDIR="$PROJECT_PATH/.tmp_inspection_bundle_${SLURM_JOB_ID:-$$}"
+export NUMBA_CACHE_DIR="$TMPDIR/numba_cache" MPLCONFIGDIR="$TMPDIR/matplotlib"
+mkdir -p "$TMPDIR"
+trap 'rm -rf "$TMPDIR"' EXIT
 
 THREADS=$SLURM_CPUS_PER_TASK
 export OPENBLAS_NUM_THREADS=$THREADS

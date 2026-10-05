@@ -35,6 +35,12 @@ Written to ``<package_dir>/``:
 - ``skipped.csv`` — the tiles passed over on the way to ``N``, and why;
 - ``README.txt`` — the file and coordinate conventions, for the recipient.
 
+``--sample`` may be a comma-separated list (``dr1_sep1_rest,dr1_v2_new``): each
+grade row is then looked up under its own ``sample`` column's results tree, so
+one package covers a merged multi-sample catalogue. ``--n=0`` takes every
+qualifying lens. ``--skip_images`` writes only the JSONs and CSVs (the chunked
+catalogue merge uses this: the catalogue's lens folders already hold the PNGs).
+
 ``--lens_mass`` optionally joins a ``lens_mass.csv`` from
 ``catalogue/scripts/lens_mass.py`` (a vis_pix scrape) onto ``wcs.csv`` as the
 effective Einstein radius median and 1-sigma bounds. ``--zip_to`` writes a
@@ -209,7 +215,7 @@ def check_lens(results_dir: Path, tile: str):
     return zips, None
 
 
-def build_lens(tile, zips, out_dir: Path, dataset_main_dir: Path):
+def build_lens(tile, zips, out_dir: Path, dataset_main_dir: Path, images=True):
     """Collect one lens's two JSONs and three PNGs; returns the decoded JSONs."""
     out_dir.mkdir(parents=True, exist_ok=True)
     wcs = {}
@@ -218,6 +224,8 @@ def build_lens(tile, zips, out_dir: Path, dataset_main_dir: Path):
         if not extract_zip_member(zips[stage], "files/wcs.json", dest):
             raise RuntimeError(f"{tile}: files/wcs.json vanished from {zips[stage]}")
         wcs[stage] = plain_from(json.loads(dest.read_text()))
+    if not images:
+        return wcs
 
     for stage, name in (("vis_lp", "subplot_fit_lp.png"), ("vis_pix", "subplot_fit_pix.png")):
         if not extract_zip_member(zips[stage], "image/fit.png", out_dir / name):
@@ -404,15 +412,19 @@ def main() -> int:
     )
     grades_csv = resolve(args.grades, None)
     package_dir = resolve(
-        args.package_dir, Path("inspect") / f"{args.sample}_wcs_top{args.n}"
+        args.package_dir,
+        Path("inspect") / f"{args.sample.replace(',', '_')}_wcs_top{args.n}",
     )
-    results_dir = output_path / args.sample
-    dataset_main_dir = PROJECT_ROOT / "dataset" / args.sample
+    samples = [name for name in args.sample.split(",") if name]
     lens_mass = read_lens_mass(resolve(args.lens_mass, None)) if args.lens_mass else {}
 
-    if not results_dir.is_dir():
-        print(f"ERROR: results directory not found: {results_dir}", file=sys.stderr)
-        return 1
+    for sample in samples:
+        if not (output_path / sample).is_dir():
+            print(
+                f"ERROR: results directory not found: {output_path / sample}",
+                file=sys.stderr,
+            )
+            return 1
     if package_dir.exists():
         print(f"Removing previous package {package_dir}", flush=True)
         shutil.rmtree(package_dir)
@@ -421,15 +433,16 @@ def main() -> int:
     started = time.time()
     taken, skipped = [], []
     for grade_row in ranked_tiles(grades_csv):
-        if len(taken) == args.n:
+        if args.n and len(taken) == args.n:
             break
         tile = grade_row["tile"]
         position = len(taken) + len(skipped) + 1
-        if grade_row.get("sample") and grade_row["sample"] != args.sample:
-            reason = f"sample {grade_row['sample']} (not {args.sample})"
+        sample = grade_row.get("sample") or samples[0]
+        if sample not in samples:
+            reason = f"sample {sample} (not {args.sample})"
             zips = None
         else:
-            zips, reason = check_lens(results_dir, tile)
+            zips, reason = check_lens(output_path / sample, tile)
         if zips is None:
             print(f"SKIP {tile} (score rank {position}): {reason}", flush=True)
             skipped.append(
@@ -445,13 +458,16 @@ def main() -> int:
             continue
         taken.append((grade_row, zips))
 
-    if len(taken) < args.n:
+    if args.n and len(taken) < args.n:
         print(f"WARNING: only {len(taken)} qualifying lenses", flush=True)
 
     wcs_rows, clump_rows = [], []
     for rank, (grade_row, zips) in enumerate(taken, start=1):
         tile = grade_row["tile"]
-        wcs = build_lens(tile, zips, package_dir / tile, dataset_main_dir)
+        dataset_main_dir = PROJECT_ROOT / "dataset" / (grade_row.get("sample") or samples[0])
+        wcs = build_lens(
+            tile, zips, package_dir / tile, dataset_main_dir, images=not args.skip_images
+        )
         mass_row = lens_mass.get(tile)
         if lens_mass and mass_row is None:
             print(f"NOTE {tile}: no lens_mass row", flush=True)
@@ -481,7 +497,7 @@ def main() -> int:
         )
     )
 
-    validate_package(package_dir, taken, wcs_rows, clump_rows)
+    validate_package(package_dir, taken, wcs_rows, clump_rows, images=not args.skip_images)
     print(
         f"Built {len(taken)} lenses ({len(skipped)} skipped) in "
         f"{time.time() - started:.1f}s -> {package_dir}",
@@ -502,7 +518,7 @@ def main() -> int:
     return 0
 
 
-def validate_package(package_dir: Path, taken, wcs_rows, clump_rows):
+def validate_package(package_dir: Path, taken, wcs_rows, clump_rows, images=True):
     """Structural checks of the built package; raises on any failure."""
     lens_dirs = [p for p in package_dir.iterdir() if p.is_dir()]
     assert len(lens_dirs) == len(taken), (len(lens_dirs), len(taken))
@@ -511,7 +527,7 @@ def validate_package(package_dir: Path, taken, wcs_rows, clump_rows):
         for stage in STAGES:
             validate_asset(lens_dir / f"wcs_{stage}.json")
             n_json += 1
-        for name in PNG_NAMES:
+        for name in PNG_NAMES if images else ():
             path = lens_dir / name
             assert path.stat().st_size > 0, path
             validate_asset(path)
@@ -543,12 +559,22 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Package the wcs.json of the top-N graded lenses (vis_lp + vis_pix)."
     )
-    parser.add_argument("--n", type=int, default=100, help="Lenses to take. Default: 100.")
+    parser.add_argument(
+        "--n", type=int, default=100, help="Lenses to take; 0 = all. Default: 100."
+    )
+    parser.add_argument(
+        "--skip_images",
+        action="store_true",
+        help="Write only the wcs JSONs and CSVs, not the three PNGs per lens.",
+    )
     parser.add_argument(
         "--sample",
         metavar="name",
         default=DEFAULT_SAMPLE,
-        help=f"Results sample subdirectory. Default: '{DEFAULT_SAMPLE}'.",
+        help=(
+            f"Results sample subdirectory, or a comma-separated list of them "
+            f"(each grade row read from its own sample). Default: '{DEFAULT_SAMPLE}'."
+        ),
     )
     parser.add_argument(
         "--grades",
