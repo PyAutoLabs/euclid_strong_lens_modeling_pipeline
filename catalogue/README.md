@@ -75,6 +75,8 @@ fit already wrote.
 | `fit_sersic.png` | `scripts/tools/build_inspect.py` | collects `image/fit.png` | `sersic_lens_model/vis` |
 | `coolest.json` | `scripts/tools/build_inspect.py` | collects `files/coolest.json` (best-effort) | `initial_lens_model/vis_pix` |
 | `coolest_sersic.json` | `scripts/tools/build_inspect.py` | collects `files/coolest.json` (best-effort) | `sersic_lens_model/vis` |
+| `wcs_vis_lp.json` / `wcs_vis_pix.json` | `scripts/tools/build_inspect.py` | collects `files/wcs.json` (best-effort) | `initial_lens_model/vis_lp`, `vis_pix` |
+| `vis_pix_source_plane_reconstruction_<i>.csv` | `scripts/tools/build_inspect.py` | collects `image/source_plane_reconstruction_<i>.csv` (best-effort; CSV only, no FITS) | `initial_lens_model/vis_pix` |
 
 `build_inspect.py` never re-renders: it streams the image out of the result zip
 PyAutoFit writes when a search finishes, falling back to the unzipped result
@@ -121,12 +123,13 @@ bash scripts/build_inspection_bundle.sh dr1_prelim_grade_ab run250
 
 | Stage | Script | Reads | Writes |
 |---|---|---|---|
-| 1/10 | `scripts/tools/build_inspect.py` | `output/<sample>/` | the 6 collected PNGs + 2 COOLEST templates |
-| 2/10 | `catalogue/scripts/deblending.py` | `output/<sample>/` | `pre_psf.fits`, `model.fits` |
+| 1/10 | `scripts/tools/build_inspect.py` | `output/<sample>/` (+ `output_sed/<sample>/` for the Sersic fit) | the 6 collected PNGs, 2 COOLEST templates, 2 wcs JSONs, source-reconstruction CSVs |
+| 2/10 | `catalogue/scripts/deblending.py` | `output_sed/<sample>/` | `pre_psf.fits`, `model.fits` (newest result per band) |
+| 2b | `catalogue/scripts/deduplicate_deblending_fits.py` | the bundle | EXTNAME guard; `fits_deduplication_validation.csv` / `_summary.json` |
 | 3/10 | `catalogue/scripts/lens_mass_maps.py` | `output/<sample>/` | `convergence.fits`, `potential.fits`, `deflections.fits` |
 | 4/10 | `catalogue/scripts/lens_mass.py` | `output/<sample>/` | `lens_mass.csv` |
-| 5/10 | `catalogue/scripts/lens_sersic.py` | `output/<sample>/` | `lens_sersic.csv` |
-| 6/10 | `catalogue/scripts/source_sersic.py` | `output/<sample>/` | `source_sersic.csv` |
+| 5/10 | `catalogue/scripts/lens_sersic.py` | `output_sed/<sample>/` | `lens_sersic.csv` |
+| 6/10 | `catalogue/scripts/source_sersic.py` | `output_sed/<sample>/` | `source_sersic.csv` |
 | 7/10 | `catalogue/scripts/witt_wynne.py` | `output/<sample>/` | `witt_wynne.csv`, `witt_wynne.in` |
 | 8/10 | `catalogue/scripts/multi_wavelength.py` | `output_sed/<sample>/` | `fit_multi_wavelength.png` |
 | 9/10 | `catalogue/scripts/magnitudes.py` | `output_sed/<sample>/` | `magnitudes.csv` |
@@ -135,7 +138,12 @@ bash scripts/build_inspection_bundle.sh dr1_prelim_grade_ab run250
 Everything lands in `inspect/<sample>[_<run_tag>]/`, with the master CSVs at the
 root and one folder per lens holding that lens's own copy of every product.
 
-Stages 8-10 read a **separate** results tree. The multi-band SED fits are run
+Every stage keeps only the **newest** completed result per lens, stage and
+band (`catalogue_util.latest_result_per_lens_band`), so a retry sweep that
+re-fitted a band never adds a second row or HDU.
+
+All Sersic fits — the VIS `sersic_lens_model/vis` fit (stages 1, 5, 6) and the
+per-band ones (stages 2, 8-10) — live in the **separate** `output_sed` tree. The multi-band SED fits are run
 with `PYAUTO_OUTPUT_DIR=output_sed` (see `scripts/sersic_lens_model_waveband.py`
 and `scripts/lens_model_waveband.py`), so those three stages are skipped when
 `output_sed/<sample>/` does not exist. Set `SKIP_SED=1` to skip them
@@ -158,14 +166,35 @@ plus `preprocess/segmentation.py` for `segmentation.png`.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `OUTPUT_DIR` | `output` | results tree read by stages 1-7 |
-| `SED_OUTPUT_DIR` | `output_sed` | results tree read by stages 8-10 |
+| `OUTPUT_DIR` | `output` | vis_lp / vis_pix tree: stages 1, 3, 4, 7 |
+| `SED_OUTPUT_DIR` | `output_sed` | Sersic + SED tree: stages 1 (Sersic), 2, 5, 6, 8-10 |
 | `SKIP_SED` | `0` | `1` skips stages 8-10 |
-| `CREATE_ARCHIVE` | `1` | `0` skips the closing `tar czf` |
+| `CREATE_ARCHIVE` | `0` | `1` runs the closing `tar czf` |
+| `DATASETS_FILE` | *(empty)* | build only the lenses listed (one per line) |
+| `INSPECT_DIR` | `inspect/<sample>[_<run_tag>]` | bundle directory |
 | `DATASET_PREFIX` | *(empty)* | restrict stage 1 to lens folders with this name prefix (`Tile` for DR1) |
 
 Every producer can also be run on its own; each takes `--sample`,
-`--output_path` and `--inspect_dir`, and `--help` documents the rest.
+`--output_path`, `--inspect_dir` and `--datasets_file`, and `--help` documents
+the rest.
+
+### The full DR1 catalogue: chunked build on RAL
+
+One serial bundle is ~11 min per 100 lenses, ~27 h for DR1. The chunked build
+splits the tile list of every sample into N chunks (a `ral` array), then a merge
+job (`afterok`) assembles ONE catalogue over all samples, with the QA CSVs,
+`grades.csv`, `wcs.csv` / `source_clumps.csv` and, with `ARCHIVE=chunked`, the
+distribution zips (`catalogue_csvs.zip`, size-capped `catalogue_part_NN.zip`,
+`parts_manifest.csv`, `SHA256SUMS`):
+
+```bash
+ssh euclid_jump
+bash /mnt/ral/jnightin/euclid_dr1/hpc/batch_cpu/submit_catalogue_chunked.sh \
+    CATALOGUE=dr1_catalogue_<date> N=6 ARCHIVE=chunked PART_MAX_GB=10
+```
+
+See the header of `hpc/batch_cpu/submit_catalogue_chunked.sh` and the docstring
+of `scripts/tools/merge_catalogue.py`.
 
 ---
 
