@@ -285,13 +285,9 @@ def main(counts):
         print(f"no sample directory at {sample_root}; nothing to do")
         return
 
-    agg = Aggregator.from_directory(
-        directory=sample_root, completed_only=True, unzip_temporary=True
-    )
+    # Newest result per lens/band, scoped to ``--datasets_file`` when given.
+    agg = catalogue_util.sample_aggregator(sample_root, args.datasets_file)
     agg_query = agg.query(agg.unique_tag == args.unique_tag)
-    agg_query = magnitudes.latest_result_per_lens_band(
-        agg_query, sample_root=sample_root
-    )
     agg_query = with_grid_offset(agg_query)
 
     agg_query = catalogue_util.available_results(

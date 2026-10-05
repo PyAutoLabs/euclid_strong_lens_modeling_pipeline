@@ -175,16 +175,16 @@ def main(counts):
     from autofit.aggregator.aggregator import Aggregator
 
     sample_root = catalogue_util.sample_root_from(output_path, args.sample)
-    dataset_name_list = catalogue_util.dataset_names_from(sample_root)
+    dataset_name_list = catalogue_util.dataset_names_from(
+        sample_root, args.datasets_file
+    )
 
     for dataset_name in dataset_name_list:
         print(dataset_name)
 
-        agg = Aggregator.from_directory(
-            directory=sample_root / dataset_name,
-            completed_only=True,
-            unzip_temporary=True,
-        )
+        # Newest result per band: a re-fitted band must not add a second set
+        # of HDUs / a second row.
+        agg = catalogue_util.lens_aggregator(sample_root, dataset_name)
 
         agg_query = agg.query(agg.unique_tag == args.unique_tag)
 

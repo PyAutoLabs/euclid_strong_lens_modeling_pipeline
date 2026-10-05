@@ -89,91 +89,10 @@ def parse_args():
     return parser.parse_args()
 
 
-def latest_result_per_lens_band(aggregator, sample_root: Path):
-    """
-    Keep only the newest completed result for each ``(lens, stage, band)``.
-
-    __Why Duplicates Happen__
-
-    A result folder is named for the model and configuration that produced it, so
-    re-running a band with anything changed writes a *second* completed folder
-    beside the first rather than overwriting it. That is the right behaviour for
-    a fitting pipeline — nothing is silently destroyed — and the wrong behaviour
-    for a catalogue, where it would put two rows of photometry for the same lens
-    and band into ``magnitudes.csv`` with nothing to say which is current.
-
-    Over a long DR1 campaign, where bands get re-run as calibration or priors
-    improve, this is the difference between a usable table and one that has to be
-    de-duplicated by hand downstream.
-
-    __How The Key Is Built__
-
-    The key is the last four parts of the result's directory,
-    ``<lens>/<stage>/<band>/<hash>``; the first three are the key and the fourth
-    is what varies between duplicates. A path with fewer than four parts is not
-    a per-band result folder and is skipped.
-
-    The tail is used rather than ``relative_to(sample_root)`` because the
-    aggregator is opened with ``unzip_temporary=True``, and under
-    ``config/general.yaml``'s ``hpc.hpc_mode: true`` a completed search leaves
-    only its zip: with no extracted directory beside it the aggregator extracts
-    to a temporary root instead (``autofit/aggregator/aggregator.py``), so
-    ``result.directory`` is no longer under ``sample_root`` at all and
-    ``relative_to`` would raise. That temporary root mirrors the scanned layout,
-    so the trailing four parts are the same in both cases.
-
-    Recency is the timestamp of the result's zip **under the sample root**,
-    reconstructed from that same tail. PyAutoFit writes the zip when the search
-    finishes, so it dates the *completion*. It must not be read from
-    ``result.directory``: in the temporary-extraction case there is no zip
-    beside it, and the extracted directory's own mtime is the time this process
-    unpacked it — identical for every result, which would make the choice
-    between duplicates arbitrary. Where no zip is found (an interrupted or
-    test-mode run, which stays unzipped in place) the directory's own timestamp
-    is used. The full directory string breaks ties, so the selection is
-    deterministic rather than dependent on iteration order.
-
-    The survivors are wrapped back into an ``Aggregator``, so everything
-    downstream of this call treats the de-duplicated set as an ordinary
-    aggregator; the grid-search outputs are carried across untouched.
-    """
-    from autofit.aggregator.aggregator import Aggregator
-
-    selected = {}
-    for result in aggregator:
-        try:
-            tail = result.directory.relative_to(sample_root).parts
-        except ValueError:
-            # A temporary extraction: outside `sample_root` entirely. The
-            # temporary root mirrors the scanned layout, so the trailing four
-            # parts are the same `<lens>/<stage>/<band>/<hash>` they would be
-            # in place. The short-path guard below is left to the branch above,
-            # where a stray directory really does yield fewer than four parts;
-            # taking the tail of an absolute path would always yield four.
-            tail = result.directory.parts[-4:]
-        if len(tail) < 4:
-            continue
-        lens_name, stage, band = tail[:3]
-        key = (lens_name, stage, band)
-        zip_path = Path(f"{Path(sample_root).joinpath(*tail)}.zip")
-        timestamp = (
-            zip_path.stat().st_mtime
-            if zip_path.exists()
-            else result.directory.stat().st_mtime
-        )
-        candidate = (timestamp, str(result.directory), result)
-        if key not in selected or candidate[:2] > selected[key][:2]:
-            selected[key] = candidate
-
-    deduplicated = [candidate[2] for candidate in selected.values()]
-    removed = len(aggregator) - len(deduplicated)
-    if removed:
-        print(f"selected newest result per lens/band; removed {removed} duplicates")
-
-    return Aggregator(
-        search_outputs=deduplicated,
-        grid_search_outputs=aggregator.grid_search_outputs,
-    )
+# Moved to ``catalogue_util`` so every producer de-duplicates the same way (and
+# so a per-lens scan, as in a chunked build, keys on the right lens); kept here
+# under its old name for ``astrometric_offsets.py`` and the tests.
+latest_result_per_lens_band = catalogue_util.latest_result_per_lens_band
 
 
 @catalogue_util.reported("magnitudes", "rows")
@@ -207,11 +126,10 @@ def main(counts):
         print(f"no sample directory at {sample_root}; nothing to do")
         return
 
-    agg = Aggregator.from_directory(
-        directory=sample_root, completed_only=True, unzip_temporary=True
-    )
+    # Newest result per lens/band (``catalogue_util.latest_result_per_lens_band``),
+    # scoped to ``--datasets_file`` when given.
+    agg = catalogue_util.sample_aggregator(sample_root, args.datasets_file)
     agg_query = agg.query(agg.unique_tag == args.unique_tag)
-    agg_query = latest_result_per_lens_band(agg_query, sample_root=sample_root)
 
     agg_query = catalogue_util.available_results(
         agg_query,
