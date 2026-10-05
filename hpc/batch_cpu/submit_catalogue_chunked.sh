@@ -92,7 +92,8 @@ fi
 
 # 1. tile list
 if [[ -n "${TILES_FILE:-}" ]]; then
-    grep -v '^[[:space:]]*\(#\|$\)' "$TILES_FILE" | awk '{print $1, $2}' > "$BUILD/tiles.txt"
+    # tr: a CRLF list would otherwise put a \r into every sample/tile path.
+    tr -d '\r' < "$TILES_FILE" | grep -v '^[[:space:]]*\(#\|$\)' | awk '{print $1, $2}' > "$BUILD/tiles.txt"
 else
     : > "$BUILD/tiles.txt"
     for sample in $SAMPLES; do
