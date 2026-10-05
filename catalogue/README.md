@@ -193,6 +193,11 @@ bash /mnt/ral/jnightin/euclid_dr1/hpc/batch_cpu/submit_catalogue_chunked.sh \
     CATALOGUE=dr1_catalogue_<date> N=6 ARCHIVE=chunked PART_MAX_GB=10
 ```
 
+`PARTS=<k>` instead writes exactly k part zips (contiguous in tile order,
+near-equal bytes; overrides `PART_MAX_GB`). `EXCLUDED_FILE=<csv>`
+(`tile,sample,reason`) records tiles deliberately left out of the build as
+`excluded_tiles.csv` at the catalogue root.
+
 See the header of `hpc/batch_cpu/submit_catalogue_chunked.sh` and the docstring
 of `scripts/tools/merge_catalogue.py`.
 

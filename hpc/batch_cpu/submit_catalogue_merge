@@ -33,13 +33,14 @@ export OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 OMP_NUM_THREADS=1
 CATALOGUE=${CATALOGUE:?CATALOGUE not set}
 ARCHIVE=${ARCHIVE:-0}
 PART_MAX_GB=${PART_MAX_GB:-10}
+PARTS=${PARTS:-0}
 
 export TMPDIR="$PROJECT_PATH/.tmp_catalogue_${CATALOGUE}_merge_${SLURM_JOB_ID:-$$}"
 export NUMBA_CACHE_DIR="$TMPDIR/numba_cache" MPLCONFIGDIR="$TMPDIR/matplotlib"
 mkdir -p "$TMPDIR"
 trap 'rm -rf "$TMPDIR"' EXIT
 
-echo "Merge     : $CATALOGUE  archive=$ARCHIVE  part cap ${PART_MAX_GB} GB"
+echo "Merge     : $CATALOGUE  archive=$ARCHIVE  part cap ${PART_MAX_GB} GB  parts=${PARTS} (0 = by cap)"
 echo "Node      : $(hostname) (partition ${SLURM_JOB_PARTITION:-?})"
 date
 cd "$PROJECT_PATH"
@@ -47,6 +48,7 @@ python3 scripts/tools/merge_catalogue.py \
     --catalogue_dir="inspect/$CATALOGUE" \
     --archive="$ARCHIVE" \
     --part_max_gb="$PART_MAX_GB" \
+    --n_parts="$PARTS" \
     --workers="$THREADS" \
     ${ALLOW_PARTIAL:+--allow_partial}
 echo "Finished merge: $CATALOGUE"

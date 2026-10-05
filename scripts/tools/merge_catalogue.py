@@ -36,10 +36,13 @@ This script turns those into ONE catalogue:
    per-lens ``wcs_vis_lp.json`` / ``wcs_vis_pix.json`` were already collected
    by ``build_inspect.py``).
 6. ``lens_index.csv`` (tile -> sample, grade, which products exist, part zip)
-   and ``README.md``.
+   and ``README.md`` (which also lists ``excluded_tiles.csv`` — tiles left out
+   of the build and why — when the driver was given ``EXCLUDED_FILE``).
 7. With ``--archive=chunked``: the distribution, in ``<catalogue>_dist/``:
    ``catalogue_csvs.zip`` (every root file), ``catalogue_part_NN.zip`` (whole
-   lens folders, each part capped at ``--part_max_gb``), ``parts_manifest.csv``
+   lens folders, each part capped at ``--part_max_gb``; or, with ``--n_parts=k``,
+   EXACTLY k parts cut contiguously in tile order at near-equal byte totals),
+   ``parts_manifest.csv``
    (``tile_id, sample, part_zip``), ``SHA256SUMS``; each zip is re-opened,
    CRC-tested and checked against the manifest before the step succeeds. FITS
    / PNG / JPG members are ZIP_STORED (they barely compress), text is DEFLATED.
@@ -47,7 +50,7 @@ This script turns those into ONE catalogue:
 Usage
 -----
     python scripts/tools/merge_catalogue.py --catalogue_dir=inspect/dr1_catalogue_20261006 \
-        --archive=chunked --part_max_gb=10
+        --archive=chunked --part_max_gb=10      # or --n_parts=10
 """
 
 import argparse
@@ -524,10 +527,13 @@ def write_readme(catalogue_dir, tile_sample, samples, counts, archive):
         "lens_index.csv": "per lens: sample, grade, which products exist, distribution part",
         "band_inventory.csv": "QA: expected vs completed SED bands, every requested tile",
         "unresolved_manifest.csv": "QA: the band_inventory rows not fully complete",
+        "excluded_tiles.csv": "QA: tiles left out of the build (no finished vis_lp + vis_pix), and why",
         "fits_deduplication_validation.csv": "QA: per pre_psf/model.fits, HDU and duplicate-EXTNAME counts",
         "fits_deduplication_summary.json": "QA: summary of the above",
     }
     for name, description in what.items():
+        if name == "excluded_tiles.csv" and name not in counts:
+            continue
         lines.append(f"| `{name}` | {counts.get(name, '')} | {description} |")
     lines += [
         "",
@@ -566,9 +572,44 @@ def folder_size(path: Path):
     return sum(p.stat().st_size for p in path.iterdir() if p.is_file())
 
 
-def plan_parts(catalogue_dir: Path, cap_bytes: int):
+def split_parts(tiles, sizes, n_parts: int):
+    """Cut ``tiles`` (in order) into EXACTLY ``n_parts`` contiguous, non-empty
+    groups whose byte totals are near-equal.
+
+    Boundary ``i`` falls where the running total crosses ``i * total / n_parts``
+    (a tile joins the earlier group when its midpoint lies below the target),
+    so each group is within one largest-folder of ``total / n_parts``.
+    """
+    n = len(tiles)
+    if n_parts < 1:
+        raise ValueError(f"n_parts must be >= 1, got {n_parts}")
+    if n < n_parts:
+        raise ValueError(f"cannot cut {n} lens folders into {n_parts} non-empty parts")
+    total = sum(sizes)
+    parts, start = [], 0
+    for i in range(1, n_parts):
+        target = total * i / n_parts
+        cum = sum(sizes[:start]) + sizes[start]
+        end = start + 1
+        # Leave at least one tile for every later part.
+        while end < n - (n_parts - i) and cum + sizes[end] / 2 <= target:
+            cum += sizes[end]
+            end += 1
+        parts.append(list(tiles[start:end]))
+        start = end
+    parts.append(list(tiles[start:]))
+    return parts
+
+
+def plan_parts(catalogue_dir: Path, cap_bytes: int, n_parts=None):
+    """Whole lens folders per part: greedy up to ``cap_bytes``, or, with
+    ``n_parts``, exactly that many contiguous near-equal parts."""
+    tiles = lens_tiles(catalogue_dir)
+    if n_parts:
+        sizes = [folder_size(catalogue_dir / tile) for tile in tiles]
+        return split_parts(tiles, sizes, n_parts)
     parts, current, size = [], [], 0
-    for tile in lens_tiles(catalogue_dir):
+    for tile in tiles:
         tile_size = folder_size(catalogue_dir / tile)
         if current and size + tile_size > cap_bytes:
             parts.append(current)
@@ -623,9 +664,12 @@ def verify_zip(job):
     return zip_path.name, sha256(zip_path), tiles, len(names)
 
 
-def distribute(catalogue_dir: Path, dist_dir: Path, cap_gb: float, workers: int, tile_sample):
+def distribute(catalogue_dir: Path, dist_dir: Path, cap_gb: float, workers: int, tile_sample,
+               n_parts=None):
     dist_dir.mkdir(parents=True, exist_ok=True)
-    parts = plan_parts(catalogue_dir, int(cap_gb * 1024**3))
+    parts = plan_parts(catalogue_dir, int(cap_gb * 1024**3), n_parts)
+    if n_parts and len(parts) != n_parts:
+        raise RuntimeError(f"planned {len(parts)} parts, --n_parts={n_parts}")
     width = max(2, len(str(len(parts))))
     part_of = {}
     jobs = []
@@ -636,7 +680,8 @@ def distribute(catalogue_dir: Path, dist_dir: Path, cap_gb: float, workers: int,
             part_of[tile] = name
             files += [f"{tile}/{p.name}" for p in sorted((catalogue_dir / tile).iterdir()) if p.is_file()]
         jobs.append((dist_dir / name, catalogue_dir, files))
-    log(f"distribution: {len(parts)} part zips (cap {cap_gb} GB), {workers} workers")
+    rule = f"exactly {n_parts}" if n_parts else f"cap {cap_gb} GB"
+    log(f"distribution: {len(parts)} part zips ({rule}), {workers} workers")
 
     # The index names each tile's part, so it is written before the CSV zip.
     write_index(catalogue_dir, tile_sample, read_grades(catalogue_dir), part_of)
@@ -714,6 +759,13 @@ def parse_args():
     )
     parser.add_argument("--archive", default="0", help="'chunked' writes the distribution zips.")
     parser.add_argument("--part_max_gb", type=float, default=10.0)
+    parser.add_argument(
+        "--n_parts",
+        type=int,
+        default=0,
+        help="Write EXACTLY this many part zips (contiguous, near-equal bytes); "
+        "overrides --part_max_gb. 0 = use --part_max_gb.",
+    )
     parser.add_argument("--workers", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", 1)))
     parser.add_argument("--allow_partial", action="store_true")
     parser.add_argument("--skip_wcs", action="store_true")
@@ -763,7 +815,7 @@ def main():
         build_wcs(catalogue_dir, build_dir, samples, args.output_dir)
 
     for name in ("wcs.csv", "source_clumps.csv", "wcs_skipped.csv", "grades.csv",
-                 "band_inventory.csv", "unresolved_manifest.csv"):
+                 "band_inventory.csv", "unresolved_manifest.csv", "excluded_tiles.csv"):
         path = catalogue_dir / name
         if path.exists():
             with path.open(newline="") as stream:
@@ -778,6 +830,7 @@ def main():
             args.part_max_gb,
             args.workers,
             tile_sample,
+            n_parts=args.n_parts or None,
         )
     else:
         write_index(catalogue_dir, tile_sample, read_grades(catalogue_dir), {})

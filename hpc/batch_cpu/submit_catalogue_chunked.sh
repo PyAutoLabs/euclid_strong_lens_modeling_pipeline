@@ -32,7 +32,7 @@
 # USAGE
 #   ssh euclid_jump
 #   bash /mnt/ral/jnightin/euclid_dr1/hpc/batch_cpu/submit_catalogue_chunked.sh \
-#       CATALOGUE=dr1_catalogue_20261006 N=6 ARCHIVE=chunked [DRY=1]
+#       CATALOGUE=dr1_catalogue_20261006 N=6 ARCHIVE=chunked [PARTS=10] [DRY=1]
 #
 #   Variables (as KEY=VALUE arguments or in the environment):
 #     CATALOGUE     catalogue name -> inspect/<CATALOGUE>/   (required; must not exist)
@@ -41,6 +41,10 @@
 #     N             number of chunks          (default 6)
 #     ARCHIVE       0 | chunked               (default 0)
 #     PART_MAX_GB   cap per distribution part (default 10)
+#     PARTS         write EXACTLY this many distribution parts (contiguous,
+#                   near-equal bytes); overrides PART_MAX_GB   (default 0 = off)
+#     EXCLUDED_FILE CSV (tile,sample,reason) of tiles deliberately left out;
+#                   copied to inspect/<CATALOGUE>/excluded_tiles.csv (README lists it)
 #     MIN_PER_100   walltime minutes per 100 lenses per chunk (default 32)
 #     MERGE_TIME    merge walltime            (default 12:00:00)
 #     DRY=1         write the lists, print the sbatch lines, submit nothing
@@ -64,6 +68,8 @@ SAMPLES=${SAMPLES:-"dr1_sep1_rest dr1_v2_new"}
 N=${N:-6}
 ARCHIVE=${ARCHIVE:-0}
 PART_MAX_GB=${PART_MAX_GB:-10}
+PARTS=${PARTS:-0}
+EXCLUDED_FILE=${EXCLUDED_FILE:-}
 MIN_PER_100=${MIN_PER_100:-32}
 MERGE_TIME=${MERGE_TIME:-12:00:00}
 DRY=${DRY:-0}
@@ -74,7 +80,15 @@ if [[ -e "$CAT_DIR" ]]; then
     echo "ERROR: $CAT_DIR already exists — pick a new CATALOGUE name (never overwrite a catalogue)" >&2
     exit 1
 fi
+if [[ -n "$EXCLUDED_FILE" && ! -f "$EXCLUDED_FILE" ]]; then
+    echo "ERROR: EXCLUDED_FILE=$EXCLUDED_FILE not found" >&2
+    exit 1
+fi
 mkdir -p "$BUILD/logs"
+if [[ -n "$EXCLUDED_FILE" ]]; then
+    cp "$EXCLUDED_FILE" "$CAT_DIR/excluded_tiles.csv"
+    echo "excluded: $(( $(wc -l < "$CAT_DIR/excluded_tiles.csv") - 1 )) tiles -> $CAT_DIR/excluded_tiles.csv"
+fi
 
 # 1. tile list
 if [[ -n "${TILES_FILE:-}" ]]; then
@@ -109,6 +123,7 @@ SAMPLES="$SAMPLES"
 N=$n_made
 ARCHIVE=$ARCHIVE
 PART_MAX_GB=$PART_MAX_GB
+PARTS=$PARTS
 CHUNK_TIME=$chunk_time
 MERGE_TIME=$MERGE_TIME
 GIT_REVISION=$(cd "$PROJECT_PATH" && git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -122,14 +137,14 @@ chunk_cmd=(sbatch --parsable --partition=ral --array=1-"$n_made" -t "$chunk_time
     submit_catalogue_chunk)
 if [[ "$DRY" == 1 ]]; then
     echo "DRY: ${chunk_cmd[*]}"
-    echo "DRY: sbatch --dependency=afterok:<array> ... submit_catalogue_merge"
+    echo "DRY: sbatch --parsable --partition=ral --dependency=afterok:<array> -t $MERGE_TIME ... ARCHIVE=$ARCHIVE,PART_MAX_GB=$PART_MAX_GB,PARTS=$PARTS submit_catalogue_merge"
     exit 0
 fi
 array_id=$("${chunk_cmd[@]}")
 merge_cmd=(sbatch --parsable --partition=ral --dependency=afterok:"$array_id" -t "$MERGE_TIME"
     -J "euclid_dr1_cat_merge_$CATALOGUE"
     -o "$BUILD/logs/merge.%j.out" -e "$BUILD/logs/merge.%j.err"
-    --export=ALL,PROJECT_PATH="$PROJECT_PATH",PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}",CATALOGUE="$CATALOGUE",ARCHIVE="$ARCHIVE",PART_MAX_GB="$PART_MAX_GB"
+    --export=ALL,PROJECT_PATH="$PROJECT_PATH",PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}",CATALOGUE="$CATALOGUE",ARCHIVE="$ARCHIVE",PART_MAX_GB="$PART_MAX_GB",PARTS="$PARTS"
     submit_catalogue_merge)
 merge_id=$("${merge_cmd[@]}")
 echo "ARRAY_ID=$array_id" >> "$BUILD/build.env"
@@ -138,4 +153,4 @@ echo "submitted chunk array $array_id (1-$n_made) and merge $merge_id (afterok)"
 echo "logs: $BUILD/logs/"
 echo "re-run one failed chunk k:"
 echo "  cd $BATCH_DIR && sbatch --partition=ral --array=<k> -t $chunk_time -o $BUILD/logs/chunk.%A_%a.out -e $BUILD/logs/chunk.%A_%a.err --export=ALL,CATALOGUE=$CATALOGUE submit_catalogue_chunk"
-echo "  then: sbatch --partition=ral --dependency=afterok:<new id> -t $MERGE_TIME -o $BUILD/logs/merge.%j.out -e $BUILD/logs/merge.%j.err --export=ALL,CATALOGUE=$CATALOGUE,ARCHIVE=$ARCHIVE,PART_MAX_GB=$PART_MAX_GB submit_catalogue_merge"
+echo "  then: sbatch --partition=ral --dependency=afterok:<new id> -t $MERGE_TIME -o $BUILD/logs/merge.%j.out -e $BUILD/logs/merge.%j.err --export=ALL,CATALOGUE=$CATALOGUE,ARCHIVE=$ARCHIVE,PART_MAX_GB=$PART_MAX_GB,PARTS=$PARTS submit_catalogue_merge"
