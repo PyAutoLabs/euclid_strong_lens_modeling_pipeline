@@ -47,6 +47,9 @@
 #                   copied to inspect/<CATALOGUE>/excluded_tiles.csv (README lists it)
 #     MIN_PER_100   walltime minutes per 100 lenses per chunk (default 32)
 #     MERGE_TIME    merge walltime            (default 12:00:00)
+#     DEPENDENCY    sbatch --dependency for the chunk array, e.g.
+#                   afterany:<sed_job1>:<sed_job2> to start only after an SED fill
+#                   (default none: chunks start at once)
 #     DRY=1         write the lists, print the sbatch lines, submit nothing
 #
 #   A failed chunk k blocks the merge (afterok). Fix it, then re-run only it and
@@ -72,6 +75,7 @@ PARTS=${PARTS:-0}
 EXCLUDED_FILE=${EXCLUDED_FILE:-}
 MIN_PER_100=${MIN_PER_100:-32}
 MERGE_TIME=${MERGE_TIME:-12:00:00}
+DEPENDENCY=${DEPENDENCY:-}
 DRY=${DRY:-0}
 
 CAT_DIR=$PROJECT_PATH/inspect/$CATALOGUE
@@ -127,11 +131,13 @@ PART_MAX_GB=$PART_MAX_GB
 PARTS=$PARTS
 CHUNK_TIME=$chunk_time
 MERGE_TIME=$MERGE_TIME
+DEPENDENCY=$DEPENDENCY
 GIT_REVISION=$(cd "$PROJECT_PATH" && git rev-parse --short HEAD 2>/dev/null || echo unknown)
 EOF
 
 cd "$BATCH_DIR"
 chunk_cmd=(sbatch --parsable --partition=ral --array=1-"$n_made" -t "$chunk_time"
+    ${DEPENDENCY:+--dependency="$DEPENDENCY"}
     -J "euclid_dr1_cat_chunk_$CATALOGUE"
     -o "$BUILD/logs/chunk.%A_%a.out" -e "$BUILD/logs/chunk.%A_%a.err"
     --export=ALL,PROJECT_PATH="$PROJECT_PATH",PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}",CATALOGUE="$CATALOGUE"

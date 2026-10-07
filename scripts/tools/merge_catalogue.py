@@ -279,7 +279,7 @@ def checkpoint_is_valid(path: Path):
         with h5py.File(path, "r") as checkpoint:
             list(checkpoint.keys())
         return True
-    except (OSError, ValueError):
+    except (OSError, ValueError, RuntimeError):
         return False
 
 
