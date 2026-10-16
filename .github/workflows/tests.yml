@@ -34,14 +34,14 @@ concurrency:
 
 jobs:
   unit:
-    uses: PyAutoLabs/PyAutoHeart/.github/workflows/smoke-tests.yml@main
+    uses: PyAutoLabs/PyAutoHeart/.github/workflows/smoke-tests.yml@e2f7589c676c2124bacca840fa0acccc0964ac2b
     with:
       chain: "PyAutoNerves PyAutoFit PyAutoArray PyAutoGalaxy PyAutoLens"
       runner: ".github/scripts/run_tests.py"
     secrets: inherit
 
   slow:
-    uses: PyAutoLabs/PyAutoHeart/.github/workflows/smoke-tests.yml@main
+    uses: PyAutoLabs/PyAutoHeart/.github/workflows/smoke-tests.yml@e2f7589c676c2124bacca840fa0acccc0964ac2b
     with:
       chain: "PyAutoNerves PyAutoFit PyAutoArray PyAutoGalaxy PyAutoLens"
       runner: ".github/scripts/run_tests.py"
