@@ -1,0 +1,126 @@
+#!/bin/bash -l
+#
+# Release packaging of a merged DR1 catalogue, after submit_catalogue_merge.
+# Two steps, in one job:
+#   1. scripts/tools/csv_snapshot/build.py: the CSV-only tables of every
+#      include_in_catalogue=True tile of MANIFEST, from stored result metadata
+#      (no refitting), at the snapshot CUTOFF, into inspect/$CSV_NAME/.
+#   2. scripts/tools/package_release.py: the csv / vis / full tiers of
+#      inspect/$CATALOGUE/ + dataset/$SAMPLE/, into inspect/${CATALOGUE}_release/<tier>/
+#      (catalogue_csvs.zip, catalogue_part_NN.zip, SHA256SUMS, snapshot.json,
+#      missing_files.csv, parts_manifest.csv). Every zip is CRC-tested and
+#      checked against its plan before the tier succeeds.
+#
+# CUTOFF defaults to the time the chunked build started (the mtime of
+# inspect/$CATALOGUE/_build/tiles.txt), so the CSV tables and the per-lens
+# products describe the same fits.
+#
+# USAGE (on RAL, from the project root)
+#   cd /mnt/ral/jnightin/active/euclid_dr1/hpc/batch_cpu
+#   sbatch --export=ALL,CATALOGUE=dr1_catalogue_<date>,PARTS=10 submit_release_package
+#   # or after the merge job:  sbatch --dependency=afterok:<merge id> --export=ALL,CATALOGUE=... submit_release_package
+#
+#   Variables (environment):
+#     CATALOGUE      merged catalogue -> inspect/<CATALOGUE>/            (required)
+#     MANIFEST       consolidated manifest (default catalogue/grades/dr1_sep1_consolidated_manifest.csv,
+#                    or inspect/<CATALOGUE>/_build/manifest.csv when the build copied one)
+#     SAMPLE         dataset / output sample        (default dr1_sep1)
+#     CSV_NAME       CSV snapshot dir inspect/<CSV_NAME>/ (default <CATALOGUE>_csv)
+#     CUTOFF         ISO-8601 or unix seconds        (default: build start, see above)
+#     TIERS          csv,vis,full or all             (default all)
+#     PARTS          EXACTLY this many part zips per tier (default 0 = by PART_MAX_GB)
+#     PART_MAX_GB    cap per part zip                (default 10)
+#     EXCLUDED       CSV (tile or tile_id column) of manifest tiles with no lens folder
+#                    (default inspect/<CATALOGUE>/excluded_tiles.csv if present)
+#     KNOWN_ISSUES   markdown prepended to every tier's KNOWN_ISSUES.md (optional)
+#     PARITY_JSON    extraction parity check to cite in the CSV README (optional)
+#     SKIP_CSV=1     reuse an existing inspect/<CSV_NAME>/ (must name the same manifest)
+#     DRY=1          plan the tiers (package_release.py --dry_run); needs the CSV snapshot
+#
+# 4 CPUs / 16 GB, partition `ral` only. TMPDIR is a per-job directory on
+# /mnt/ral, removed on exit.
+
+#SBATCH -J euclid_dr1_release_package
+#SBATCH -n 1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16gb
+#SBATCH --partition=ral
+# NEVER add gpu here (2026-09-30): CPU arrays on the gpu partition fill both A100 nodes' CPUs and idle all 8 GPUs.
+#SBATCH -t 12:00:00
+#SBATCH -o output/output.%j.out
+#SBATCH -e error/error.%j.err
+
+export PROJECT_PATH="${PROJECT_PATH:-$(cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")}/../.." && pwd)}"
+export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
+source "$PROJECT_PATH/activate.sh"
+set -euo pipefail
+
+export JAX_PLATFORM_NAME=cpu JAX_PLATFORMS=cpu
+THREADS=${SLURM_CPUS_PER_TASK:-4}
+export OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 OMP_NUM_THREADS=1
+
+CATALOGUE=${CATALOGUE:?CATALOGUE not set}
+CAT_DIR=inspect/$CATALOGUE
+if [[ -z "${MANIFEST:-}" ]]; then
+    if [[ -f "$PROJECT_PATH/$CAT_DIR/_build/manifest.csv" ]]; then
+        MANIFEST=$CAT_DIR/_build/manifest.csv
+    else
+        MANIFEST=catalogue/grades/dr1_sep1_consolidated_manifest.csv
+    fi
+fi
+SAMPLE=${SAMPLE:-dr1_sep1}
+CSV_NAME=${CSV_NAME:-${CATALOGUE}_csv}
+TIERS=${TIERS:-all}
+PARTS=${PARTS:-0}
+PART_MAX_GB=${PART_MAX_GB:-10}
+EXCLUDED=${EXCLUDED:-}
+if [[ -z "$EXCLUDED" && -f "$PROJECT_PATH/$CAT_DIR/excluded_tiles.csv" ]]; then
+    EXCLUDED=$CAT_DIR/excluded_tiles.csv
+fi
+if [[ -z "${CUTOFF:-}" ]]; then
+    CUTOFF=$(stat -c %Y "$PROJECT_PATH/$CAT_DIR/_build/tiles.txt")
+fi
+
+export TMPDIR="$PROJECT_PATH/.tmp_release_${CATALOGUE}_${SLURM_JOB_ID:-$$}"
+export NUMBA_CACHE_DIR="$TMPDIR/numba_cache" MPLCONFIGDIR="$TMPDIR/matplotlib"
+mkdir -p "$TMPDIR"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+echo "Release   : $CATALOGUE  tiers=$TIERS  parts=$PARTS (0 = cap ${PART_MAX_GB} GB)"
+echo "Manifest  : $MANIFEST  sample=$SAMPLE  cutoff=$CUTOFF"
+echo "CSV dir   : inspect/$CSV_NAME  excluded=${EXCLUDED:-none}"
+echo "Node      : $(hostname) (partition ${SLURM_JOB_PARTITION:-?})"
+date
+cd "$PROJECT_PATH"
+
+if [[ "${SKIP_CSV:-0}" != 1 && "${DRY:-0}" != 1 ]]; then
+    band_inventory=()
+    [[ -f "$CAT_DIR/band_inventory.csv" ]] && band_inventory=(--band_inventory="$CAT_DIR/band_inventory.csv")
+    python3 scripts/tools/csv_snapshot/build.py \
+        --manifest="$MANIFEST" \
+        --sample="$SAMPLE" \
+        --cutoff="$CUTOFF" \
+        --out_dir="inspect/$CSV_NAME" \
+        --workers=$(( THREADS * 4 )) \
+        ${band_inventory[@]+"${band_inventory[@]}"} \
+        ${PARITY_JSON:+--parity_json="$PARITY_JSON"}
+    echo "CSV snapshot done: inspect/$CSV_NAME"
+    date
+fi
+
+python3 scripts/tools/package_release.py \
+    --catalogue_dir="$CAT_DIR" \
+    --dataset_dir="dataset/$SAMPLE" \
+    --manifest="$MANIFEST" \
+    --csv_dir="inspect/$CSV_NAME" \
+    --out_dir="inspect/${CATALOGUE}_release" \
+    --tier="$TIERS" \
+    --n_parts="$PARTS" \
+    --part_max_gb="$PART_MAX_GB" \
+    --workers="$THREADS" \
+    --absent_out="inspect/${CATALOGUE}_release_absent_tiles.csv" \
+    ${EXCLUDED:+--excluded="$EXCLUDED"} \
+    ${KNOWN_ISSUES:+--known_issues="$KNOWN_ISSUES"} \
+    $([[ "${DRY:-0}" == 1 ]] && echo --dry_run)
+echo "Finished release packaging: inspect/${CATALOGUE}_release/"
+date

@@ -55,7 +55,6 @@ Usage
 
 import argparse
 import csv
-import hashlib
 import json
 import os
 import shutil
@@ -68,6 +67,19 @@ from multiprocessing import Pool
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# Zip / hash / part-cutting helpers shared with package_release.py. The names are
+# re-exported here so existing callers (tests/test_catalogue_parts.py) keep working.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from release_util import (  # noqa: E402, F401  (re-exported for existing callers)
+    STORED_SUFFIXES,
+    compression_for,
+    part_name,
+    plan as _plan,
+    sha256,
+    split_parts,
+    write_zip_files,
+)
 
 ROOT_CSVS = [
     "lens_mass.csv",
@@ -110,8 +122,6 @@ GRADE_COLUMNS = [
     "v1_unique_identifier",
     "sample",
 ]
-
-STORED_SUFFIXES = {".fits", ".png", ".jpg", ".jpeg", ".zip", ".gz"}
 
 INDEX_PRODUCTS = [
     "vis_lp_fit.png",
@@ -572,82 +582,21 @@ def folder_size(path: Path):
     return sum(p.stat().st_size for p in path.iterdir() if p.is_file())
 
 
-def split_parts(tiles, sizes, n_parts: int):
-    """Cut ``tiles`` (in order) into EXACTLY ``n_parts`` contiguous, non-empty
-    groups whose byte totals are near-equal.
-
-    Boundary ``i`` falls where the running total crosses ``i * total / n_parts``
-    (a tile joins the earlier group when its midpoint lies below the target),
-    so each group is within one largest-folder of ``total / n_parts``.
-    """
-    n = len(tiles)
-    if n_parts < 1:
-        raise ValueError(f"n_parts must be >= 1, got {n_parts}")
-    if n < n_parts:
-        raise ValueError(f"cannot cut {n} lens folders into {n_parts} non-empty parts")
-    total = sum(sizes)
-    parts, start = [], 0
-    for i in range(1, n_parts):
-        target = total * i / n_parts
-        cum = sum(sizes[:start]) + sizes[start]
-        end = start + 1
-        # Leave at least one tile for every later part.
-        while end < n - (n_parts - i) and cum + sizes[end] / 2 <= target:
-            cum += sizes[end]
-            end += 1
-        parts.append(list(tiles[start:end]))
-        start = end
-    parts.append(list(tiles[start:]))
-    return parts
-
-
 def plan_parts(catalogue_dir: Path, cap_bytes: int, n_parts=None):
     """Whole lens folders per part: greedy up to ``cap_bytes``, or, with
     ``n_parts``, exactly that many contiguous near-equal parts."""
     tiles = lens_tiles(catalogue_dir)
-    if n_parts:
-        sizes = [folder_size(catalogue_dir / tile) for tile in tiles]
-        return split_parts(tiles, sizes, n_parts)
-    parts, current, size = [], [], 0
-    for tile in tiles:
-        tile_size = folder_size(catalogue_dir / tile)
-        if current and size + tile_size > cap_bytes:
-            parts.append(current)
-            current, size = [], 0
-        current.append(tile)
-        size += tile_size
-    if current:
-        parts.append(current)
-    return parts
-
-
-def compression_for(path: Path):
-    return zipfile.ZIP_STORED if path.suffix.lower() in STORED_SUFFIXES else zipfile.ZIP_DEFLATED
-
-
-def sha256(path: Path):
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(16 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    sizes = [folder_size(catalogue_dir / tile) for tile in tiles]
+    return _plan(tiles, sizes, cap_bytes, n_parts)
 
 
 def write_zip(job):
     """Write one zip of ``files`` (absolute) under ``arc_root``; return its name."""
     zip_path, catalogue_dir, relative_files = job
-    staged = zip_path.with_name(f".{zip_path.name}.tmp")
-    with zipfile.ZipFile(staged, "w", allowZip64=True) as archive:
-        for relative in relative_files:
-            source = catalogue_dir / relative
-            archive.write(
-                source,
-                arcname=f"{catalogue_dir.name}/{relative}",
-                compress_type=compression_for(source),
-                compresslevel=6 if compression_for(source) == zipfile.ZIP_DEFLATED else None,
-            )
-    staged.replace(zip_path)
-    return zip_path.name
+    return write_zip_files(
+        zip_path,
+        [(catalogue_dir / relative, f"{catalogue_dir.name}/{relative}") for relative in relative_files],
+    )
 
 
 def verify_zip(job):
@@ -670,11 +619,10 @@ def distribute(catalogue_dir: Path, dist_dir: Path, cap_gb: float, workers: int,
     parts = plan_parts(catalogue_dir, int(cap_gb * 1024**3), n_parts)
     if n_parts and len(parts) != n_parts:
         raise RuntimeError(f"planned {len(parts)} parts, --n_parts={n_parts}")
-    width = max(2, len(str(len(parts))))
     part_of = {}
     jobs = []
     for index, tiles in enumerate(parts, start=1):
-        name = f"catalogue_part_{index:0{width}d}.zip"
+        name = part_name(index, len(parts))
         files = []
         for tile in tiles:
             part_of[tile] = name

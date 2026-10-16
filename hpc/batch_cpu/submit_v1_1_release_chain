@@ -1,0 +1,77 @@
+#!/bin/bash -l
+#
+# v1.1 release chain gate (2026-10-16): start the chunked catalogue build only
+# once the 10-15 reruns have ended, then chain the three release tiers.
+#
+# WHY A GATE JOB (and not DEPENDENCY= on submit_catalogue_chunked.sh)
+#   The release snapshot cutoff defaults to the mtime of
+#   inspect/<CATALOGUE>/_build/tiles.txt. With DEPENDENCY= that file is written
+#   at submit time, BEFORE the reruns land their results, so the CSV tables
+#   would miss fits the lens folders include. Running the submit script from
+#   this job (afterany on the reruns) writes tiles.txt after the last rerun.
+#
+# WHAT IT DOES
+#   1. EXCLUDED: include_in_catalogue=True manifest tiles with no completed
+#      vis_lp zip (the vis_lp hangs of 410758 and their dependents) ->
+#      hpc/run_manifests/v1_1_excluded_<CATALOGUE>.csv (tile,sample,reason).
+#   2. submit_catalogue_chunked.sh CATALOGUE=$CATALOGUE MANIFEST=... N=6
+#      EXCLUDED_FILE=<that csv> (copied to the catalogue root, so the packager
+#      picks it up as EXCLUDED by default).
+#   3. sbatch --dependency=afterok:<merge> submit_release_package PARTS=10.
+#
+# SUBMIT (on RAL, from hpc/batch_cpu)
+#   sbatch --dependency=afterany:410759:410760 \
+#       --export=ALL,CATALOGUE=dr1_catalogue_v1_1 submit_v1_1_release_chain
+#
+#SBATCH -J euclid_dr1_v1_1_release_chain
+#SBATCH -n 1
+#SBATCH --cpus-per-task=1
+#SBATCH -o output/output.%j.out
+#SBATCH -e error/error.%j.err
+#SBATCH --partition=ral
+#SBATCH -t 01:00:00
+#SBATCH --mem=2gb
+
+set -euo pipefail
+
+PROJECT_PATH=${PROJECT_PATH:-/mnt/ral/jnightin/active/euclid_dr1}
+CATALOGUE=${CATALOGUE:?CATALOGUE is required}
+SAMPLE=dr1_sep1
+MANIFEST=catalogue/grades/dr1_sep1_consolidated_manifest.csv
+EXCL=hpc/run_manifests/v1_1_excluded_${CATALOGUE}.csv
+
+cd "$PROJECT_PATH"
+date
+echo "Catalogue : $CATALOGUE"
+
+python3 - "$MANIFEST" "$SAMPLE" "$EXCL" <<'EOF'
+import csv, glob, sys
+manifest, sample, out = sys.argv[1:]
+with open(manifest, newline="") as f:
+    rows = [r for r in csv.DictReader(f) if r["include_in_catalogue"].strip() == "True"]
+excluded = []
+for r in rows:
+    tile = r["tile"].strip()
+    if not glob.glob(f"output/{sample}/{tile}/initial_lens_model/vis_lp/*.zip"):
+        excluded.append((tile, sample, "no completed vis_lp fit (search hangs at 0 calls; given up 2026-10-16)"))
+with open(out, "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["tile", "sample", "reason"])
+    w.writerows(excluded)
+print(f"manifest tiles {len(rows)}, excluded {len(excluded)} -> {out}")
+EOF
+
+bash hpc/batch_cpu/submit_catalogue_chunked.sh CATALOGUE="$CATALOGUE" \
+    MANIFEST="$MANIFEST" N=6 EXCLUDED_FILE="$EXCL"
+
+source "inspect/$CATALOGUE/_build/build.env"
+echo "chunk array $ARRAY_ID, merge $MERGE_ID"
+
+cd hpc/batch_cpu
+pkg_id=$(sbatch --parsable --dependency=afterok:"$MERGE_ID" \
+    --export=ALL,PROJECT_PATH="$PROJECT_PATH",CATALOGUE="$CATALOGUE",PARTS=10 \
+    submit_release_package)
+echo "release package $pkg_id (afterok:$MERGE_ID)"
+echo "ARRAY_ID=$ARRAY_ID MERGE_ID=$MERGE_ID PKG_ID=$pkg_id" \
+    > "$PROJECT_PATH/hpc/run_manifests/v1_1_chain_${CATALOGUE}.jobs"
+date

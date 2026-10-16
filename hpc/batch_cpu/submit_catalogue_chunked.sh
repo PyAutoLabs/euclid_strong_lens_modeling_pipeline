@@ -10,8 +10,10 @@
 #   wall per chunk, all chunks running at once, plus the merge.
 #
 # WHAT IT DOES (run ON RAL, on the login node; it only writes lists and sbatches)
-#   1. tile list: every lens directory of output/<sample>/ for each SAMPLE
-#      (or the "<sample> <tile>" lines of TILES_FILE), written to
+#   1. tile list: the include_in_catalogue=True tiles of MANIFEST (the
+#      consolidated manifest; one "<SAMPLES> <tile>" line each), or the
+#      "<sample> <tile>" lines of TILES_FILE, or else every lens directory of
+#      output/<sample>/ for each SAMPLE, written to
 #      inspect/<CATALOGUE>/_build/tiles.txt. Tile ids must be unique across
 #      samples (checked).
 #   2. split into N contiguous chunks _build/chunk_<k>.txt.
@@ -36,7 +38,12 @@
 #
 #   Variables (as KEY=VALUE arguments or in the environment):
 #     CATALOGUE     catalogue name -> inspect/<CATALOGUE>/   (required; must not exist)
-#     SAMPLES       space-separated samples   (default "dr1_sep1_rest dr1_v2_new")
+#     MANIFEST      consolidated manifest CSV (tile,...,include_in_catalogue,...),
+#                   e.g. catalogue/grades/dr1_sep1_consolidated_manifest.csv:
+#                   its include_in_catalogue=True tiles are the tile list, all
+#                   in the ONE sample SAMPLES (default dr1_sep1 with MANIFEST)
+#     SAMPLES       space-separated samples   (default "dr1_sep1_rest dr1_v2_new";
+#                   with MANIFEST exactly one sample, default dr1_sep1)
 #     TILES_FILE    "<sample> <tile>" lines, instead of listing output/<sample>/
 #     N             number of chunks          (default 6)
 #     ARCHIVE       0 | chunked               (default 0)
@@ -64,9 +71,26 @@ for arg in "$@"; do
     esac
 done
 
-PROJECT_PATH=${PROJECT_PATH:-/mnt/ral/jnightin/euclid_dr1}
+PROJECT_PATH=${PROJECT_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 BATCH_DIR=$PROJECT_PATH/hpc/batch_cpu
 CATALOGUE=${CATALOGUE:?CATALOGUE=<name> is required}
+MANIFEST=${MANIFEST:-}
+if [[ -n "$MANIFEST" ]]; then
+    SAMPLES=${SAMPLES:-dr1_sep1}
+    [[ "$MANIFEST" = /* ]] || MANIFEST=$PROJECT_PATH/$MANIFEST
+    if [[ -n "${TILES_FILE:-}" ]]; then
+        echo "ERROR: give MANIFEST or TILES_FILE, not both" >&2
+        exit 2
+    fi
+    if [[ ! -f "$MANIFEST" ]]; then
+        echo "ERROR: MANIFEST=$MANIFEST not found" >&2
+        exit 1
+    fi
+    if [[ $(wc -w <<< "$SAMPLES") -ne 1 ]]; then
+        echo "ERROR: MANIFEST needs exactly one sample in SAMPLES (got: $SAMPLES)" >&2
+        exit 2
+    fi
+fi
 SAMPLES=${SAMPLES:-"dr1_sep1_rest dr1_v2_new"}
 N=${N:-6}
 ARCHIVE=${ARCHIVE:-0}
@@ -95,7 +119,18 @@ if [[ -n "$EXCLUDED_FILE" ]]; then
 fi
 
 # 1. tile list
-if [[ -n "${TILES_FILE:-}" ]]; then
+if [[ -n "$MANIFEST" ]]; then
+    python3 - "$MANIFEST" "$SAMPLES" > "$BUILD/tiles.txt" <<'PYEOF'
+import csv, sys
+manifest, sample = sys.argv[1], sys.argv[2]
+with open(manifest, newline="", encoding="utf-8-sig") as stream:
+    for row in csv.DictReader(stream):
+        if row["include_in_catalogue"].strip() == "True":
+            print(sample, row["tile"].strip())
+PYEOF
+    cp "$MANIFEST" "$BUILD/manifest.csv"
+    echo "manifest: $MANIFEST -> $(wc -l < "$BUILD/tiles.txt") include_in_catalogue=True tiles (copied to _build/manifest.csv)"
+elif [[ -n "${TILES_FILE:-}" ]]; then
     # tr: a CRLF list would otherwise put a \r into every sample/tile path.
     tr -d '\r' < "$TILES_FILE" | grep -v '^[[:space:]]*\(#\|$\)' | awk '{print $1, $2}' > "$BUILD/tiles.txt"
 else
@@ -125,6 +160,7 @@ echo "chunks: $n_made x <=$per lenses, walltime $chunk_time each"
 cat > "$BUILD/build.env" <<EOF
 CATALOGUE=$CATALOGUE
 SAMPLES="$SAMPLES"
+MANIFEST=$MANIFEST
 N=$n_made
 ARCHIVE=$ARCHIVE
 PART_MAX_GB=$PART_MAX_GB

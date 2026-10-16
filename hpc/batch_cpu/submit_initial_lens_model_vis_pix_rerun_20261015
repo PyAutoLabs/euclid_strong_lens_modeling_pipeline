@@ -1,0 +1,88 @@
+#!/bin/bash -l
+#
+# Initial lens model, stage 2 of 2 on CPU: the `vis_pix` search (Numba sparse
+# CPU, forked pool, no JAX) — last push-through before the DR1 catalogue freeze.
+#
+# THIS RUN (2026-10-11)
+#   Human ask: "any last way to push through some vis_pix?" on a 24 h horizon.
+#   Manifest `hpc/run_manifests/vis_pix_rerun_20261015.txt`: every
+#   `dr1_sep1` tile with exactly one vis_lp zip and no vis_pix zip, gathered from
+#   (a) vis_pix tasks that ended TIMEOUT / FAILED since 2026-09-20 (all batches:
+#   n5k, rest, v2grade, sep28, ex_top1000, prio250) and (b) the
+#   `for_james_AB_without_model.csv` tiles. Built from SLURM logs + a per-tile
+#   zip check on RAL; a tile is in it only if its vis_lp zip exists today.
+#   The 18 ex-top1000 vis_lp TIMEOUTs are NOT here (vis_lp + vis_pix will not
+#   fit in 24 h).
+#
+#   Timed-out tiles resume from their Nautilus checkpoint, so the extra time
+#   adds to the previous 18-36 h rather than restarting. 16 CPU (vs 8) so the
+#   slow tiles get through faster; 22 h wall so everything ends inside 24 h.
+#   A vis_pix search that already completed is loaded, not re-fitted.
+#
+#   Priority: --nice=0 (no extra penalty), so it goes ahead of our own SED
+#   fill4 retries 402909-402912; compute-[1-4] stay excluded for the other
+#   user's whole-node jobs. Partition ral only (never gpu).
+#
+# SUBMIT (on RAL, from hpc/batch_cpu)
+#   sbatch --array=0-$((N-1))%40 submit_initial_lens_model_vis_pix_pushthrough
+#
+#SBATCH -J euclid_dr1_vis_pix_rerun_20261015
+#SBATCH -n 1
+#SBATCH --cpus-per-task=16
+#SBATCH -o output/output.%A_%a.out
+#SBATCH -e error/error.%A_%a.err
+#SBATCH --partition=ral
+# NEVER add gpu here (2026-09-30): CPU arrays on the gpu partition fill both A100 nodes' CPUs and idle all 8 GPUs.
+#SBATCH -t 22:00:00
+#SBATCH --mem=32gb
+#SBATCH --exclude=euclid-ral-compute-[1-4]
+#SBATCH --nice=0
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=james.w.nightingale@durham.ac.uk
+
+export PROJECT_PATH=/mnt/ral/jnightin/euclid_dr1
+export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
+
+source $PROJECT_PATH/activate.sh
+
+THREADS=$SLURM_CPUS_PER_TASK
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export NPROC=$THREADS
+
+sample=dr1_sep1
+manifest="$PROJECT_PATH/hpc/run_manifests/vis_pix_rerun_20261015.txt"
+mapfile -t datasets < "$manifest"
+
+INDEX=$SLURM_ARRAY_TASK_ID
+dataset="${datasets[$INDEX]}"
+
+if [[ -z "$dataset" ]]; then
+    echo "ERROR: no dataset at index $INDEX of $manifest (${#datasets[@]} lines)" >&2
+    exit 1
+fi
+shopt -s nullglob
+vis_lp_zips=("$PROJECT_PATH/output/$sample/$dataset/initial_lens_model/vis_lp"/*.zip)
+if [[ ${#vis_lp_zips[@]} -ne 1 ]]; then
+    echo "ERROR: expected one completed vis_lp zip for $dataset, found ${#vis_lp_zips[@]}" >&2
+    exit 1
+fi
+
+echo "=========================================="
+echo "Array task : $INDEX / ${#datasets[@]}"
+echo "Sample     : $sample"
+echo "Dataset    : $dataset"
+echo "Stage      : vis_pix (Numba CPU sparse, no JAX) — push-through"
+echo "Pool procs : $THREADS"
+echo "Node       : $(hostname) (partition $SLURM_JOB_PARTITION)"
+echo "vis_lp seed: ${vis_lp_zips[0]}"
+date
+
+python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \
+    --stage=vis_pix --use_cpu --number_of_cores=$THREADS --iterations_per_quick_update=1000
+
+echo "Finished vis_pix: $dataset"
+date

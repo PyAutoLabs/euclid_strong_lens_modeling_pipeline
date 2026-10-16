@@ -1,0 +1,201 @@
+#!/bin/bash -l
+#
+# SED gap-fill, 2026-10-09: submit_sersic_waveband_sed_fill_20261005 plus a hang watchdog.
+#
+# WHY
+#   In the 10-05 fill (397469-397474, 3 h wall) ~40% of tasks hit TIMEOUT. Their logs stop
+#   within the first hour: a Nautilus band search hangs and the task idles until the wall,
+#   losing every later band of the chain. Completed fits take p50 0.2 h / p90 1.0 h.
+#
+# WHAT IS NEW
+#   * Watchdog: the chain runs in its own process group with unbuffered output; when neither
+#     its stdout nor its stderr log has been written for STALL_MIN minutes (default 20) the
+#     group is killed, the hung band's search_internal is renamed aside (never deleted), and
+#     the chain restarts -- completed bands cache-skip, the hung band starts fresh.
+#   * A band that hangs (or dies with "Singular matrix") twice is given up for this task: it is
+#     added to SED_SKIP_BANDS (read by scripts/lens_model_waveband.py) so the remaining bands
+#     still complete, and "<sample> <tile> <band>" is appended to
+#     hpc/run_manifests/sed_fill_20261009/given_up_bands.txt. A later task retries it fresh.
+#   * Wall 6 h: hangs no longer burn the wall, so genuinely slow tiles (p99 4.3 h) can finish.
+#
+# Everything else (skip-if-complete, vis_lp seed copy, poisoned-checkpoint move-aside) is as
+# in the 10-05 script.
+#
+# SUBMIT (on RAL, from hpc/batch_cpu) -- manifests and job ids in
+#   hpc/run_manifests/sed_fill_20261009/README.txt
+#
+#SBATCH -J euclid_dr1_sed_fill3
+#SBATCH -n 1
+#SBATCH --cpus-per-task=8
+#SBATCH -o output/output.%A_%a.out
+#SBATCH -e error/error.%A_%a.err
+#SBATCH --partition=ral
+# NEVER add gpu here (2026-09-30): CPU arrays on the gpu partition fill both A100 nodes' CPUs and idle all 8 GPUs.
+#SBATCH -t 06:00:00
+#SBATCH --mem=16gb
+#SBATCH --mail-type=NONE
+
+set -euo pipefail
+
+export PROJECT_PATH=/mnt/ral/jnightin/euclid_dr1
+export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
+export PYAUTO_OUTPUT_DIR=output_sed
+
+source "$PROJECT_PATH/activate.sh"
+
+sample="${SAMPLE:-dr1_sep1}"
+manifest="$PROJECT_PATH/hpc/run_manifests/${MANIFEST:?MANIFEST not set}"
+stall_min="${STALL_MIN:-20}"
+mapfile -t datasets < "$manifest"
+
+index=$SLURM_ARRAY_TASK_ID
+dataset="${datasets[$index]:-}"
+threads=$SLURM_CPUS_PER_TASK
+
+if [[ -z "$dataset" ]]; then
+    echo "ERROR: no dataset at index $index of $manifest (${#datasets[@]} tiles)" >&2
+    exit 1
+fi
+
+dataset_fits="$PROJECT_PATH/dataset/$sample/$dataset/$dataset.fits"
+sed_dir="$PROJECT_PATH/$PYAUTO_OUTPUT_DIR/$sample/$dataset"
+given_up_file="$PROJECT_PATH/hpc/run_manifests/sed_fill_20261009/given_up_bands.txt"
+
+# Skip when every <BAND>_BGSUB HDU of the cut-out already has a completed band zip
+# (same rule as scripts/tools/sed_completeness.py).
+expected=$(python3 - "$dataset_fits" <<'EOF'
+import sys
+from astropy.io import fits
+with fits.open(sys.argv[1], lazy_load_hdus=True) as h:
+    print(" ".join(x.name.replace("_BGSUB", "").lower() for x in h if x.name.endswith("_BGSUB")))
+EOF
+)
+missing=()
+shopt -s nullglob
+for band in $expected; do
+    z=("$sed_dir/sersic_lens_model/$band"/*.zip "$sed_dir/sersic_lens_model/$band"/*/.completed)
+    [[ ${#z[@]} -gt 0 ]] || missing+=("$band")
+done
+if [[ -n "$expected" && ${#missing[@]} -eq 0 ]]; then
+    echo "SKIP: $dataset SED already complete ($expected)"
+    exit 0
+fi
+echo "Bands expected: $expected"
+echo "Bands missing : ${missing[*]}"
+
+# Seed output_sed with the completed VIS result so the chain cache-skips vis_lp.
+seed_source="$PROJECT_PATH/output/$sample/$dataset/initial_lens_model/vis_lp"
+seed_target="$sed_dir/initial_lens_model/vis_lp"
+mkdir -p "$seed_target"
+seed_zips=("$seed_source"/*.zip)
+if [[ ${#seed_zips[@]} -ne 1 ]]; then
+    echo "ERROR: expected one completed vis_lp seed for $dataset, found ${#seed_zips[@]}" >&2
+    exit 1
+fi
+existing=("$seed_target"/*.zip)
+if [[ ${#existing[@]} -eq 0 ]]; then
+    cp -a "${seed_zips[0]}" "$seed_target/"
+fi
+# Move aside every unfinished band search (poisoned checkpoint from a crash or TIMEOUT).
+for search_internal in "$sed_dir"/sersic_lens_model/*/*/files/search_internal; do
+    fit_dir="${search_internal%/files/search_internal}"
+    [[ -e "$fit_dir/.completed" ]] && continue
+    poisoned="$search_internal.poisoned_$(date +%Y%m%dT%H%M%S)"
+    mv "$search_internal" "$poisoned"
+    echo "MOVED ASIDE: unfinished $search_internal -> $(basename "$poisoned")"
+done
+shopt -u nullglob
+
+echo "Array task : $index / ${#datasets[@]}"
+echo "Sample     : $sample"
+echo "Dataset    : $dataset"
+echo "Manifest   : $manifest"
+echo "Output dir : $PYAUTO_OUTPUT_DIR"
+echo "Stall limit: $stall_min min"
+date
+
+env JAX_PLATFORM_NAME=cpu JAX_PLATFORMS=cpu \
+    python3 -c 'import jax; raise SystemExit(0 if jax.default_backend() == "cpu" else 1)'
+
+tag="${SLURM_ARRAY_JOB_ID:-$SLURM_JOB_ID}_${index}"
+attempt_log="$PROJECT_PATH/hpc/batch_cpu/output/sed_fill3_attempt.${tag}.log"
+skip_bands=""
+declare -A strikes=()
+rc=1
+
+for attempt in 1 2 3 4 5 6 7 8; do
+    echo "=== chain attempt $attempt ($(date)) SED_SKIP_BANDS=${skip_bands}"
+    : > "$attempt_log"; : > "$attempt_log.err"
+    # setsid: the chain (and any worker processes it forks) is its own process group,
+    # so the watchdog can kill all of it.
+    setsid env JAX_PLATFORM_NAME=cpu \
+        JAX_PLATFORMS=cpu \
+        PYTHONUNBUFFERED=1 \
+        SED_SKIP_BANDS="$skip_bands" \
+        OPENBLAS_NUM_THREADS="$threads" \
+        MKL_NUM_THREADS="$threads" \
+        OMP_NUM_THREADS="$threads" \
+        VECLIB_MAXIMUM_THREADS="$threads" \
+        NUMEXPR_NUM_THREADS="$threads" \
+        NPROC="$threads" \
+        python3 "$PROJECT_PATH/scripts/sersic_lens_model_waveband.py" \
+            --sample="$sample" --dataset="$dataset" --number_of_cores="$threads" \
+        > "$attempt_log" 2> "$attempt_log.err" &
+    pid=$!
+    stalled=0
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 60
+        last=$(stat -c %Y "$attempt_log" "$attempt_log.err" | sort -n | tail -1)
+        if (( $(date +%s) - last > stall_min * 60 )); then
+            stalled=1
+            echo "WATCHDOG: no log output for ${stall_min} min ($(date)), killing the chain"
+            kill -TERM -- "-$pid" 2>/dev/null || true
+            sleep 15
+            kill -KILL -- "-$pid" 2>/dev/null || true
+            break
+        fi
+    done
+    set +e
+    wait "$pid"
+    rc=$?
+    set -e
+    cat "$attempt_log"
+    cat "$attempt_log.err" >&2
+    if [[ $stalled -eq 0 && $rc -eq 0 ]]; then
+        break
+    fi
+
+    retryable=$stalled
+    grep -q "Singular matrix" "$attempt_log.err" && retryable=1
+    if [[ $retryable -eq 0 ]]; then
+        echo "ERROR: chain failed rc=$rc (attempt $attempt), not a hang or Singular-matrix crash" >&2
+        rm -f "$attempt_log" "$attempt_log.err"
+        exit $rc
+    fi
+
+    band_dir=$( { grep -aho "The output path of this fit is [^ ]*" "$attempt_log" "$attempt_log.err" || true; } | tail -1 | awk '{print $NF}')
+    band=""
+    [[ -n "$band_dir" ]] && band=$(basename "$(dirname "$band_dir")")
+    if [[ -n "$band_dir" && -d "$band_dir/files/search_internal" && ! -e "$band_dir/.completed" ]]; then
+        mv "$band_dir/files/search_internal" "$band_dir/files/search_internal.poisoned_$(date +%Y%m%dT%H%M%S)"
+        echo "RETRY: $band search_internal moved aside, restarting fresh"
+    fi
+    if [[ -n "$band" && "$band" != "vis" && "$band" != "vis_lp" ]]; then
+        strikes[$band]=$(( ${strikes[$band]:-0} + 1 ))
+        if (( ${strikes[$band]} >= 2 )); then
+            skip_bands="${skip_bands:+$skip_bands,}$band"
+            echo "$sample $dataset $band" >> "$given_up_file"
+            echo "GIVING UP BAND: $band hung/crashed twice; continuing with the other bands"
+        fi
+    fi
+    rc=1
+done
+rm -f "$attempt_log" "$attempt_log.err"
+[[ $rc -eq 0 ]] || { echo "ERROR: chain did not finish after 8 attempts" >&2; exit 1; }
+
+if [[ -n "$skip_bands" ]]; then
+    echo "Finished (PARTIAL, gave up: $skip_bands): $dataset"
+else
+    echo "Finished: $dataset"
+fi
+date
