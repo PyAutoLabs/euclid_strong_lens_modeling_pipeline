@@ -55,7 +55,7 @@ THREADS=${SLURM_CPUS_PER_TASK:-4}
 export OPENBLAS_NUM_THREADS=$THREADS MKL_NUM_THREADS=$THREADS OMP_NUM_THREADS=$THREADS
 
 STAGE="${STAGE:?set STAGE=lens_mass|lens_sersic|astrometric_offsets}"
-SAMPLE="${SAMPLE:-dr1_sep1_rest}"
+SAMPLE="${SAMPLE:-dr1_sep1}"
 INSPECT_DIR="${INSPECT_DIR:-inspect/${SAMPLE}_magnitudes}"
 STAGE_ROOT="${STAGE_ROOT:-inspect/${SAMPLE}_structure_astrometry_staging}"
 

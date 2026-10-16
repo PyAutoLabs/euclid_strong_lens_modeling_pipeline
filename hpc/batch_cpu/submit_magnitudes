@@ -40,7 +40,7 @@ export JAX_PLATFORMS=cpu
 THREADS=$SLURM_CPUS_PER_TASK
 export OPENBLAS_NUM_THREADS=$THREADS MKL_NUM_THREADS=$THREADS OMP_NUM_THREADS=$THREADS
 
-SAMPLE="${SAMPLE:-dr1_sep1_rest}"
+SAMPLE="${SAMPLE:-dr1_sep1}"
 SED_OUTPUT_DIR="${SED_OUTPUT_DIR:-output_sed}"
 INSPECT_DIR="${INSPECT_DIR:-inspect/${SAMPLE}_magnitudes}"
 MANIFESTS="${MANIFESTS:-hpc/run_manifests/positions_priority_250.txt hpc/run_manifests/vis_pix_sed_next5000_20260926_part01.txt hpc/run_manifests/vis_pix_sed_next5000_20260926_part02.txt hpc/run_manifests/vis_pix_sed_next5000_20260926_part03.txt hpc/run_manifests/vis_pix_sed_next5000_20260926_part04.txt hpc/run_manifests/vis_pix_sed_next5000_20260926_part05.txt}"

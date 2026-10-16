@@ -17,7 +17,7 @@ apart from a complete one in ``magnitudes.csv``.
 
 Usage
 -----
-    python scripts/tools/sed_completeness.py --sample=dr1_sep1_rest \
+    python scripts/tools/sed_completeness.py --sample=dr1_sep1 \
         --manifest=hpc/run_manifests/positions_priority_250.txt \
         --manifest=hpc/run_manifests/vis_pix_sed_next5000_20260926_part01.txt \
         --out_dir=inspect/dr1_sep1_rest_magnitudes
@@ -55,7 +55,7 @@ def completed_bands(sed_lens_dir: Path) -> list:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    parser.add_argument("--sample", default="dr1_sep1_rest")
+    parser.add_argument("--sample", default="dr1_sep1")
     parser.add_argument("--sed_output_path", default="output_sed")
     parser.add_argument("--manifest", action="append", required=True)
     parser.add_argument("--out_dir", required=True)

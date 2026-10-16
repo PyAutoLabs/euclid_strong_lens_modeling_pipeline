@@ -39,7 +39,7 @@
 #
 # HOW TO SUBMIT
 #   hpc/sync submit cpu submit_build_image_catalogue
-#   hpc/sync submit cpu submit_build_image_catalogue --export=ALL,SAMPLE=dr1_sep1_rest
+#   hpc/sync submit cpu submit_build_image_catalogue --export=ALL,SAMPLE=dr1_sep1
 #   hpc/sync submit cpu submit_build_image_catalogue --export=ALL,MASS=0
 #   or, from this directory on the cluster:  sbatch submit_build_image_catalogue
 #   If `ral` is saturated, `--partition=gpu` without --gres runs it CPU-only
@@ -64,7 +64,7 @@ set -e
 export JAX_PLATFORM_NAME=cpu
 export JAX_PLATFORMS=cpu
 
-SAMPLE="${SAMPLE:-dr1_sep1_rest}"
+SAMPLE="${SAMPLE:-dr1_sep1}"
 CATALOGUE_DIR="${CATALOGUE_DIR:-inspect/${SAMPLE}_images}"
 TAR_TO="${TAR_TO:-$PROJECT_PATH/inspect/${SAMPLE}_images.tar}"
 MASS="${MASS:-1}"

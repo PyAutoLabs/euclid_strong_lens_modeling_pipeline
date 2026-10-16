@@ -81,7 +81,7 @@ from build_inspect import (  # noqa: E402
 )
 
 
-DEFAULT_SAMPLE = "dr1_sep1_rest"
+DEFAULT_SAMPLE = "dr1_sep1"
 
 DEFAULT_GRADES = "catalogue/grades/tile_grades_dr1_sep1_v2.csv"
 

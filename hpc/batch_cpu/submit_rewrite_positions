@@ -19,7 +19,7 @@
 # (long tail to ~30 s), so 8 workers x 10 tasks clear 250 tiles in minutes.
 #
 # --export overrides (pass through hpc/sync submit):
-#   SAMPLE      dataset/<SAMPLE> to rewrite            (default dr1_sep1_rest)
+#   SAMPLE      dataset/<SAMPLE> to rewrite            (default dr1_sep1)
 #   TILES_FILE  only these tiles (path relative to PROJECT_PATH or absolute)
 #   FORCE=1     re-run tiles that are already current
 # The array size is the number of parts: every task gets the same tile list and
@@ -36,7 +36,7 @@ set -e
 export OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 OMP_NUM_THREADS=1 \
        VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 MPLBACKEND=Agg
 
-SAMPLE="${SAMPLE:-dr1_sep1_rest}"
+SAMPLE="${SAMPLE:-dr1_sep1}"
 PART=${SLURM_ARRAY_TASK_ID:-0}
 NPARTS=${SLURM_ARRAY_TASK_COUNT:-1}
 THREADS=${SLURM_CPUS_PER_TASK:-1}

@@ -27,10 +27,10 @@ lens whose three PNGs all exist is validated and reported as ``already``.
 
 Usage
 -----
-    python scripts/tools/build_image_catalogue.py --sample=dr1_sep1_rest
+    python scripts/tools/build_image_catalogue.py --sample=dr1_sep1
 
     python scripts/tools/build_image_catalogue.py \
-        --sample=dr1_sep1_rest \
+        --sample=dr1_sep1 \
         --manifest=hpc/run_manifests/image_catalogue_test10.txt \
         --catalogue_dir=inspect/dr1_image_catalogue_test10
 """
@@ -55,7 +55,7 @@ from build_inspect import (  # noqa: E402
 )
 
 
-DEFAULT_SAMPLE = "dr1_sep1_rest"
+DEFAULT_SAMPLE = "dr1_sep1"
 
 DATASET_PREFIX = "Tile"
 
