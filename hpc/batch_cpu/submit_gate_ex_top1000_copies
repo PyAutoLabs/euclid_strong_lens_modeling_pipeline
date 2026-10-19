@@ -18,7 +18,7 @@
 #SBATCH -t 03:00:00
 #SBATCH --mem=1gb
 
-PROJECT_PATH=${PROJECT_PATH:-/mnt/ral/jnightin/euclid_dr1}
+PROJECT_PATH=${PROJECT_PATH:-/mnt/ral/jnightin/active/euclid_dr1}
 MANIFEST=$PROJECT_PATH/hpc/run_manifests/vis_lp_ex_top1000_tonight_20261007.txt
 cd "$PROJECT_PATH/dataset/dr1_sep1" || exit 1
 

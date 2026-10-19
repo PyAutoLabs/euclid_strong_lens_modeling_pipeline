@@ -3,7 +3,7 @@
 # Submit the vis_pix follow-up of the v2-grade vis_lp arrays (parts 01-05) on RAL.
 #
 # Run ON RAL (ssh euclid_jump), from anywhere:
-#   bash /mnt/ral/jnightin/euclid_dr1/hpc/batch_cpu/submit_vis_pix_v2grade_overnight.sh [--dry-run]
+#   bash /mnt/ral/jnightin/active/euclid_dr1/hpc/batch_cpu/submit_vis_pix_v2grade_overnight.sh [--dry-run]
 #
 # For each part it reads the state of every task of the matching vis_lp array
 # (squeue for queued tasks, sacct for finished ones) and submits
@@ -28,7 +28,7 @@ set -euo pipefail
 DRY=0
 [[ "${1:-}" == "--dry-run" ]] && DRY=1
 
-BATCH_DIR=/mnt/ral/jnightin/euclid_dr1/hpc/batch_cpu
+BATCH_DIR=/mnt/ral/jnightin/active/euclid_dr1/hpc/batch_cpu
 declare -A VIS_LP=([01]=366938 [02]=367039 [03]=367141 [04]=367243 [05]=367244)
 
 cd "$BATCH_DIR"

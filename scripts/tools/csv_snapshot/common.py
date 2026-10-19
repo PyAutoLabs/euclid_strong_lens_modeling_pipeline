@@ -24,7 +24,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 DEFAULT_MANIFEST = PROJECT_ROOT / "catalogue" / "grades" / "dr1_sep1_consolidated_manifest.csv"
-DEFAULT_OBJECTS = PROJECT_ROOT / "DR1_full_Object_Catalogue_v2.csv"
+DEFAULT_OBJECTS = PROJECT_ROOT / "catalogue" / "DR1_full_Object_Catalogue_v5_fits.csv"
 DEFAULT_UNCOVERED = PROJECT_ROOT / "catalogue" / "grades" / "dr1_sep1_uncovered_ab.csv"
 
 BUILD_DIR = "_build"

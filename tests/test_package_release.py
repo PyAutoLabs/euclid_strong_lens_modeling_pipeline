@@ -225,7 +225,7 @@ def test_dry_run_writes_nothing(release, tmp_path):
 def test_manifest_must_match_the_csv_snapshot(release, tmp_path):
     root, _out = release
     other = tmp_path / "manifest.csv"
-    other.write_text((root / "manifest.csv").read_text() + "TZ,EUCL-DR1-L000098,C,x,False,grade_c_x\n")
+    other.write_text((root / "manifest.csv").read_text() + "TZ,EUCL-DR1-L000098,B,1.9,sep1,False,model_unusable,x\n")
     with pytest.raises(SystemExit, match="sha256"):
         package_release.main(_args(root, tmp_path / "rel", "--tier=csv") + [f"--manifest={other}"])
 

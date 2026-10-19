@@ -51,7 +51,7 @@
 
 set -euo pipefail
 
-export PROJECT_PATH=/mnt/ral/jnightin/euclid_dr1
+export PROJECT_PATH=/mnt/ral/jnightin/active/euclid_dr1
 export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
 export PYAUTO_OUTPUT_DIR=output_sed
 

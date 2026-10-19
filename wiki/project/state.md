@@ -135,7 +135,7 @@ not copied here.
   grid spanning **[-5.0, 5.0]"** at **0.1"/pixel**, and names the MGE `Basis(Gaussian x 40)`
   and the Delaunay `Pixelization` under `meta.skipped_profiles`. The flag is back to `false`
   here and on RAL; the pre-reload copy is
-  `/mnt/ral/jnightin/euclid_dr1/output.prezip.bak.2026-09-16b` (108 MB). Journal:
+  `/mnt/ral/jnightin/active/euclid_dr1/output.prezip.bak.2026-09-16b` (108 MB). Journal:
   `2026-09-16-coolest-json-reload-pass.md`.
 - **The nine completed sep1 fits now carry the source position in `files/wcs.json`
   (2026-09-16).** The pipeline's `main` was merged in at **`650dc2d`** (PRs #71-#73 and #79 —
@@ -182,11 +182,11 @@ not copied here.
 - **SLURM array `343367`** (`euclid_dr1_reload_coolest`, `--array=0,2-9`) **is finished** —
   nine `COMPLETED` tasks, 29-35 s each, no traceback and no writer warning. It added
   `files/coolest.json` to all 18 zips; the pre-reload copy is kept on RAL at
-  `/mnt/ral/jnightin/euclid_dr1/output.prezip.bak.2026-09-16b` (108 MB), for the human to delete.
+  `/mnt/ral/jnightin/active/euclid_dr1/output.prezip.bak.2026-09-16b` (108 MB), for the human to delete.
 - **SLURM array `343358`** (`euclid_dr1_reload_wcs`, `--array=0,2-9`) **is finished** —
   nine `COMPLETED` tasks, 29-34 s each, no traceback. It rewrote `files/wcs.json` in all 18
   zips; the pre-reload copy is kept on RAL at
-  `/mnt/ral/jnightin/euclid_dr1/output.prezip.bak.2026-09-16` (109 MB), for the human to delete.
+  `/mnt/ral/jnightin/active/euclid_dr1/output.prezip.bak.2026-09-16` (109 MB), for the human to delete.
 
 ## Open, carried forward
 

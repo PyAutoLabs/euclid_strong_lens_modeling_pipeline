@@ -70,6 +70,9 @@ def test_membership_and_counts_come_from_the_manifest(snapshot):
     readme = (out / "README.txt").read_text()
     assert "15067" not in readme and "15,067" not in readme and "47,412" not in readme
     assert "exactly 5 distinct" in readme and "—" not in readme
+    assert "lens-finding catalogue\nv5" in readme and "v2" not in readme
+    assert "(the fits stand):\n1." in readme  # T1
+    assert "EUCL-DR1-L000099 (no_model): no FITS made" in readme
     assert len(rows(out / "sample_manifest.csv")) == 5
 
 
@@ -95,6 +98,9 @@ def test_master_columns_and_flags(snapshot):
     if RELEASE_1011.is_dir():
         old = [r["column"] for r in rows(RELEASE_1011 / "master_columns.csv")]
         # Same base/status/mass/light block; band columns follow the bands present.
+        # v5 renamed three identity columns; nothing else moved.
+        renamed = {"v2_grade": "grade", "v2_score": "score", "origin_sample": "cutout_batch"}
+        old = [renamed.get(c, c) for c in old]
         n_fixed = old.index(next(c for c in old if c.endswith("_lens_flux")))
         assert columns[:n_fixed] == old[:n_fixed]
         assert set(columns) <= set(old)

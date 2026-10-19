@@ -1,7 +1,7 @@
 ---
 title: Project profile
 type: profile
-last_touched: 2026-09-11
+last_touched: 2026-10-19
 ---
 
 # User profile
@@ -93,8 +93,12 @@ jump / bastion host `jump_finan`; agent-driven remote execution permitted; prefe
 automation level `assistant-runs`. Keys live as host aliases in `~/.ssh/config`, so the
 project's `hpc/sync` CLI runs unattended from this machine. Ruled 2026-09-05: the agent may
 submit a run the human has asked for, never one they have not. Projects sit under
-`/mnt/ral/jnightin/<project>`; the PyAuto stack is the virtualenv at
-`/mnt/ral/jnightin/PyAuto`, kept in sync with the local library `main`s.
+`/mnt/ral/jnightin/<category>/<project>`; this one is `/mnt/ral/jnightin/active/euclid_dr1`.
+The PyAuto stack is the virtualenv at `/mnt/ral/jnightin/PyAuto`, kept in sync with the local
+library `main`s. 2026-10-19: the old top-level path `/mnt/ral/jnightin/euclid_dr1` (a symlink
+to `active/euclid_dr1`, kept after the category move) is retired — every script in `hpc/`
+and `catalogue/README.md` now uses `/mnt/ral/jnightin/active/euclid_dr1`. Dated records
+in this wiki still quote the old path; read it as `active/euclid_dr1`.
 
 ## How to update this file
 

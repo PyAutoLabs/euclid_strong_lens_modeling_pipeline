@@ -28,7 +28,7 @@
 #   separate processes.
 #
 # SUBMIT
-#   cd hpc/batch_cpu && sbatch --export=ALL,PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto,PROJECT_PATH=/mnt/ral/jnightin/euclid_dr1 \
+#   cd hpc/batch_cpu && sbatch --export=ALL,PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto,PROJECT_PATH=/mnt/ral/jnightin/active/euclid_dr1 \
 #       submit_initial_lens_model_vis_lp_ex_top1000
 #
 #SBATCH -J euclid_dr1_vis_lp_rerun_20261015
@@ -44,7 +44,7 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=james.w.nightingale@durham.ac.uk
 
-export PROJECT_PATH=/mnt/ral/jnightin/euclid_dr1
+export PROJECT_PATH=/mnt/ral/jnightin/active/euclid_dr1
 export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
 
 source $PROJECT_PATH/activate.sh

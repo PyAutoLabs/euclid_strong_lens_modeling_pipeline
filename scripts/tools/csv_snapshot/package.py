@@ -70,18 +70,18 @@ def describe(col):
         source = "result_provenance.csv and input band inventory"
         desc = STATUS_TEXT[col]
     elif col in ["RA_obj", "DEC_obj"]:
-        source = "v2 object catalogue"
+        source = "lens-finding catalogue v5"
         units = "deg"
         desc = "Original lens-finding object sky coordinate; not inferred from the cutout filename."
-    elif col in ["v2_grade", "v2_score"]:
-        source = "v2 object catalogue"
+    elif col in ["grade", "score"]:
+        source = "lens-finding catalogue v5"
         desc = "Lens-finding SWAP grade/score; not a model-success classification."
     elif col == "unique_identifier":
-        desc = "Unique v2 object identifier; primary catalogue key."
+        desc = "Unique v5 object identifier; primary catalogue key."
     elif col == "tile_id":
         desc = "Canonical modelling cutout selected by the consolidated manifest."
-    elif col == "origin_sample":
-        desc = "Input sample before consolidation into dr1_sep1."
+    elif col == "cutout_batch":
+        desc = "Delivery batch of the modelled cutout (sep1: 1 Sep 2026; sep28: 28 Sep 2026 top-up)."
     else:
         if col.startswith("mass_"):
             source, stem = "lens_mass.csv", col[5:]
@@ -119,7 +119,10 @@ def readme_text(snap, stats, n, master_file, excluded_file, excluded_rows, parit
         )
     else:
         bands_text = "Expected bands are read from the input FITS headers."
-    exclusions = "\n".join(f"- {r['unique_identifier']}: {r.get('note', '')}" for r in excluded_rows)
+    exclusions = "\n".join(
+        f"- {r['unique_identifier']}" + (f" ({r['reason']})" if r.get("reason") else "") + f": {r.get('note', '')}"
+        for r in excluded_rows
+    )
     if parity:
         lead = f"A {parity['candidates']:,}-candidate extraction check" if parity.get("candidates") else "An extraction check"
         tol = f" to tolerance {parity['tolerance']}" if parity.get("tolerance") is not None else ""
@@ -136,17 +139,19 @@ def readme_text(snap, stats, n, master_file, excluded_file, excluded_rows, parit
 {'=' * len(title)}
 
 Snapshot cutoff: {snap['cutoff_utc']}
-Membership: exactly {n:,} distinct Grade A/B objects from the v2 consolidated
-manifest ({stats['parent_ab_count']:,} in the parent lens-finding catalogue minus {number_word(n_excl)} missing inputs).
+Membership: exactly {n:,} distinct Grade A/B objects of the lens-finding catalogue
+v5 (Holloway, 19 Oct 2026), from the consolidated manifest: the {stats['parent_ab_count']:,}
+v5 A/B objects minus {number_word(n_excl)} without a usable model (listed below).
 This is an interim modelling snapshot, not a fully completed or scientifically
 validated model catalogue. No candidate is removed for a missing fit or band.
 
 Start with {master_file}: one row per candidate. Blank cells mean
 unavailable/non-finite measurements, never zero. Semicolons separate list values.
-master_columns.csv defines every master column. unique_identifier is the v2
-object key; tile_id is its canonical cutout. Recentred cutouts take precedence
-in the {stats['duplicate_tile_rows']:,} duplicate-cutout pairs according to sample_manifest.csv. This release
-does not apply subsequent v3 membership or identifier changes.
+master_columns.csv defines every master column. unique_identifier is the v5
+object key; tile_id is the cutout its model was fitted on (sample_manifest.csv).
+No object was remodelled for v5. Objects whose model was fitted on an earlier
+cutout than the v5 one centred on the final position (the fits stand):
+{stats.get('superseded_cutout_rows', 0):,}.
 
 Coverage at this snapshot
 -------------------------
@@ -159,7 +164,7 @@ Coverage at this snapshot
 
 The completion and photometry flags deliberately differ: a completed search may
 lack a latent summary or have non-finite derived quantities. Neither flag is a
-visual-inspection success label. v2_grade is a lens-finding grade, not a judgement
+visual-inspection success label. grade is a lens-finding grade, not a judgement
 of model reliability. Do not treat a blank multiband measurement as a dropout.
 
 Tables and numerical conventions
@@ -208,10 +213,11 @@ Excluded parent-catalogue candidates ({n_excl})
 {'-' * (38 + len(str(n_excl)))}
 {exclusions}
 
-These are recorded input-delivery exclusions, not failed lens fits or multiband
-losses. {excluded_file} supplies positions, grade and the recorded notes.
+These objects have no lens model (never modelled) or a model that is not of the
+lens; they are not failed fits or multiband losses. {excluded_file} supplies
+positions, grade, the reason and the recorded notes.
 
-Validation: membership and uniqueness were checked against the full v2 A/B
+Validation: membership and uniqueness were checked against the full v5 A/B
 parent catalogue and selected manifest. {parity_text}File sizes,
 SHA-256 hashes and table row counts are supplied in file_manifest.csv.
 """
@@ -232,8 +238,8 @@ def package(out_dir, manifest, uncovered_csv, parity_json=None, log=print):
         raise SystemExit(f"{master_file}: {len(rows)} rows / {len(uids)} ids, manifest includes {n}")
     if uids != {r["unique_identifier"] for r in manifest_rows}:
         raise SystemExit(f"{master_file}: identifiers differ from the manifest's included rows")
-    grades = {r["v2_grade"] for r in rows}
-    if grades != {r["v2_grade"] for r in manifest_rows}:
+    grades = {r["grade"] for r in rows}
+    if grades != {r["grade"] for r in manifest_rows}:
         raise SystemExit(f"{master_file}: grades {sorted(grades)} differ from the manifest's")
     with open(out_dir / excluded_file, newline="") as stream:
         excluded_rows = list(csv.DictReader(stream))
@@ -257,7 +263,7 @@ def package(out_dir, manifest, uncovered_csv, parity_json=None, log=print):
         writer.writerow(["check", "value"])
         for k, v in stats.items():
             if isinstance(v, (int, float)) and not isinstance(v, bool) and k not in (
-                "n_included", "parent_ab_count", "excluded_parent_count", "duplicate_tile_rows"
+                "n_included", "parent_ab_count", "excluded_parent_count", "superseded_cutout_rows"
             ):
                 writer.writerow([k, v])
         writer.writerow(["unique_identifiers", len(uids)])

@@ -70,7 +70,7 @@
 # Nothing JAX-related and no thread counts are exported here: each stage below
 # carries its own, so the two cannot interfere.
 # -----------------------------------------------------------------------------
-export PROJECT_PATH=/mnt/ral/jnightin/euclid_dr1
+export PROJECT_PATH=/mnt/ral/jnightin/active/euclid_dr1
 export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
 
 source $PROJECT_PATH/activate.sh

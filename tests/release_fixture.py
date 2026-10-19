@@ -4,9 +4,10 @@ Synthetic project tree for the release-packaging tests
 
 ``make_project(root)`` writes, under ``root``:
 
-- ``manifest.csv``: 5 included tiles (T1..T5), one ``grade_c_x`` and one
-  ``duplicate_tile`` row; ``objects.csv`` (v2 objects, one extra A/B object with
-  no tile) and ``uncovered.csv`` (that object).
+- ``manifest.csv`` (v5 schema): 5 included tiles (T1..T5) and one ``no_model``
+  row (an A/B object with no tile); ``objects.csv`` (v5 objects: those six plus
+  one grade C object outside the manifest) and ``uncovered.csv`` (the
+  ``no_model`` object).
 - ``output/dr1_sep1/<tile>/initial_lens_model/{vis_lp,vis_pix}/<hash>.zip`` and
   ``output_sed/dr1_sep1/<tile>/sersic_lens_model/{vis,nir_y}/<hash>.zip`` result
   zips with ``.completed`` and small summary / latent / wcs JSONs. T2 has no
@@ -119,19 +120,24 @@ def _results(root: Path, i: int, tile: str):
 def make_project(root: Path):
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
-    rows = [(t, UIDS[t], "A" if i % 2 else "B", "dr1_sep1_rest", "True", "included")
+    rows = [(t, UIDS[t], "A" if i % 2 else "B", 2.5, "sep1", "True", "included", "")
             for i, t in enumerate(TILES)]
-    rows += [("TC", "EUCL-DR1-L000090", "C", "dr1_sep1_rest", "False", "grade_c_x"),
-             ("T1dup", UIDS["T1"], rows[0][2], "dr1_v2_new", "False", "duplicate_tile")]
+    rows += [("", "EUCL-DR1-L000099", "B", 2.1, "", "False", "no_model", "no FITS made")]
     _write_csv(root / "manifest.csv",
-               ["tile", "unique_identifier", "v2_grade", "origin_sample", "include_in_catalogue", "reason"], rows)
-    objects = [(UIDS[t], 2.5, g, 10.0 + i, -5.0, t) for i, (t, _u, g, *_r) in enumerate(rows[:5])]
-    objects += [("EUCL-DR1-L000090", 0.5, "C", 1.0, 1.0, "TC"), ("EUCL-DR1-L000099", 2.1, "B", 2.0, 2.0, "TX")]
+               ["tile", "unique_identifier", "grade", "score", "cutout_batch", "include_in_catalogue", "reason",
+                "note"], rows)
+    # T1 was modelled on an earlier cutout than the one v5 recommends.
+    objects = [(UIDS[t], 2.5, g, 10.0 + i, -5.0, t, ("sep28:" if t == "T1" else "sep1:") + t, "sep1:" + t)
+               for i, (t, _u, g, *_r) in enumerate(rows[:5])]
+    objects += [("EUCL-DR1-L000090", 0.5, "C", 1.0, 1.0, "TC", "", ""),
+                ("EUCL-DR1-L000099", 2.1, "B", 2.0, 2.0, "TX", "v5:TX_v5", "")]
     _write_csv(root / "objects.csv",
-               ["Unique_Identifier", "SWAP_Score", "SWAP_Grade", "RA_obj", "DEC_obj", "id_str_for_cutout"], objects)
+               ["Unique_Identifier", "SWAP_Score", "SWAP_Grade", "RA_obj", "DEC_obj", "id_str_for_cutout",
+                "fits_to_use", "fits_modelled_20261011"], objects)
     _write_csv(root / "uncovered.csv",
-               ["unique_identifier", "v2_grade", "v2_score", "RA_obj", "DEC_obj", "id_str_for_cutout", "note"],
-               [("EUCL-DR1-L000099", "B", 2.1, 2.0, 2.0, "TX", "no FITS made")])
+               ["unique_identifier", "grade", "score", "RA_obj", "DEC_obj", "id_str_for_cutout", "tile", "reason",
+                "note"],
+               [("EUCL-DR1-L000099", "B", 2.1, 2.0, 2.0, "TX", "", "no_model", "no FITS made")])
 
     for i, tile in enumerate(TILES, 1):
         _results(root, i, tile)

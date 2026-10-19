@@ -26,10 +26,11 @@ This script turns those into ONE catalogue:
    (``euclid`` project), same columns — over every requested tile: expected
    bands from the dataset FITS ``*_BGSUB`` HDUs, completed bands from the
    ``output_sed`` ``sersic_lens_model/<band>/*.zip`` results, checkpoints.
-4. **Grades**: ``grades.csv`` — one row per catalogue tile with its v2 grade and
-   its real ``sample`` — from ``catalogue/grades/tile_grades_dr1_sep1_v2.csv``
-   (dr1_sep1_*) and ``hpc/run_manifests/dr1_v2_new_selection_20261001.csv``
-   (dr1_v2_new).
+4. **Grades**: ``grades.csv`` — one row per catalogue tile with its v5
+   identifier, grade, score, cutout batch and its real ``sample`` — from the
+   consolidated manifest (``<catalogue>/_build/manifest.csv`` when the build
+   copied one, else ``catalogue/grades/dr1_sep1_consolidated_manifest.csv``;
+   lens-finding catalogue v5, Holloway, 19 Oct 2026).
 5. **WCS**: ``scripts/tools/build_wcs_package.py`` over the whole merged
    sample (``--n=0 --skip_images``, multi-sample), giving ``wcs.csv``,
    ``source_clumps.csv`` and ``wcs_skipped.csv`` at the catalogue root (the
@@ -114,12 +115,9 @@ INVENTORY_COLUMNS = [
 GRADE_COLUMNS = [
     "tile",
     "unique_identifier",
-    "match_method",
-    "v1_grade",
-    "v2_grade",
-    "v2_score",
-    "reid",
-    "v1_unique_identifier",
+    "grade",
+    "score",
+    "cutout_batch",
     "sample",
 ]
 
@@ -376,29 +374,13 @@ def band_inventory(pairs, sed_output: Path, catalogue_dir: Path):
 # ---------------------------------------------------------------------------
 
 
-def write_grades(tile_sample, grades_csvs, v2_new_csvs, catalogue_dir: Path):
+def write_grades(tile_sample, grades_csvs, catalogue_dir: Path):
     found = {}
     for path in grades_csvs:
-        with open(path, newline="") as stream:
+        with open(path, newline="", encoding="utf-8-sig") as stream:
             for row in csv.DictReader(stream):
-                if row["tile"] in tile_sample:
+                if row.get("tile") and row["tile"] in tile_sample:
                     found[row["tile"]] = {c: row.get(c, "") for c in GRADE_COLUMNS}
-    for path in v2_new_csvs:
-        with open(path, newline="") as stream:
-            for row in csv.DictReader(stream):
-                tile = row["tile"]
-                if tile in tile_sample and tile not in found:
-                    found[tile] = {
-                        "tile": tile,
-                        "unique_identifier": row.get("unique_identifier", ""),
-                        "match_method": row.get("selection", "v2_new_selection"),
-                        "v1_grade": "",
-                        "v2_grade": row.get("v2_grade", ""),
-                        "v2_score": row.get("v2_score", ""),
-                        "reid": "",
-                        "v1_unique_identifier": "",
-                        "sample": "",
-                    }
     for tile, row in found.items():
         row["sample"] = tile_sample[tile]
     target = catalogue_dir / "grades.csv"
@@ -464,7 +446,7 @@ def lens_tiles(catalogue_dir: Path):
 
 
 def write_index(catalogue_dir, tile_sample, grades, part_of):
-    columns = ["tile_id", "sample", "unique_identifier", "v2_grade", "v2_score", "n_files"]
+    columns = ["tile_id", "sample", "unique_identifier", "grade", "score", "n_files"]
     columns += [f"has_{name.replace('.', '_')}" for name in INDEX_PRODUCTS]
     columns += ["n_source_reconstruction_csv", "part_zip"]
     with (catalogue_dir / "lens_index.csv").open("w", newline="") as stream:
@@ -477,8 +459,8 @@ def write_index(catalogue_dir, tile_sample, grades, part_of):
                 "tile_id": tile,
                 "sample": tile_sample.get(tile, ""),
                 "unique_identifier": grade.get("unique_identifier", ""),
-                "v2_grade": grade.get("v2_grade", ""),
-                "v2_score": grade.get("v2_score", ""),
+                "grade": grade.get("grade", ""),
+                "score": grade.get("score", ""),
                 "n_files": len(files),
                 "n_source_reconstruction_csv": sum(
                     n.startswith("vis_pix_source_plane_reconstruction_") for n in files
@@ -533,7 +515,7 @@ def write_readme(catalogue_dir, tile_sample, samples, counts, archive):
         "wcs.csv": "sky positions (lens light, source, lensed images), one row per lens x {vis_lp, vis_pix}",
         "source_clumps.csv": "vis_pix source clumps x their lensed images",
         "wcs_skipped.csv": "lenses with no wcs.csv rows, and why",
-        "grades.csv": "v2 lens-finding grade + sample of every lens",
+        "grades.csv": "v5 lens-finding grade + sample of every lens",
         "lens_index.csv": "per lens: sample, grade, which products exist, distribution part",
         "band_inventory.csv": "QA: expected vs completed SED bands, every requested tile",
         "unresolved_manifest.csv": "QA: the band_inventory rows not fully complete",
@@ -695,15 +677,9 @@ def parse_args():
         "--grades",
         action="append",
         default=None,
-        help="Grade CSVs in the tile_grades schema (repeatable). "
-        "Default: catalogue/grades/tile_grades_dr1_sep1_v2.csv.",
-    )
-    parser.add_argument(
-        "--v2_new_selection",
-        action="append",
-        default=None,
-        help="dr1_v2_new selection CSVs (repeatable). "
-        "Default: hpc/run_manifests/dr1_v2_new_selection_20261001.csv.",
+        help="Consolidated-manifest CSVs (tile, unique_identifier, grade, score, cutout_batch; "
+        "repeatable). Default: <catalogue>/_build/manifest.csv if the build copied one, "
+        "else catalogue/grades/dr1_sep1_consolidated_manifest.csv.",
     )
     parser.add_argument("--archive", default="0", help="'chunked' writes the distribution zips.")
     parser.add_argument("--part_max_gb", type=float, default=10.0)
@@ -753,11 +729,11 @@ def main():
 
     band_inventory(pairs, PROJECT_ROOT / args.sed_output_dir, catalogue_dir)
 
-    grades = args.grades or [str(PROJECT_ROOT / "catalogue/grades/tile_grades_dr1_sep1_v2.csv")]
-    v2_new = args.v2_new_selection or [
-        str(PROJECT_ROOT / "hpc/run_manifests/dr1_v2_new_selection_20261001.csv")
+    copied = build_dir / "manifest.csv"
+    grades = args.grades or [
+        str(copied if copied.exists() else PROJECT_ROOT / "catalogue/grades/dr1_sep1_consolidated_manifest.csv")
     ]
-    write_grades(tile_sample, grades, v2_new, catalogue_dir)
+    write_grades(tile_sample, grades, catalogue_dir)
 
     if not args.skip_wcs:
         build_wcs(catalogue_dir, build_dir, samples, args.output_dir)

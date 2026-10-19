@@ -44,7 +44,7 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=james.w.nightingale@durham.ac.uk
 
-export PROJECT_PATH=/mnt/ral/jnightin/euclid_dr1
+export PROJECT_PATH=/mnt/ral/jnightin/active/euclid_dr1
 export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
 
 source $PROJECT_PATH/activate.sh

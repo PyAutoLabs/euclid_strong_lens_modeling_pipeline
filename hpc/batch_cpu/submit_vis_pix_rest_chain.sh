@@ -9,7 +9,7 @@
 #   sep28  dr1_v2_new, vis_lp 384040 (part 01), vis_lp_sep28_20261001.txt
 #
 # Run ON RAL (ssh euclid_jump), from anywhere:
-#   bash /mnt/ral/jnightin/euclid_dr1/hpc/batch_cpu/submit_vis_pix_rest_chain.sh [--batch=NAME] [--dry-run] [PART ...]
+#   bash /mnt/ral/jnightin/active/euclid_dr1/hpc/batch_cpu/submit_vis_pix_rest_chain.sh [--batch=NAME] [--dry-run] [PART ...]
 #   e.g.  ... --dry-run                 (rest, all parts, print only)
 #         ... 01 02                     (rest, real run, parts 01 and 02 only)
 #         ... --batch=sep28 --dry-run   (sep28, print only)
@@ -51,7 +51,7 @@ for a in "$@"; do
     esac
 done
 
-PROJECT_PATH=${PROJECT_PATH:-/mnt/ral/jnightin/euclid_dr1}
+PROJECT_PATH=${PROJECT_PATH:-/mnt/ral/jnightin/active/euclid_dr1}
 BATCH_DIR=$PROJECT_PATH/hpc/batch_cpu
 declare -A VIS_LP MANIFEST
 case "$BATCH" in

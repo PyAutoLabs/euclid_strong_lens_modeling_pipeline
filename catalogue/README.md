@@ -189,7 +189,7 @@ distribution zips (`catalogue_csvs.zip`, size-capped `catalogue_part_NN.zip`,
 
 ```bash
 ssh euclid_jump
-bash /mnt/ral/jnightin/euclid_dr1/hpc/batch_cpu/submit_catalogue_chunked.sh \
+bash /mnt/ral/jnightin/active/euclid_dr1/hpc/batch_cpu/submit_catalogue_chunked.sh \
     CATALOGUE=dr1_catalogue_<date> N=6 ARCHIVE=chunked PART_MAX_GB=10
 ```
 
@@ -207,6 +207,19 @@ A release is cut from ONE chunked build into three download tiers. All three
 carry the same snapshot cutoff and the same membership manifest
 (`catalogue/grades/dr1_sep1_consolidated_manifest.csv`, its
 `include_in_catalogue=True` rows), so a lens has the same values in each.
+
+**Membership and provenance.** The manifest is built by
+`scripts/tools/consolidated_manifest.py` from the lens-finding catalogue v5
+(Holloway, 19 Oct 2026), `catalogue/DR1_full_Object_Catalogue_v5_fits.csv`: one
+row per v5 Grade A/B object (15,072), keyed on the v5 `unique_identifier`, with
+its v5 `grade` / `score`, the dataset tile its existing model was fitted on and
+`include_in_catalogue` + `reason`. Nothing was remodelled for v5: 15,064 objects
+are included, and the 8 without a usable model (`no_model`, `model_unusable`)
+stay in the object list through `catalogue/grades/dr1_sep1_uncovered_ab.csv`,
+shipped as the snapshot's `excluded_<n>_candidates.csv`. Included objects whose
+fits never finished keep their row, flagged by the completion columns (and by
+`EXCLUDED_FILE` in the vis/full tiers). Details and counts:
+[`grades/README.md`](grades/README.md).
 
 | Tier | Per lens | Approx. size per lens |
 |------|----------|----------------------:|

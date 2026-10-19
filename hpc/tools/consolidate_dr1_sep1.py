@@ -3,7 +3,7 @@
 Consolidate every DR1 lens into the single sample ``dr1_sep1`` (2026-10-07).
 
 Runs ON RAL from the project root (``PROJECT_PATH``, default
-``/mnt/ral/jnightin/euclid_dr1``). Pure stdlib. All paths in the manifest are
+``/mnt/ral/jnightin/active/euclid_dr1``). Pure stdlib. All paths in the manifest are
 relative to the project root.
 
 Ops, in manifest order:
@@ -42,7 +42,7 @@ import shutil
 import sys
 import time
 
-ROOT = os.environ.get("PROJECT_PATH", "/mnt/ral/jnightin/euclid_dr1")
+ROOT = os.environ.get("PROJECT_PATH", "/mnt/ral/jnightin/active/euclid_dr1")
 MANIFEST_DIR = "hpc/run_manifests/consolidate_dr1_sep1_20261007"
 MANIFEST = f"{MANIFEST_DIR}/moves.tsv"
 LOG = f"{MANIFEST_DIR}/moves.log"

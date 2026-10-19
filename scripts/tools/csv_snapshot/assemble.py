@@ -7,15 +7,15 @@ lines (``<out_dir>/_build/results*.jsonl.gz``) into the CSV tables of a
 CSV-only snapshot, from stored posterior summaries only (no refitting):
 
 - ``dr1_catalogue_<N>_master.csv``: one row per included candidate (N = the
-  manifest's ``include_in_catalogue=True`` count): identity, v2 grade/score and
+  manifest's ``include_in_catalogue=True`` count): identity, v5 grade/score and
   sky position, completion flags, posterior medians and 1-sigma bounds of the
   mass, VIS Sersic light and per-band photometry.
 - ``lens_mass.csv``, ``lens_sersic.csv``, ``source_sersic.csv``,
   ``photometry.csv``, ``astrometric_offsets.csv``, ``wcs.csv``,
   ``source_clumps.csv``, ``result_provenance.csv``, ``metadata_errors.csv``.
 - ``sample_manifest.csv`` (the included manifest rows) and
-  ``excluded_<n>_candidates.csv`` (the parent A/B objects with no tile,
-  ``catalogue/grades/dr1_sep1_uncovered_ab.csv``).
+  ``excluded_<n>_candidates.csv`` (the parent A/B objects not included, with
+  the reason: ``catalogue/grades/dr1_sep1_uncovered_ab.csv``).
 
 Column names and value conventions are exactly those of the 2026-10-11
 ``dr1_catalogue_15067_20261011_csv_only`` release. Counts go to
@@ -86,7 +86,7 @@ OFFSET = {
     "grid_offset_y": "dataset_model.grid_offset.grid_offset_0",
     "grid_offset_x": "dataset_model.grid_offset.grid_offset_1",
 }
-BASE = ["unique_identifier", "tile_id", "v2_grade", "v2_score", "RA_obj", "DEC_obj", "origin_sample"]
+BASE = ["unique_identifier", "tile_id", "grade", "score", "RA_obj", "DEC_obj", "cutout_batch"]
 STATUS = [
     "vis_lp_completed", "vis_pix_completed", "vis_pix_summary_available",
     "vis_pix_latents_available", "sersic_vis_completed", "sersic_vis_summary_available",
@@ -263,12 +263,12 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
             raise SystemExit(f"{uid} collected twice")
         if uid not in manifest_by_uid or manifest_by_uid[uid]["tile"] != tile:
             raise SystemExit(f"{uid}/{tile}: not an included manifest row")
-        if obj is None or obj["SWAP_Grade"] != m["v2_grade"]:
+        if obj is None or obj["SWAP_Grade"] != m["grade"]:
             raise SystemExit(f"{uid}: missing from the object catalogue or grade differs")
         seen.add(uid)
         master = dict(
-            unique_identifier=uid, tile_id=tile, v2_grade=m["v2_grade"], v2_score=obj["SWAP_Score"],
-            RA_obj=obj["RA_obj"], DEC_obj=obj["DEC_obj"], origin_sample=m["origin_sample"],
+            unique_identifier=uid, tile_id=tile, grade=m["grade"], score=obj["SWAP_Score"],
+            RA_obj=obj["RA_obj"], DEC_obj=obj["DEC_obj"], cutout_batch=m["cutout_batch"],
         )
         expected = set(d.get("expected_bands", []))
         expected_sources[d.get("expected_bands_source", "none")] += 1
@@ -302,7 +302,7 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
         )
         master.update(status)
         stats["rows"] += 1
-        stats["grade_" + m["v2_grade"]] += 1
+        stats["grade_" + m["grade"]] += 1
         for k, v in status.items():
             if isinstance(v, bool):
                 stats[k] += int(v)
@@ -356,7 +356,7 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
     if seen != set(manifest_by_uid):
         raise SystemExit(f"collected {len(seen)} of the {len(manifest_by_uid)} included objects")
 
-    # Parent A/B objects with no tile: the recorded input-delivery exclusions.
+    # Parent A/B objects not included: no model, or a model that is not of the lens.
     uncovered = read_csv(uncovered_csv)
     parent_ab = {uid for uid, o in objects.items() if o.get("SWAP_Grade") in ("A", "B")}
     excluded = {r["unique_identifier"] for r in uncovered}
@@ -380,7 +380,10 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
     report["n_included"] = n_included
     report["parent_ab_count"] = len(parent_ab)
     report["excluded_parent_count"] = len(excluded)
-    report["duplicate_tile_rows"] = sum(r["reason"] == "duplicate_tile" for r in read_csv(manifest))
+    report["superseded_cutout_rows"] = sum(
+        bool(o.get("fits_to_use")) and o.get("fits_modelled_20261011", "") not in ("", o["fits_to_use"])
+        for uid, o in objects.items() if uid in manifest_by_uid
+    )
     report["expected_bands_sources"] = dict(expected_sources)
     report["master_file"] = master_file.name
     report["excluded_file"] = excluded_name(len(uncovered))
@@ -392,9 +395,10 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
 def add_arguments(parser):
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
     parser.add_argument("--objects", default=str(DEFAULT_OBJECTS),
-                        help="v2 object catalogue (Unique_Identifier, SWAP_Grade, SWAP_Score, RA_obj, DEC_obj)")
+                        help="v5 object catalogue (Unique_Identifier, SWAP_Grade, SWAP_Score, RA_obj, DEC_obj, "
+                        "fits_to_use, fits_modelled_20261011)")
     parser.add_argument("--uncovered", default=str(DEFAULT_UNCOVERED),
-                        help="parent A/B objects with no tile (catalogue/grades/dr1_sep1_uncovered_ab.csv)")
+                        help="parent A/B objects not included (catalogue/grades/dr1_sep1_uncovered_ab.csv)")
     parser.add_argument("--force", action="store_true")
 
 

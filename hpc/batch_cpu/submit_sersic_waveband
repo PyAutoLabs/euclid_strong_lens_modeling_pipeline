@@ -48,7 +48,7 @@
 #   This file is `euclid_dr1_prelim`'s copy of pipeline PR #70's
 #   `hpc/batch_cpu/submit_sersic_waveband` with three lines re-pointed at this
 #   project, and nothing else:
-#     - `export PROJECT_PATH=/mnt/ral/jnightin/euclid_dr1`;
+#     - `export PROJECT_PATH=/mnt/ral/jnightin/active/euclid_dr1`;
 #     - `sample=dr1_sep1`;
 #     - the ten-tile `datasets=()` list, in the sep1 tile names and in the same
 #       idx order as `submit_initial_lens_model_two_stage`, so the array index
@@ -62,7 +62,7 @@
 #   342650 -- so it cannot seed the chain and is excluded at submit time. The
 #   `#SBATCH --array=0-9` directive below is left whole; narrow it on the
 #   command line instead:
-#     ssh euclid_jump "cd /mnt/ral/jnightin/euclid_dr1/hpc/batch_cpu && \
+#     ssh euclid_jump "cd /mnt/ral/jnightin/active/euclid_dr1/hpc/batch_cpu && \
 #         sbatch --array=0,2-9 submit_sersic_waveband"
 #   (`hpc/sync submit` passes no sbatch arguments, so it cannot narrow.)
 
@@ -92,7 +92,7 @@
 # Nothing JAX-related and no thread counts are exported here: the run below
 # carries its own on its `env` line.
 # -----------------------------------------------------------------------------
-export PROJECT_PATH=/mnt/ral/jnightin/euclid_dr1
+export PROJECT_PATH=/mnt/ral/jnightin/active/euclid_dr1
 export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
 
 source $PROJECT_PATH/activate.sh

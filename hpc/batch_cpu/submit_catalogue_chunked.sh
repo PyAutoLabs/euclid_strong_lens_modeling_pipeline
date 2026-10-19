@@ -33,7 +33,7 @@
 #
 # USAGE
 #   ssh euclid_jump
-#   bash /mnt/ral/jnightin/euclid_dr1/hpc/batch_cpu/submit_catalogue_chunked.sh \
+#   bash /mnt/ral/jnightin/active/euclid_dr1/hpc/batch_cpu/submit_catalogue_chunked.sh \
 #       CATALOGUE=dr1_catalogue_20261006 N=6 ARCHIVE=chunked [PARTS=10] [DRY=1]
 #
 #   Variables (as KEY=VALUE arguments or in the environment):

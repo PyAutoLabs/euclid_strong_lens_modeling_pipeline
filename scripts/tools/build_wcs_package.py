@@ -3,13 +3,14 @@ Euclid Pipeline: WCS Package Of The Top-Graded Lenses
 =====================================================
 
 Builds a small, shareable package of where the fitted lenses and their lensed
-sources sit on the sky, for the ``N`` best lenses of a sample by v2 lens-finding
+sources sit on the sky, for the ``N`` best lenses of a sample by v5 lens-finding
 grade score. Both source models are included: ``vis_lp`` (a parametric MGE
 source) and ``vis_pix`` (a pixelized source, whose bright clumps are found by
 the percentile rule of ``util.pixelized_source_clumps_from``).
 
-Selection: every tile of the grades CSV (``catalogue/grades/tile_grades_dr1_sep1_v2.csv``)
-is ranked by ``v2_score``, descending (ties broken by tile name). The v2 score
+Selection: every tile of the grades CSV (``catalogue/grades/dr1_sep1_consolidated_manifest.csv``,
+lens-finding catalogue v5; rows with ``include_in_catalogue=False`` are skipped)
+is ranked by ``score``, descending (ties broken by tile name). The v5 score
 alone already orders the grades (A >= 2.5 > B >= 1.5 > C), so no separate grade
 key is needed. The ranking is walked from the top and the first ``N`` tiles
 with a finished ``vis_lp`` *and* ``vis_pix`` search (a ``<hash>.zip`` in the
@@ -83,7 +84,7 @@ from build_inspect import (  # noqa: E402
 
 DEFAULT_SAMPLE = "dr1_sep1"
 
-DEFAULT_GRADES = "catalogue/grades/tile_grades_dr1_sep1_v2.csv"
+DEFAULT_GRADES = "catalogue/grades/dr1_sep1_consolidated_manifest.csv"
 
 STAGES = ("vis_lp", "vis_pix")
 
@@ -93,8 +94,8 @@ WCS_COLUMNS = [
     "rank",
     "lens_name",
     "unique_identifier",
-    "v2_grade",
-    "v2_score",
+    "grade",
+    "score",
     "stage",
     "result_zip",
     "crpix_x",
@@ -170,10 +171,14 @@ def stage_zip(stage_dir: Path):
 
 
 def ranked_tiles(grades_csv: Path) -> list:
-    """Grade rows with a score, best ``v2_score`` first, ties by tile name."""
-    with open(grades_csv, newline="") as f:
-        rows = [row for row in csv.DictReader(f) if row.get("v2_score")]
-    rows.sort(key=lambda row: (-float(row["v2_score"]), row["tile"]))
+    """Grade rows with a tile and a score, best ``score`` first, ties by tile name.
+    Rows a manifest marks ``include_in_catalogue=False`` are left out."""
+    with open(grades_csv, newline="", encoding="utf-8-sig") as f:
+        rows = [
+            row for row in csv.DictReader(f)
+            if row.get("score") and row.get("tile") and row.get("include_in_catalogue", "True") == "True"
+        ]
+    rows.sort(key=lambda row: (-float(row["score"]), row["tile"]))
     return rows
 
 
@@ -253,8 +258,8 @@ def rows_for_lens(rank, grade_row, zips, wcs, mass_row):
             "rank": rank,
             "lens_name": tile,
             "unique_identifier": grade_row["unique_identifier"],
-            "v2_grade": grade_row["v2_grade"],
-            "v2_score": grade_row["v2_score"],
+            "grade": grade_row["grade"],
+            "score": grade_row["score"],
             "stage": stage,
             "result_zip": zips[stage].name,
         }
@@ -315,19 +320,19 @@ def rows_for_lens(rank, grade_row, zips, wcs, mass_row):
 
 
 README = """\
-WCS package: top {n} {sample} lenses by v2 lens-finding grade score
+WCS package: top {n} {sample} lenses by v5 lens-finding grade score
 {underline}
 
 Built {today} by scripts/tools/build_wcs_package.py (euclid_dr1 project).
 
 Selection
 ---------
-Every tile of {grades} was ranked by v2_score (the v2 SWAP_Score), descending;
+Every tile of {grades} was ranked by score (the v5 SWAP_Score), descending;
 the score alone orders the grades (A >= 2.5 > B >= 1.5 > C). Walking down that
 ranking, the first {n} tiles with BOTH a finished vis_lp and a finished vis_pix
 fit, each carrying files/wcs.json, were taken. Tiles passed over on the way are
 listed in skipped.csv with the reason. Rank 1 = best score.
-v2_score of the {n} taken: {score_max} (rank 1) down to {score_min} (rank {n}).
+score of the {n} taken: {score_max} (rank 1) down to {score_min} (rank {n}).
 
 The two fits
 ------------
@@ -356,7 +361,7 @@ skipped.csv        tiles passed over during selection, with reason
 
 wcs.csv columns
 ---------------
-rank, lens_name (tile), unique_identifier (v2 catalogue), v2_grade, v2_score,
+rank, lens_name (tile), unique_identifier (v5 catalogue), grade, score,
 stage (vis_lp | vis_pix), result_zip (the fit's result archive name),
 crpix_x, crpix_y       1-based WCS pixel of the image-plane origin (0, 0) =
                        the tile centre that all arcsec values are measured from
@@ -449,8 +454,8 @@ def main() -> int:
                 {
                     "score_rank": position,
                     "lens_name": tile,
-                    "v2_grade": grade_row["v2_grade"],
-                    "v2_score": grade_row["v2_score"],
+                    "grade": grade_row["grade"],
+                    "score": grade_row["score"],
                     "sample": grade_row.get("sample", ""),
                     "reason": reason,
                 }
@@ -479,10 +484,10 @@ def main() -> int:
     write_csv(package_dir / "source_clumps.csv", CLUMP_COLUMNS, clump_rows)
     write_csv(
         package_dir / "skipped.csv",
-        ["score_rank", "lens_name", "v2_grade", "v2_score", "sample", "reason"],
+        ["score_rank", "lens_name", "grade", "score", "sample", "reason"],
         skipped,
     )
-    title = f"WCS package: top {args.n} {args.sample} lenses by v2 lens-finding grade score"
+    title = f"WCS package: top {args.n} {args.sample} lenses by v5 lens-finding grade score"
     (package_dir / "README.txt").write_text(
         README.format(
             n=len(taken),
@@ -492,8 +497,8 @@ def main() -> int:
             grades=grades_csv.relative_to(PROJECT_ROOT)
             if grades_csv.is_relative_to(PROJECT_ROOT)
             else grades_csv,
-            score_max=taken[0][0]["v2_score"] if taken else "",
-            score_min=taken[-1][0]["v2_score"] if taken else "",
+            score_max=taken[0][0]["score"] if taken else "",
+            score_min=taken[-1][0]["score"] if taken else "",
         )
     )
 
@@ -580,7 +585,7 @@ def parse_args():
         "--grades",
         metavar="path",
         default=DEFAULT_GRADES,
-        help=f"Per-tile grades CSV (tile, v2_grade, v2_score, sample). Default: {DEFAULT_GRADES}.",
+        help=f"Per-tile grades CSV (tile, grade, score[, sample]). Default: {DEFAULT_GRADES}.",
     )
     parser.add_argument(
         "--output_path",

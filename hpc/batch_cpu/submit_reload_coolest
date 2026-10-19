@@ -78,7 +78,7 @@
 # <script>"` and so carries no exports from the local machine, and the RAL
 # login profile sets neither. See submit_initial_lens_model_two_stage.
 # -----------------------------------------------------------------------------
-export PROJECT_PATH=/mnt/ral/jnightin/euclid_dr1
+export PROJECT_PATH=/mnt/ral/jnightin/active/euclid_dr1
 export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
 
 source $PROJECT_PATH/activate.sh

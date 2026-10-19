@@ -18,7 +18,7 @@
 #SBATCH -t 10:00:00
 #SBATCH --mem=1gb
 
-PROJECT_PATH=${PROJECT_PATH:-/mnt/ral/jnightin/euclid_dr1}
+PROJECT_PATH=${PROJECT_PATH:-/mnt/ral/jnightin/active/euclid_dr1}
 cd "$PROJECT_PATH" || exit 1
 LOG=hpc/run_manifests/consolidate_dr1_sep1_20261007/moves.log
 
