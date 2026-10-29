@@ -31,6 +31,13 @@ from pathlib import Path
 from astropy.io import fits
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+try:
+    import project_paths  # noqa: E402
+except ImportError:  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
+    from types import SimpleNamespace
+
+    project_paths = SimpleNamespace(dataset_root=lambda: PROJECT_ROOT / "dataset")
 
 
 def expected_bands(fits_path: Path) -> list:
@@ -74,7 +81,7 @@ def main() -> int:
     names = list(dict.fromkeys(names))
 
     sed_root = resolve(args.sed_output_path) / args.sample
-    dataset_root = PROJECT_ROOT / "dataset" / args.sample
+    dataset_root = project_paths.dataset_root() / args.sample
     out_dir = resolve(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 

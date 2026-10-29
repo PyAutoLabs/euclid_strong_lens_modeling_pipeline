@@ -70,9 +70,17 @@ import csv
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+import sys
+sys.path.insert(0, str(PROJECT_ROOT))
+try:
+    import project_paths  # noqa: E402
+except ImportError:  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
+    from types import SimpleNamespace
+
+    project_paths = SimpleNamespace(dataset_root=lambda: PROJECT_ROOT / "dataset")
 GRADES_DIR = PROJECT_ROOT / "catalogue" / "grades"
 OBJECT_CSV = PROJECT_ROOT / "catalogue" / "DR1_full_Object_Catalogue_v5_fits.csv"
-DATASET_DIR = PROJECT_ROOT / "dataset" / "dr1_sep1"
+DATASET_DIR = project_paths.dataset_root() / "dr1_sep1"
 OUTPUT_DIR = PROJECT_ROOT / "output" / "dr1_sep1"
 
 BATCHES = ("sep1", "sep28")

@@ -3,6 +3,8 @@ from dataclasses import dataclass
 import json
 import numpy as np
 from pathlib import Path
+
+import project_paths
 from PIL import Image
 from typing import List, Optional, Tuple
 import logging
@@ -1378,12 +1380,12 @@ def load_vis_dataset(
     """
     from astropy.wcs import WCS
 
-    # util.py lives in the project root; dataset/ is a sibling directory.
+    # util.py lives in the project root; the datasets live under project_paths.dataset_root().
     project_root = Path(__file__).parent
     if sample_name is not None:
-        dataset_main_path = project_root / "dataset" / sample_name / dataset_name
+        dataset_main_path = project_paths.dataset_root() / sample_name / dataset_name
     else:
-        dataset_main_path = project_root / "dataset" / dataset_name
+        dataset_main_path = project_paths.dataset_root() / dataset_name
     dataset_fits_name = f"{dataset_name}.fits"
 
     dataset_index_dict = dataset_instrument_hdu_dict_via_fits_from(

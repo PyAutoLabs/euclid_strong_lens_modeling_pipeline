@@ -85,6 +85,13 @@ from PIL import Image
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+try:
+    import project_paths  # noqa: E402
+except ImportError:  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
+    from types import SimpleNamespace
+
+    project_paths = SimpleNamespace(dataset_root=lambda: PROJECT_ROOT / "dataset")
 
 DEFAULT_SAMPLE = "q1_walsmley"
 
@@ -420,9 +427,9 @@ def main() -> int:
         sersic_output_path / args.sample if args.sample else sersic_output_path
     )
     dataset_main_dir = (
-        PROJECT_ROOT / "dataset" / args.sample
+        project_paths.dataset_root() / args.sample
         if args.sample
-        else PROJECT_ROOT / "dataset"
+        else project_paths.dataset_root()
     )
 
     if not results_dir.is_dir():

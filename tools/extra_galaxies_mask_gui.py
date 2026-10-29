@@ -46,6 +46,9 @@ If any code in this script is unclear, refer to the `data_preparation/start_here
 import argparse
 import numpy as np
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import project_paths  # noqa: E402
 import autolens as al
 
 """
@@ -60,7 +63,7 @@ parser.add_argument(
 args = parser.parse_args()
 dataset_name = args.dataset
 
-dataset_main_path = Path("dataset") / dataset_name
+dataset_main_path = project_paths.dataset_root() / dataset_name
 dataset_fits_name = f"{dataset_name}.fits"
 
 vis_index = 3

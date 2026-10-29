@@ -80,6 +80,12 @@ from build_inspect import (  # noqa: E402
     extract_zip_member,
     validate_asset,
 )
+try:
+    import project_paths  # noqa: E402
+except ImportError:  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
+    from types import SimpleNamespace
+
+    project_paths = SimpleNamespace(dataset_root=lambda: PROJECT_ROOT / "dataset")
 
 
 DEFAULT_SAMPLE = "dr1_sep1"
@@ -469,7 +475,7 @@ def main() -> int:
     wcs_rows, clump_rows = [], []
     for rank, (grade_row, zips) in enumerate(taken, start=1):
         tile = grade_row["tile"]
-        dataset_main_dir = PROJECT_ROOT / "dataset" / (grade_row.get("sample") or samples[0])
+        dataset_main_dir = project_paths.dataset_root() / (grade_row.get("sample") or samples[0])
         wcs = build_lens(
             tile, zips, package_dir / tile, dataset_main_dir, images=not args.skip_images
         )

@@ -23,6 +23,9 @@ import autolens as al
 import autolens.plot as aplt
 import numpy as np
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import project_paths  # noqa: E402
 
 """
 __Dataset__
@@ -32,7 +35,7 @@ folder `dataset/imaging/no_lens_light/mass_sie__source_sersic`.
 """
 
 dataset_name = "102019586_NEG564463213499964061"
-dataset_path = Path("dataset") / dataset_name
+dataset_path = project_paths.dataset_root() / dataset_name
 
 psf_full = al.Convolver.from_fits(
     file_path=Path(dataset_path) / "psf_full.fits", hdu=0, pixel_scales=0.1

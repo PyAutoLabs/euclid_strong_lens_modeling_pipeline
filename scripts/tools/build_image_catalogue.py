@@ -53,6 +53,12 @@ from build_inspect import (  # noqa: E402
     result_source,
     validate_asset,
 )
+try:
+    import project_paths  # noqa: E402
+except ImportError:  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
+    from types import SimpleNamespace
+
+    project_paths = SimpleNamespace(dataset_root=lambda: PROJECT_ROOT / "dataset")
 
 
 DEFAULT_SAMPLE = "dr1_sep1"
@@ -189,7 +195,7 @@ def main() -> int:
     manifest = str(resolve(args.manifest, None)) if args.manifest else None
 
     results_dir = output_path / args.sample
-    dataset_main_dir = PROJECT_ROOT / "dataset" / args.sample
+    dataset_main_dir = project_paths.dataset_root() / args.sample
 
     if not results_dir.is_dir():
         print(f"ERROR: results directory not found: {results_dir}", file=sys.stderr)

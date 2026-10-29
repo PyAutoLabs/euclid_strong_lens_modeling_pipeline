@@ -35,6 +35,9 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import project_paths  # noqa: E402
 from astropy.io import fits
 from scipy.ndimage import binary_dilation
 from matplotlib.widgets import TextBox
@@ -169,7 +172,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     OBJECT = args.object
-    DATASET_ROOT = Path("dataset") / args.sample
+    DATASET_ROOT = project_paths.dataset_root() / args.sample
 
     lens_dirs = sorted(
         [

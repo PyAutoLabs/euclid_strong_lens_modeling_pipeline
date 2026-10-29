@@ -29,6 +29,9 @@ import argparse
 import os
 import csv
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import project_paths  # noqa: E402
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Button, TextBox
 from PIL import Image
@@ -157,7 +160,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    ROOT_DIR = Path("dataset") / args.sample
+    ROOT_DIR = project_paths.dataset_root() / args.sample
     CSV_PATH = Path(args.csv)
 
     lens_dirs = sorted(

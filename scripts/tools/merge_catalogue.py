@@ -68,6 +68,13 @@ from multiprocessing import Pool
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+try:
+    import project_paths  # noqa: E402
+except ImportError:  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
+    from types import SimpleNamespace
+
+    project_paths = SimpleNamespace(dataset_root=lambda: PROJECT_ROOT / "dataset")
 
 # Zip / hash / part-cutting helpers shared with package_release.py. The names are
 # re-exported here so existing callers (tests/test_catalogue_parts.py) keep working.
@@ -298,7 +305,7 @@ def joined(values):
 def band_inventory(pairs, sed_output: Path, catalogue_dir: Path):
     rows = []
     for global_index, (sample, tile) in enumerate(sorted(pairs, key=lambda p: p[1])):
-        fits_path = PROJECT_ROOT / "dataset" / sample / tile / f"{tile}.fits"
+        fits_path = project_paths.dataset_root() / sample / tile / f"{tile}.fits"
         expected = set(bands_from_fits(fits_path)) if fits_path.exists() else set()
         tile_root = sed_output / sample / tile
         model_root = tile_root / "sersic_lens_model"

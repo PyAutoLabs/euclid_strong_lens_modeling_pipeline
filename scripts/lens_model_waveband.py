@@ -73,6 +73,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import project_paths  # noqa: E402
 import util
 from scripts.initial_lens_model import fit
 
@@ -139,9 +140,9 @@ def fit_waveband(
     repeated for every other band, so it opens the FITS file directly.
     """
     if sample_name is not None:
-        dataset_main_path = project_root / "dataset" / sample_name / dataset_name
+        dataset_main_path = project_paths.dataset_root() / sample_name / dataset_name
     else:
-        dataset_main_path = project_root / "dataset" / dataset_name
+        dataset_main_path = project_paths.dataset_root() / dataset_name
     dataset_fits_name = f"{dataset_name}.fits"
 
     """

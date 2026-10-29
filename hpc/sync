@@ -91,6 +91,21 @@ ROOT_FILES=(activate.sh start_here.py util.py __init__.py README.md LICENSE)
 # the entire archive on every sync (critical for large datasets).
 DATA_DIRS=(dataset)
 
+# Where a data dir lives on this machine. `dataset/` may live outside the
+# project — on the laptop, in the shared Science/dataset folder — and
+# DATASET_ROOT in sync.conf says where (relative paths are from the project
+# root). The remote layout never changes: it is always ${REMOTE}/dataset/.
+local_data_dir() {
+    if [[ "$1" == "dataset" && -n "${DATASET_ROOT:-}" ]]; then
+        case "$DATASET_ROOT" in
+            /*) echo "$DATASET_ROOT" ;;
+            *)  echo "${PROJECT_ROOT}/${DATASET_ROOT}" ;;
+        esac
+    else
+        echo "${PROJECT_ROOT}/$1"
+    fi
+}
+
 # SLURM stdout/stderr logs, pulled ahead of the results by `pull` and on their
 # own by `logs`. They are small and are the fastest way to see what a job is
 # doing, so they are worth fetching while a run is still going.
@@ -230,7 +245,8 @@ push() {
     echo ""
     echo "==> [push] data  →  ${REMOTE}  (--ignore-existing: skips files already on HPC)"
     for dir in "${DATA_DIRS[@]}"; do
-        local src="${PROJECT_ROOT}/${dir}/"
+        local src
+        src="$(local_data_dir "${dir}")/"
         if [[ ! -d "$src" ]]; then
             echo "    skip: ${dir}/ not found locally"
             continue
@@ -248,7 +264,8 @@ push_data_init() {
     echo ""
 
     for dir in "${DATA_DIRS[@]}"; do
-        local src="${PROJECT_ROOT}/${dir}/"
+        local src
+        src="$(local_data_dir "${dir}")/"
         if [[ ! -d "$src" ]]; then
             echo "    skip: ${dir}/ not found locally"
             continue
@@ -259,9 +276,9 @@ push_data_init() {
         echo "    ${dir}/  (${file_count} files, ${size})"
         # No compression: FITS files are binary and do not compress meaningfully.
         # tar streams straight into ssh, so no temporary archive is written locally.
-        tar cf - -C "${PROJECT_ROOT}" "${dir}" | \
+        tar cf - -C "${src}" . | \
             "${SSH_BULK[@]}" "${HPC_HOST}" \
-                "mkdir -p '${REMOTE_PATH}' && tar xf - -C '${REMOTE_PATH}/'"
+                "mkdir -p '${REMOTE_PATH}/${dir}' && tar xf - -C '${REMOTE_PATH}/${dir}/'"
     done
 }
 
