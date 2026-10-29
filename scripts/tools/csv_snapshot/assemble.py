@@ -6,9 +6,14 @@ Stage 2 of ``scripts/tools/csv_snapshot/build.py``. Turns the collected JSON
 lines (``<out_dir>/_build/results*.jsonl.gz``) into the CSV tables of a
 CSV-only snapshot, from stored posterior summaries only (no refitting):
 
-- ``dr1_catalogue_<N>_master.csv``: one row per included candidate (N = the
-  manifest's ``include_in_catalogue=True`` count): identity, v5 grade/score and
-  sky position, completion flags, posterior medians and 1-sigma bounds of the
+- ``dr1_catalogue_<N>_master.csv``: one row per parent v5 A/B object (N = the
+  manifest's ``include_in_catalogue=True`` count plus the excluded objects, each
+  of which gets a ``not_modelled`` placeholder row: identity, grade/score and
+  position only, model cells blank, flags False), in manifest file order:
+  identity, v5 grade/score and
+  sky position, completion flags, visual-inspection votes and consensus (from
+  ``catalogue/inspection/final_classifications.csv``, matched by tile; ``pending``
+  with blank cells where the model has no votes yet), posterior medians and 1-sigma bounds of the
   mass, VIS Sersic light and per-band photometry.
 - ``lens_mass.csv``, ``lens_sersic.csv``, ``source_sersic.csv``,
   ``photometry.csv``, ``astrometric_offsets.csv``, ``wcs.csv``,
@@ -39,14 +44,21 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (  # noqa: E402
     BUILD_DIR,
+    CONSENSUS_THRESHOLD,
+    DEFAULT_INSPECTIONS,
     DEFAULT_MANIFEST,
     DEFAULT_OBJECTS,
     DEFAULT_UNCOVERED,
+    INSPECTION_LABELS,
     PROJECT_ROOT,
+    consensus,
     excluded_name,
+    file_sha256,
     included_rows,
     master_name,
     read_csv,
+    read_inspections,
+    tile_key,
     write_json,
 )
 
@@ -95,7 +107,12 @@ STATUS = [
     "photometry_band_count", "sed_fully_complete", "photometry_fully_available",
     "metadata_error_count",
 ]
-ID = ["unique_identifier", "tile_id", "id"]
+INSPECTION = (
+    ["inspection_status", "inspection_votes"]
+    + list(INSPECTION_LABELS.values())
+    + [f"inspection_consensus_{CONSENSUS_THRESHOLD}"]
+)
+ID =["unique_identifier", "tile_id", "id"]
 MASTER_DROP = ("_max_lh", "_lower_3_sigma", "_upper_3_sigma")
 
 TABLE_FILES = {
@@ -192,12 +209,49 @@ def records(out_dir):
                 yield json.loads(line)
 
 
-def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=print):
+def inspection(votes):
+    """Master inspection cells of one tile: vote counts and the consensus label,
+    or ``pending`` with blank cells when the model has no votes yet."""
+    if not votes:
+        return dict(inspection_status="pending")
+    cells = dict(inspection_status="inspected", inspection_votes=sum(votes.values()))
+    cells.update({col: votes.get(label, 0) for label, col in INSPECTION_LABELS.items()})
+    cells[f"inspection_consensus_{CONSENSUS_THRESHOLD}"] = consensus(votes)
+    return cells
+
+
+def placeholder(uid, obj):
+    """Master row of a parent A/B object without a model: v5 identity and
+    position, no cutout, False flags, zero counts and blank model cells."""
+    row = dict(unique_identifier=uid, tile_id="", grade=obj["SWAP_Grade"], score=obj["SWAP_Score"],
+               RA_obj=obj["RA_obj"], DEC_obj=obj["DEC_obj"], cutout_batch="")
+    for k in STATUS:
+        # Lists blank, counts 0 and flags False, as a modelled row with nothing done.
+        row[k] = "" if k.endswith("_bands") else 0 if k.endswith("_count") else False
+    row["inspection_status"] = "not_modelled"
+    return row
+
+
+def superseded(obj, manifest_row):
+    """True when the model was fitted on another cutout than the v5 catalogue's
+    ``fits_to_use`` (``<batch>:<tile>``), judged against the manifest's modelled
+    batch and tile, so objects remodelled on their v5 cutout drop out."""
+    use = obj.get("fits_to_use", "")
+    if not use:
+        return False
+    batch, _, tile = use.partition(":")
+    return (batch, tile_key(tile)) != (manifest_row["cutout_batch"], tile_key(manifest_row["tile"]))
+
+
+def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=print,
+             inspections_csv=DEFAULT_INSPECTIONS):
     out_dir = Path(out_dir)
+    inspections = read_inspections(inspections_csv)
     manifest_rows = included_rows(manifest)
     manifest_by_uid = {r["unique_identifier"]: r for r in manifest_rows}
     n_included = len(manifest_rows)
-    master_file = out_dir / master_name(n_included)
+    uncovered = read_csv(uncovered_csv)
+    master_file = out_dir / master_name(n_included + len(uncovered))
     if master_file.exists() and not force:
         raise SystemExit(f"{master_file} exists; a snapshot directory is written once (--force to redo)")
 
@@ -218,7 +272,7 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
         raise SystemExit(f"collected {n} records, manifest includes {n_included}")
     bands, wcskeys, clumpkeys = sorted(bands), sorted(wcskeys), sorted(clumpkeys)
 
-    masterfields = BASE + STATUS + [
+    masterfields = BASE + STATUS + INSPECTION + [
         prefix + k
         for prefix, mapping in [("mass_", MASS), ("lens_light_", LIGHT), ("source_light_", LIGHT)]
         for k in cols(mapping)
@@ -251,6 +305,23 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
         for r in read_csv(objects_csv)
         if r.get("Unique_Identifier") in manifest_by_uid or r.get("SWAP_Grade") in ("A", "B")
     }
+    # Parent A/B objects not included: no model, or a model that is not of the lens.
+    parent_ab = {uid for uid, o in objects.items() if o.get("SWAP_Grade") in ("A", "B")}
+    excluded = {r["unique_identifier"] for r in uncovered}
+    if parent_ab - set(manifest_by_uid) != excluded or len(excluded) != len(uncovered):
+        raise SystemExit(
+            f"parent A/B objects minus included ({len(parent_ab - set(manifest_by_uid))}) "
+            f"differ from {uncovered_csv} ({len(excluded)})"
+        )
+    # Each excluded object gets a placeholder master row, slotted in at its
+    # first manifest row (the master follows manifest file order); objects the
+    # manifest does not list go last.
+    order = {}
+    for i, r in enumerate(read_csv(manifest)):
+        order.setdefault(r["unique_identifier"], i)
+        if r["include_in_catalogue"] == "True":
+            order[r["unique_identifier"]] = i
+    unmodelled = sorted(uncovered, key=lambda r: order.get(r["unique_identifier"], math.inf))
     stats = Counter()
     seen = set()
     expected_sources = Counter()
@@ -266,6 +337,9 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
         if obj is None or obj["SWAP_Grade"] != m["grade"]:
             raise SystemExit(f"{uid}: missing from the object catalogue or grade differs")
         seen.add(uid)
+        while unmodelled and order.get(unmodelled[0]["unique_identifier"], math.inf) < order[uid]:
+            other = unmodelled.pop(0)["unique_identifier"]
+            tables["master"].row(placeholder(other, objects[other]))
         master = dict(
             unique_identifier=uid, tile_id=tile, grade=m["grade"], score=obj["SWAP_Score"],
             RA_obj=obj["RA_obj"], DEC_obj=obj["DEC_obj"], cutout_batch=m["cutout_batch"],
@@ -301,6 +375,9 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
             metadata_error_count=len(d["errors"]),
         )
         master.update(status)
+        cells = inspection(inspections.get(tile_key(tile)))
+        master.update(cells)
+        stats["inspection_" + cells["inspection_status"]] += 1
         stats["rows"] += 1
         stats["grade_" + m["grade"]] += 1
         for k, v in status.items():
@@ -351,20 +428,13 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
         for e in d["errors"]:
             tables["error"].row(dict(unique_identifier=uid, tile_id=tile, **e))
         tables["master"].row(master)
+    for r in unmodelled:
+        tables["master"].row(placeholder(r["unique_identifier"], objects[r["unique_identifier"]]))
     for table in tables.values():
         table.close()
     if seen != set(manifest_by_uid):
         raise SystemExit(f"collected {len(seen)} of the {len(manifest_by_uid)} included objects")
 
-    # Parent A/B objects not included: no model, or a model that is not of the lens.
-    uncovered = read_csv(uncovered_csv)
-    parent_ab = {uid for uid, o in objects.items() if o.get("SWAP_Grade") in ("A", "B")}
-    excluded = {r["unique_identifier"] for r in uncovered}
-    if parent_ab - set(manifest_by_uid) != excluded:
-        raise SystemExit(
-            f"parent A/B objects minus included ({len(parent_ab - set(manifest_by_uid))}) "
-            f"differ from {uncovered_csv} ({len(excluded)})"
-        )
     with open(out_dir / excluded_name(len(uncovered)), "w", newline="") as stream:
         writer = csv.DictWriter(stream, list(uncovered[0]) if uncovered else ["unique_identifier"], lineterminator="\n")
         writer.writeheader()
@@ -380,10 +450,14 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
     report["n_included"] = n_included
     report["parent_ab_count"] = len(parent_ab)
     report["excluded_parent_count"] = len(excluded)
+    report["not_modelled_rows"] = len(excluded)
+    report["master_rows"] = n_included + len(excluded)
     report["superseded_cutout_rows"] = sum(
-        bool(o.get("fits_to_use")) and o.get("fits_modelled_20261011", "") not in ("", o["fits_to_use"])
-        for uid, o in objects.items() if uid in manifest_by_uid
+        superseded(o, manifest_by_uid[uid]) for uid, o in objects.items() if uid in manifest_by_uid
     )
+    report["remodelled_v5_rows"] = sum(r.get("v5_status") == "v5" for r in manifest_rows)
+    report["inspections_file"] = Path(inspections_csv).name
+    report["inspections_sha256"] = file_sha256(inspections_csv)
     report["expected_bands_sources"] = dict(expected_sources)
     report["master_file"] = master_file.name
     report["excluded_file"] = excluded_name(len(uncovered))
@@ -399,6 +473,9 @@ def add_arguments(parser):
                         "fits_to_use, fits_modelled_20261011)")
     parser.add_argument("--uncovered", default=str(DEFAULT_UNCOVERED),
                         help="parent A/B objects not included (catalogue/grades/dr1_sep1_uncovered_ab.csv)")
+    parser.add_argument("--inspections", default=str(DEFAULT_INSPECTIONS),
+                        help="visual-inspection export, one row per cutout (object_id) and one column per "
+                        "inspector (catalogue/inspection/final_classifications.csv)")
     parser.add_argument("--force", action="store_true")
 
 
@@ -409,7 +486,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     root = PROJECT_ROOT
     p = lambda x: Path(x) if Path(x).is_absolute() else root / x  # noqa: E731
-    assemble(p(args.out_dir), p(args.manifest), p(args.objects), p(args.uncovered), args.force)
+    assemble(p(args.out_dir), p(args.manifest), p(args.objects), p(args.uncovered), args.force,
+             inspections_csv=p(args.inspections))
     return 0
 
 

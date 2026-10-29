@@ -24,6 +24,17 @@ input files and 115 deployed code/configuration hashes passed before submission.
 Earlier science commits, configuration, outputs and untracked preparation are
 preserved. Full revisions, hashes and commands: [session record](2026-09-18-flat-fields-top1000.md).
 
+### Also in flight — the sep1 remainder upload
+
+The other **14,032** tiles of the sep1 delivery (15,032 total, minus the 1,000
+of `343480`) are extracted to `dataset/dr1_sep1_rest/` (154,346 files, 19 GB)
+and uploading to RAL in 15 batches by `hpc/upload_rest/upload_rest.sh`, at a
+measured 85-105 KB/s -- roughly **33 hours** end to end. Resume it with the same
+command; it is idempotent and appends to part-sent tarballs. The 15 matching
+submit scripts `hpc/batch_cpu/submit_initial_lens_model_vis_lp_rest_{01..15}`
+are written and machine-checked but **nothing has been submitted**. Everything
+here is untracked. Full detail: [session record](2026-09-18-sep1-remainder-upload.md).
+
 ## Science goal
 
 The following describes the earlier ten-lens reproduction study. The current
@@ -42,7 +53,7 @@ beyond ten tiles.
 
 ## Data on hand
 
-`/mnt/c/Users/Jammy/Science/euclid_dr1/Segmentation.zip` (14.8 GB, untracked, local only) —
+`/mnt/c/Users/Jammy/Workspace/Science/active/euclid_dr1/Segmentation.zip` (14.8 GB, untracked, local only) —
 the sep1 delivery. It is an outer zip holding three **STORED** (uncompressed, and therefore
 seekable in place) inner zips,
 `Segmentation/eclipse_catalogue_fits_sep1-segmentation_batch{1,2,3}.zip`, carrying
@@ -80,7 +91,7 @@ All ten load through `util.load_vis_dataset(<tile>, sample_name="dr1_sep1")`: 10
 0.1"/pixel, all six segmentation FITS present and readable on every tile.
 
 **The reference this project is judged against** is the prelim run **342629** —
-`/mnt/c/Users/Jammy/Science/euclid_dr1_prelim/output/dr1_prelim_grade_ab/` and its
+`/mnt/c/Users/Jammy/Workspace/Science/archive/euclid_dr1_prelim/output/dr1_prelim_grade_ab/` and its
 catalogue bundle `inspect/dr1_prelim_grade_ab_342629/`. It lives in the *other* clone and is
 not copied here.
 
@@ -257,6 +268,22 @@ not copied here.
   (the tools accept an absolute `--output_path`); do not restructure `output/`.
 - **Read the inner zips in place.** `zipfile.ZipFile(outer.open(inner))` works because the three
   inner zips are STORED; extracting the outer archive first costs 14.8 GB of `/mnt/c` for nothing.
+- **Three sep1 tiles ship 9 files, not 11.** `Tile102013495…`, `Tile102013503…` and
+  `Tile102013521…` are missing `positions.json` and `segmentation.png` *inside the delivery
+  zip itself* (one per inner batch zip) -- this is not an extraction bug, so do not "repair" it
+  by re-extracting. All three are in batch 02. Any tooling that assumes 11 files per tile will
+  hang or fail on them; count from `hpc/upload_rest/expected_counts.json` instead.
+- **The top-1000 CSV is not brightness-ordered.** `eclipse_catalogue_fits_sep1_top1000_brightest.csv`
+  is sorted by tile ID and carries no magnitude column, so the top-1000 submit script's claim that
+  "the array index is the catalogue's own brightness order" is false. The ranking was applied
+  upstream and cannot be reproduced locally; a new cut needs a new CSV from that source.
+- **RAL has outbound internet at 61 MB/s; the laptop uploads at ~95 KB/s.** For any future
+  delivery, **record the download URL** -- fetching it on RAL is ~640x faster than pushing it
+  from here (minutes rather than days). `Segmentation.zip` had no recorded URL, which is why
+  the remainder went up the slow way.
+- **Never `pkill -f` a driver script here.** The pattern substring-matches the calling shell and
+  kills the session's own Bash; it happened twice in the 09-18 upload session. Resolve the exact
+  pid from `/proc/<pid>/cmdline` and `kill` that.
 
 - **A Nautilus waveband fit can spin in exploration forever on a non-smooth likelihood**, and
   the `.out` log is **block-buffered** so it looks frozen at the sampler start line with no new

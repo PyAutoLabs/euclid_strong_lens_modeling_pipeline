@@ -6,14 +6,17 @@ lens-finding catalogue **v5 (Holloway, 19 Oct 2026)**:
 modelling-cutout columns added by N. Lines; see its `_README.txt` and
 `../README_for_James_2026-10-19.txt`). Built 2026-10-19.
 
-No object was remodelled for v5. The catalogue uses the existing fits only; the
-13 v5 cutouts were not ingested into `dataset/`.
+The 13 v5 cutouts (`fits_to_use` batch `v5`) are to be modelled as tiles
+`dataset/dr1_sep1/<stem>_v5`; as of 2026-10-19 evening they are **not ingested**:
+the FITS came without `info.json` / `segmentation/` and no run is submitted (see
+`wiki/project/2026-10-19-v5-cutouts-blocked-on-segmentation.md`). Nothing else is
+remodelled.
 
 ## Files
 
 | File | What |
 |------|------|
-| `dr1_sep1_consolidated_manifest.csv` | One row per v5 Grade A/B object (15,072): `tile, unique_identifier, grade, score, cutout_batch, include_in_catalogue, reason, note` |
+| `dr1_sep1_consolidated_manifest.csv` | One row per v5 Grade A/B object (15,072): `tile, unique_identifier, grade, score, cutout_batch, include_in_catalogue, reason, note, v5_tile, v5_status` |
 | `dr1_sep1_uncovered_ab.csv` | The 8 A/B objects with `include_in_catalogue=False`, with position, reason and note; the CSV snapshot ships it as `excluded_eight_candidates.csv` |
 
 `grade` / `score` are the v5 `SWAP_Grade` / `SWAP_Score`; `unique_identifier`
@@ -23,6 +26,22 @@ sep1 and sep28 batches both live in `dataset/dr1_sep1`). Where an object has a
 sep1 and a recentred sep28 tile (45 objects) the modelled one is sep28, as in
 the earlier v2 manifest. One file name is aliased: L020528's modelled
 `15arcsec_near_RADEC_Tile102161607...` is held as `Tile102161607...`.
+
+## v5 cutouts: the switch happens at rebuild time
+
+`v5_tile` is the object's v5 tile and `v5_status` says which tile the row uses.
+`consolidated_manifest.py` decides it from disk each time it runs, so the switch
+is simply re-running it (on RAL, or locally after pulling `output/`) before the
+catalogue rebuild:
+
+| objects | before their v5 run finishes | after |
+|---|---|---|
+| L000144, L001542, L018877, L019987, L019994, L020612 (recentred, existing model stands; `V5_KEEP_UNTIL_DONE`) | old sep1/sep28 tile stays `included`, `v5_status=pending`, note "v5 run pending" | switches to the v5 tile once `output/dr1_sep1/<v5 tile>/initial_lens_model/vis_pix/*.zip` exists (`v5_status=v5`, `cutout_batch=v5`) |
+| L026833, L026835, L009168, L019278, L002411, L001796, L020505 (no usable model) | `no_model` / `model_unusable`, `v5_status=not_ingested` while the tile is not in `dataset/dr1_sep1` | `included` on the v5 tile as soon as the tile is ingested (`v5_status=v5`); an unfinished fit is then flagged by the build's completion columns like any other |
+
+A failed v5 run of one of the six never loses its old model: without a v5
+`vis_pix` zip the row stays on the old tile. `--dataset_dir` / `--output_dir`
+point the check elsewhere.
 
 ## Counts (2026-10-19)
 
@@ -37,7 +56,9 @@ the earlier v2 manifest. One file name is aliased: L020528's modelled
   centred on), L020505 (fitted centre 1.6" from the lens), L002411 (all-zero
   VIS in the sep1 cutout).
 - `no_model`: L026833, L026835 (new in v3 / v5), L009168, L019278 (MER tile not
-  in the archive), L020583 (not in the segmentation delivery).
+  in the archive), L020583 (not in the segmentation delivery; no v5 cutout, stays
+  flagged: it needs the same segmentation products as the v5 tiles).
+- `v5_status` today: 6 `pending`, 7 `not_ingested`.
 - L026834 is `included`: its model was filed under the v2 identifier L002330.
 
 `included` means a model exists, not that every stage finished. Fits that never

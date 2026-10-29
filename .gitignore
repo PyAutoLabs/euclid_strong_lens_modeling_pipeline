@@ -10,7 +10,7 @@ dist/
 
 # PyAutoLens / PyAutoFit outputs — the main tree, the multi-band SED tree the
 # catalogue's stages 6-7 read, and any other PYAUTO_OUTPUT_DIR the user picks.
-output/
+output_old/
 output_*/
 
 # Smoke/CI report dir written by .github/scripts/run_smoke.py (the house name
@@ -49,3 +49,5 @@ sie_fit.png
 
 # HPC sync config — machine-specific, contains personal paths
 hpc/sync.conf
+
+paper/

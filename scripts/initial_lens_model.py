@@ -79,12 +79,13 @@ def vis_lp_model_from(
     """
     __Model: MGE Lens + SIE Mass + MGE Source__
 
-    - Lens light:  40 Gaussians (2 sets of 20), 4 non-linear + ~40 linear parameters.
-    - Lens mass:   Isothermal ellipsoid + ExternalShear, 5 non-linear parameters.
-      Centre fixed to the brightest pixel for this initial fit.
-    - Source light: 20 Gaussians, 4 non-linear + ~20 linear parameters.
+    - Lens light:  40 Gaussians (2 sets of 20), 6 non-linear (shared centre + one
+      ell_comps pair per set) + 40 linear parameters.
+    - Lens mass:   Isothermal ellipsoid (3: ell_comps + einstein_radius) + ExternalShear
+      (2), 5 non-linear parameters. Centre fixed to the brightest pixel for this fit.
+    - Source light: 20 Gaussians, 4 non-linear + 20 linear parameters.
 
-    Total: ~15 non-linear parameters.  Linear parameters are solved at every
+    Total: 15 non-linear parameters.  Linear parameters are solved at every
     likelihood evaluation and add negligible sampling cost.
     """
 
@@ -691,7 +692,8 @@ def fit(
     source reconstruction in hand, the small offset between the light centroid and
     the mass centroid can be measured rather than assumed, and the box keeps that
     freedom from turning back into a degeneracy. The shear is chained forward as a
-    *model*, so it is re-fitted, but from the priors ``vis_lp`` inferred.
+    *model*, so it is re-fitted; ``result.model`` keeps the original
+    UniformPrior(-0.3, 0.3) priors, not priors narrowed by the ``vis_lp`` posterior.
 
     The source becomes a ``Pixelization``: a ``Delaunay`` mesh whose ``pixels`` is
     the fixed length of the image-plane grid and whose ``zeroed_pixels`` is the

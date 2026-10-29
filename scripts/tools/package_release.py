@@ -12,9 +12,9 @@ the same snapshot cutoff and membership manifest:
   band; in this tier they are rewritten to their PRIMARY + ``VIS_*`` HDUs, so no
   multi-band model product ships. The dataset cutout ``<tile>.fits`` is the
   unchanged modelling input and keeps every delivered band.
-- **full**: csv + everything in the per-lens folder (unchanged files) + the
-  dataset cutout, plus the merged catalogue's root tables under
-  ``catalogue_tables/``.
+- **full**: csv + everything in the per-lens folder (unchanged files, PNGs
+  palette-reduced as below) + the dataset cutout, plus the merged catalogue's
+  root tables under ``catalogue_tables/``.
 
 Inputs: the merged tree of ``scripts/tools/merge_catalogue.py``
 (``inspect/<CATALOGUE>/<tile>/``), the dataset tree (``dataset/dr1_sep1/<tile>/``),
@@ -33,7 +33,9 @@ Output, per tier, in ``<out_dir>/<tier>/``:
 - ``catalogue_part_NN.zip`` (vis/full): whole lens folders, contiguous in tile
   order, near-equal bytes with ``--n_parts`` or capped at ``--part_max_gb``.
   FITS/PNG are ZIP_STORED, text DEFLATED (``release_util.py``, shared with
-  ``merge_catalogue.py``).
+  ``merge_catalogue.py``). Per-lens PNGs ship as 256-colour palette reductions
+  of the pipeline figures (``PNG_PALETTE``; ``--no_png_palette`` ships them
+  unchanged); FITS, CSV, JSON and dataset files are byte-identical copies.
 - ``SHA256SUMS`` (``sha256sum -c`` format), ``snapshot.json`` (cutoff, manifest
   sha256, project git HEAD, tier, product list, lens count, missing-file
   counts per product), ``missing_files.csv``, ``parts_manifest.csv``.
@@ -98,6 +100,9 @@ MULTI_BAND_PRODUCTS = set(FULL_EXTRA)
 # FITS with one HDU pair per band. The human chose (2026-10-15) to ship them whole in every tier;
 # add "model.fits" / "pre_psf.fits" here to reduce the vis tier to PRIMARY + VIS_* HDUs.
 VIS_STRIP_FITS: set = set()
+# Per-lens PNG figures ship as 256-colour palette PNGs (visually lossless on the pipeline
+# figures, regenerable from the FITS); False (or --no_png_palette) ships the original bytes.
+PNG_PALETTE = True
 
 # Dataset cutout products, relative to dataset/<sample>/<tile>/; "{tile}" is filled in.
 DATASET_EXPECTED = ["{tile}.fits", "info.json", "positions.json", "segmentation/*.fits"]
@@ -151,10 +156,11 @@ def read_excluded(path):
 # ---------------------------------------------------------------------------
 
 
-def plan_tile(tile, tier, catalogue_dir: Path, dataset_dir: Path):
+def plan_tile(tile, tier, catalogue_dir: Path, dataset_dir: Path, png_palette=PNG_PALETTE):
     """``(members, missing)`` for one lens. A member is ``(kind, source, arc,
-    size)`` with ``kind`` ``file`` or ``vis_fits`` (rewrite to VIS HDUs) and
-    ``arc`` relative to the zip root; ``missing`` lists absent product names."""
+    size)`` with ``kind`` ``file``, ``vis_fits`` (rewrite to VIS HDUs) or
+    ``png_palette`` (256-colour palette PNG) and ``arc`` relative to the zip
+    root; ``size`` is the source size. ``missing`` lists absent product names."""
     lens_dir = catalogue_dir / tile
     members, missing = [], []
     present = {p.name: p for p in lens_dir.iterdir() if p.is_file() and not p.name.startswith(".")}
@@ -170,6 +176,8 @@ def plan_tile(tile, tier, catalogue_dir: Path, dataset_dir: Path):
     for name in chosen:
         path = present[name]
         kind = "vis_fits" if tier == "vis" and name in VIS_STRIP_FITS else "file"
+        if png_palette and name.lower().endswith(".png"):
+            kind = "png_palette"
         members.append((kind, str(path), f"{tile}/{name}", path.stat().st_size))
 
     data_dir = dataset_dir / tile
@@ -188,11 +196,11 @@ def plan_tile(tile, tier, catalogue_dir: Path, dataset_dir: Path):
     return members, missing
 
 
-def plan_tier(tier, tiles, catalogue_dir, dataset_dir):
+def plan_tier(tier, tiles, catalogue_dir, dataset_dir, png_palette=PNG_PALETTE):
     """Members and missing products of every lens of a vis / full tier."""
     plans, missing_rows = {}, []
     for tile in tiles:
-        members, missing = plan_tile(tile, tier, catalogue_dir, dataset_dir)
+        members, missing = plan_tile(tile, tier, catalogue_dir, dataset_dir, png_palette)
         plans[tile] = members
         missing_rows += [(tile, product) for product in missing]
     return plans, missing_rows
@@ -217,6 +225,26 @@ def vis_only_fits(path):
     return buffer.getvalue()
 
 
+def palette_png(path):
+    """Bytes of ``path`` as a 256-colour palette PNG (opaque RGBA dropped to RGB,
+    median cut; real transparency kept with fast octree; no dithering), or
+    ``None`` when the image is not RGB/RGBA or the palette file is not smaller."""
+    from PIL import Image
+
+    with Image.open(path) as im:
+        im.load()
+        if im.mode == "RGBA" and im.getchannel("A").getextrema() == (255, 255):
+            im = im.convert("RGB")
+        if im.mode not in ("RGB", "RGBA"):
+            return None
+        method = Image.Quantize.FASTOCTREE if im.mode == "RGBA" else Image.Quantize.MEDIANCUT
+        q = im.quantize(256, method=method, dither=Image.Dither.NONE)
+    buffer = io.BytesIO()
+    q.save(buffer, "PNG", optimize=True)
+    data = buffer.getvalue()
+    return data if len(data) < Path(path).stat().st_size else None
+
+
 def write_part(job):
     """Write one part zip; return ``(zip_name, [(member, bytes, sha256)])``."""
     zip_path, arc_root, members = job
@@ -226,7 +254,11 @@ def write_part(job):
     with zipfile.ZipFile(staged, "w", allowZip64=True) as archive:
         for kind, source, arc, _size in members:
             arcname = f"{arc_root}/{arc}"
-            data = vis_only_fits(source) if kind == "vis_fits" else None
+            data = None
+            if kind == "vis_fits":
+                data = vis_only_fits(source)
+            elif kind == "png_palette":
+                data = palette_png(source)
             if data is not None:
                 size, digest = add_bytes_hashed(archive, data, arcname, like=Path(source))
             else:
@@ -325,6 +357,12 @@ def readme_text(tier, root, snapshot, csv_snapshot):
                 "`catalogue_tables/` in catalogue_csvs.zip holds the merged build's root tables "
                 "(magnitudes.csv, witt_wynne.csv, band_inventory.csv and the rest).",
             ]
+        if snapshot.get("png_palette"):
+            lines += [
+                "",
+                "PNGs are 256-colour palette reductions of the pipeline figures, to save space; "
+                "they are regenerable from the FITS. FITS and every other file are unchanged.",
+            ]
         lines += [
             "",
             "`<tile_id>/dataset/`: the modelling input cutout, unchanged: `<tile_id>.fits` "
@@ -418,7 +456,7 @@ def package_tier(tier, args, ctx):
     tiles = ctx["tiles"]
     plans, missing_rows = ({}, [])
     if tier != "csv":
-        plans, missing_rows = plan_tier(tier, tiles, ctx["catalogue_dir"], ctx["dataset_dir"])
+        plans, missing_rows = plan_tier(tier, tiles, ctx["catalogue_dir"], ctx["dataset_dir"], ctx["png_palette"])
     missing_counts = Counter(product for _tile, product in missing_rows)
     sizes = [sum(m[3] for m in plans[t]) for t in tiles] if plans else []
     parts = []
@@ -445,6 +483,12 @@ def package_tier(tier, args, ctx):
         "csv_dir": str(ctx["csv_rel"]),
         "products": tier_products(tier) + (dataset_products() if tier != "csv" else []),
         "multi_band_fits_reduced_to_vis": sorted(VIS_STRIP_FITS) if tier == "vis" else [],
+        "png_palette": bool(ctx["png_palette"]) and tier != "csv",
+        "png_note": (
+            "Per-lens PNGs are 256-colour palette reductions of the pipeline figures "
+            "(regenerable from the FITS); FITS and all other files are unchanged."
+            if ctx["png_palette"] and tier != "csv" else ""
+        ),
         "n_manifest_included": ctx["n_included"],
         "lens_count": len(tiles) if tier != "csv" else 0,
         "excluded_count": len(ctx["excluded"]),
@@ -579,6 +623,8 @@ def parse_args(argv=None):
     parser.add_argument("--workers", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", 1)))
     parser.add_argument("--dry_run", action="store_true", help="plan and report; write nothing")
     parser.add_argument("--force", action="store_true", help="rewrite an already packaged tier")
+    parser.add_argument("--no_png_palette", action="store_true",
+                        help="ship per-lens PNGs unchanged instead of as 256-colour palette PNGs")
     return parser.parse_args(argv)
 
 
@@ -665,6 +711,7 @@ def main(argv=None):
         "csv_rel": relative(csv_dir),
         "git_head": git_revision(PROJECT_ROOT),
         "known_issues": resolve(args.known_issues),
+        "png_palette": PNG_PALETTE and not args.no_png_palette,
     }
     log(f"release {release_name}: tiers {tiers}, {len(tiles)} lenses, cutoff {csv_snap['cutoff_utc']}, -> {out_dir}")
     summary = {tier: package_tier(tier, args, ctx) for tier in tiers}

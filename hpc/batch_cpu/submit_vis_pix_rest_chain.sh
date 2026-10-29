@@ -7,6 +7,7 @@
 # Batches (--batch=NAME, default rest; each is one config block below):
 #   rest   dr1_sep1_rest, vis_lp 375700-375703 (parts 01-04), vis_lp_rest_20260930_partNN.txt
 #   sep28  dr1_v2_new, vis_lp 384040 (part 01), vis_lp_sep28_20261001.txt
+#   ex_top1000  dr1_sep1, vis_lp 397467 (part 01), vis_lp_ex_top1000_tonight_20261007.txt
 #
 # Run ON RAL (ssh euclid_jump), from anywhere:
 #   bash /mnt/ral/jnightin/active/euclid_dr1/hpc/batch_cpu/submit_vis_pix_rest_chain.sh [--batch=NAME] [--dry-run] [PART ...]
@@ -67,7 +68,13 @@ case "$BATCH" in
         VIS_LP=([01]=384040)
         MANIFEST=([01]=vis_lp_sep28_20261001.txt)
         ;;
-    *) echo "unknown batch: $BATCH (rest | sep28)" >&2; exit 2 ;;
+    ex_top1000)
+        SAMPLE=dr1_sep1
+        SINCE=2026-10-07T21:00
+        VIS_LP=([01]=397467)
+        MANIFEST=([01]=vis_lp_ex_top1000_tonight_20261007.txt)
+        ;;
+    *) echo "unknown batch: $BATCH (rest | sep28 | ex_top1000)" >&2; exit 2 ;;
 esac
 ALL_PARTS=($(printf '%s\n' "${!VIS_LP[@]}" | sort))
 [[ ${#PARTS[@]} -eq 0 ]] && PARTS=("${ALL_PARTS[@]}")

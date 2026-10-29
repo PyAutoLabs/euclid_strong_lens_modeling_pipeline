@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import assemble  # noqa: E402
 import collect  # noqa: E402
 import package  # noqa: E402
-from common import DEFAULT_OBJECTS, DEFAULT_UNCOVERED, parse_time  # noqa: E402
+from common import DEFAULT_INSPECTIONS, DEFAULT_OBJECTS, DEFAULT_UNCOVERED, parse_time  # noqa: E402
 
 STAGES = ("collect", "assemble", "package")
 
@@ -45,6 +45,7 @@ def parse_args(argv=None):
     collect.add_arguments(parser)
     parser.add_argument("--objects", default=str(DEFAULT_OBJECTS))
     parser.add_argument("--uncovered", default=str(DEFAULT_UNCOVERED))
+    parser.add_argument("--inspections", default=str(DEFAULT_INSPECTIONS))
     parser.add_argument("--force", action="store_true", help="re-assemble over existing tables")
     package.add_arguments(parser)
     parser.add_argument("--stage", default=",".join(STAGES),
@@ -69,7 +70,8 @@ def main(argv=None):
             args.shard, args.n_shards,
         )
     if "assemble" in stages:
-        assemble.assemble(out_dir, manifest, p(args.objects), p(args.uncovered), args.force)
+        assemble.assemble(out_dir, manifest, p(args.objects), p(args.uncovered), args.force,
+                          inspections_csv=p(args.inspections))
     if "package" in stages:
         package.package(out_dir, manifest, p(args.uncovered), args.parity_json)
     return 0

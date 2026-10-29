@@ -131,7 +131,7 @@ def test_full_ships_the_whole_lens_folder(release):
         names = archive.namelist()
     assert "cat_full/catalogue_tables/magnitudes.csv" in names
     assert "cat_full/catalogue_tables/lens_index.csv" not in names
-    assert "cat_full/csv/dr1_catalogue_5_master.csv" in names
+    assert "cat_full/csv/dr1_catalogue_6_master.csv" in names
 
 
 def test_parts_are_contiguous_and_cover_every_lens_once(release):
@@ -171,6 +171,31 @@ def test_sha256sums_and_file_manifest(release):
                     stored = name.endswith((".fits", ".png", ".jpg"))
                     assert info.compress_type == (zipfile.ZIP_STORED if stored else zipfile.ZIP_DEFLATED)
         assert not listed  # nothing listed that is not in a zip
+
+
+def test_pngs_ship_as_palette_and_fits_unchanged(release, tmp_path):
+    from PIL import Image
+
+    root, out = release
+    lens = root / "inspect" / "cat" / "T1"
+    with zipfile.ZipFile(sorted((out / "full").glob("catalogue_part_*.zip"))[0]) as archive:
+        png = archive.read("cat_full/T1/vis_pix_fit.png")
+        fits_bytes = archive.read("cat_full/T1/convergence.fits")
+        cutout = archive.read("cat_full/T1/dataset/T1.fits")
+    assert Image.open(io.BytesIO(png)).mode == "P" and len(png) < (lens / "vis_pix_fit.png").stat().st_size
+    assert fits_bytes == (lens / "convergence.fits").read_bytes()
+    assert cutout == (root / "dataset" / "dr1_sep1" / "T1" / "T1.fits").read_bytes()
+    snap = json.loads((out / "full" / "snapshot.json").read_text())
+    assert snap["png_palette"] and "256-colour palette" in zip_text(out / "full" / "catalogue_csvs.zip", "/README.md")
+    assert not json.loads((out / "csv" / "snapshot.json").read_text())["png_palette"]
+
+    plain = tmp_path / "plain"
+    package_release.main(_args(root, plain, "--tier=vis", "--n_parts=1", "--no_png_palette",
+                               f"--excluded={_excluded(root)}"))
+    with zipfile.ZipFile(plain / "vis" / "catalogue_part_01.zip") as archive:
+        assert archive.read("cat_vis/T1/vis_pix_fit.png") == (lens / "vis_pix_fit.png").read_bytes()
+    snap = json.loads((plain / "vis" / "snapshot.json").read_text())
+    assert not snap["png_palette"] and "palette" not in zip_text(plain / "vis" / "catalogue_csvs.zip", "/README.md")
 
 
 def test_missing_file_accounting(release):

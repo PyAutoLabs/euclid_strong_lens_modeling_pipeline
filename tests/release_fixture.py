@@ -5,7 +5,7 @@ Synthetic project tree for the release-packaging tests
 ``make_project(root)`` writes, under ``root``:
 
 - ``manifest.csv`` (v5 schema): 5 included tiles (T1..T5) and one ``no_model``
-  row (an A/B object with no tile); ``objects.csv`` (v5 objects: those six plus
+  row (an A/B object with no tile, between T2 and T3); ``objects.csv`` (v5 objects: those six plus
   one grade C object outside the manifest) and ``uncovered.csv`` (the
   ``no_model`` object).
 - ``output/dr1_sep1/<tile>/initial_lens_model/{vis_lp,vis_pix}/<hash>.zip`` and
@@ -13,6 +13,8 @@ Synthetic project tree for the release-packaging tests
   zips with ``.completed`` and small summary / latent / wcs JSONs. T2 has no
   vis_pix result; T3 has no SED results; T1 also has a NEWER vis_pix result
   modified after ``CUTOFF`` (must be ignored).
+- ``inspections.csv``: model-inspection votes (T1 consensus, T2 tied, T3 an
+  empty row, T4/T5 no row).
 - ``dataset/dr1_sep1/<tile>/``: ``<tile>.fits`` (VIS + NIR_Y BGSUB HDUs),
   ``segmentation/*.fits``, ``positions.json``, ``positions_meta.json``,
   ``info.json``, plus a ``rgb.jpg`` that no tier ships. T4 has no ``info.json``.
@@ -20,7 +22,7 @@ Synthetic project tree for the release-packaging tests
   with every full-tier product except: T2 lacks ``lens_mass.csv`` and the source
   reconstruction CSV, T3 lacks ``fit_sersic.png``, ``fit_multi_wavelength.png``,
   ``magnitudes.csv``. ``model.fits`` / ``pre_psf.fits`` carry VIS and NIR_Y HDU
-  pairs. Root tables ``lens_mass.csv``, ``magnitudes.csv``, ``lens_index.csv``.
+  pairs; PNGs are real opaque RGBA images. Root tables ``lens_mass.csv``, ``magnitudes.csv``, ``lens_index.csv``.
 """
 
 import csv
@@ -91,6 +93,18 @@ def _fits(path: Path, names):
     fits.HDUList(hdus).writeto(path, overwrite=True)
 
 
+def _png(path: Path, n):
+    """An opaque RGBA figure (as matplotlib writes): smooth gradients plus noise,
+    so a 256-colour palette copy is smaller but not identical."""
+    from PIL import Image
+
+    y, x = np.mgrid[:n, :n] / n
+    rng = np.random.default_rng(n)
+    rgb = np.stack([x, y, (x + y) / 2], axis=-1) * 200 + rng.integers(0, 50, (n, n, 3))
+    alpha = np.full((n, n, 1), 255)
+    Image.fromarray(np.concatenate([rgb, alpha], axis=-1).astype("u1"), "RGBA").save(path)
+
+
 def _results(root: Path, i: int, tile: str):
     base = root / "output" / "dr1_sep1" / tile / "initial_lens_model"
     wcs = {"crval_ra_deg": 10.0 + i, "crval_dec_deg": -5.0, "crpix_x": 51, "crpix_y": 51,
@@ -123,9 +137,11 @@ def make_project(root: Path):
     rows = [(t, UIDS[t], "A" if i % 2 else "B", 2.5, "sep1", "True", "included", "")
             for i, t in enumerate(TILES)]
     rows += [("", "EUCL-DR1-L000099", "B", 2.1, "", "False", "no_model", "no FITS made")]
+    # The no_model row sits between T2 and T3, so its master placeholder row is
+    # slotted in mid-file (the master follows manifest file order).
     _write_csv(root / "manifest.csv",
                ["tile", "unique_identifier", "grade", "score", "cutout_batch", "include_in_catalogue", "reason",
-                "note"], rows)
+                "note"], rows[:2] + rows[5:] + rows[2:5])
     # T1 was modelled on an earlier cutout than the one v5 recommends.
     objects = [(UIDS[t], 2.5, g, 10.0 + i, -5.0, t, ("sep28:" if t == "T1" else "sep1:") + t, "sep1:" + t)
                for i, (t, _u, g, *_r) in enumerate(rows[:5])]
@@ -134,6 +150,13 @@ def make_project(root: Path):
     _write_csv(root / "objects.csv",
                ["Unique_Identifier", "SWAP_Score", "SWAP_Grade", "RA_obj", "DEC_obj", "id_str_for_cutout",
                 "fits_to_use", "fits_modelled_20261011"], objects)
+    # Model inspections: T1 a 3/4 Success consensus, T2 a 2/2 tie, T3 a row with
+    # no votes and T4/T5 no row (both read as pending), U9 a cutout outside the manifest.
+    _write_csv(root / "inspections.csv", ["object_id", "FP001", "FP002", "FP003", "FP004"],
+               [("T1", "Success", "Success", "Failure", "Success"),
+                ("T2", "Multi Galaxy Lens", "", "Failure", ""),
+                ("T3", "", "", "", ""),
+                ("U9", "Success", "", "", "")])
     _write_csv(root / "uncovered.csv",
                ["unique_identifier", "grade", "score", "RA_obj", "DEC_obj", "id_str_for_cutout", "tile", "reason",
                 "note"],
@@ -164,7 +187,7 @@ def make_project(root: Path):
             elif name.endswith(".fits"):
                 _fits(lens / name, [name.split(".")[0].upper()])
             elif name.endswith(".png"):
-                (lens / name).write_bytes(b"\x89PNG" + bytes(200 * i))
+                _png(lens / name, 40 + 10 * i)
             else:
                 (lens / name).write_text(f"{tile},{name}\n" * i)
     cat = root / "inspect" / "cat"

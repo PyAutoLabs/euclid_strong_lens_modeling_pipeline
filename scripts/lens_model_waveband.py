@@ -253,9 +253,23 @@ def fit_waveband(
     conditioned on. Each iteration repeats the whole dataset preparation for its
     band: load, centre, header, noise scaling, mask, over-sampling, then the
     search.
+
+    Bands named in the comma-separated ``SED_SKIP_BANDS`` environment variable
+    are not fitted. The SED gap-fill job sets it for a band whose search has
+    hung twice, so the remaining bands of the lens still complete.
     """
+    skip_bands = {
+        band.strip().lower()
+        for band in os.environ.get("SED_SKIP_BANDS", "").split(",")
+        if band.strip()
+    }
+
     for dataset_waveband, dataset_index in dataset_index_dict.items():
         if dataset_waveband == "vis":
+            continue
+
+        if dataset_waveband in skip_bands:
+            print(f"SKIPPED BAND (SED_SKIP_BANDS): {dataset_name} {dataset_waveband}")
             continue
 
         """

@@ -4,7 +4,7 @@ Euclid Pipeline: CSV-Only Catalogue Snapshot
 
 Metadata-only catalogue tables read out of the stored result zips, with no
 refitting and no image extraction. Promoted from the ad-hoc 2026-10-11 build
-(``inspect_download/csv15067_build_20261011/``) into a tracked, parameterised
+(``inspect_download/csv15067_build_20261011/``, archived 2026-10-21 under ``Science/archive/euclid_dr1_legacy_2026-10-21/``) into a tracked, parameterised
 tool; the table set and column semantics are those of the 2026-10-11
 ``dr1_catalogue_15067_20261011_csv_only`` release so later snapshots diff
 against it.

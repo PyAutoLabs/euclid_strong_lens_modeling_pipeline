@@ -18,6 +18,7 @@ import hashlib
 import json
 import subprocess
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,6 +27,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MANIFEST = PROJECT_ROOT / "catalogue" / "grades" / "dr1_sep1_consolidated_manifest.csv"
 DEFAULT_OBJECTS = PROJECT_ROOT / "catalogue" / "DR1_full_Object_Catalogue_v5_fits.csv"
 DEFAULT_UNCOVERED = PROJECT_ROOT / "catalogue" / "grades" / "dr1_sep1_uncovered_ab.csv"
+DEFAULT_INSPECTIONS = PROJECT_ROOT / "catalogue" / "inspection" / "final_classifications.csv"
+
+# Visual-inspection labels of final_classifications.csv -> master vote-count column
+# (the names of paper/plots/inspection_statistics.py and consensus_75.csv).
+INSPECTION_LABELS = {
+    "Success": "success_votes",
+    "Unsure If Lens": "unsure_if_lens_votes",
+    "Double Source Plane Lens": "double_source_plane_lens_votes",
+    "Multi Galaxy Lens": "multi_galaxy_lens_votes",
+    "Failure": "failure_votes",
+}
+CONSENSUS_THRESHOLD = 75
 
 BUILD_DIR = "_build"
 SNAPSHOT_JSON = "snapshot.json"
@@ -54,6 +67,40 @@ def included_rows(manifest_path):
     if not rows:
         raise SystemExit(f"{manifest_path}: no include_in_catalogue=True rows")
     return rows
+
+
+def tile_key(tile):
+    """A cutout name from ``Tile`` on, so ``15arcsec_near_RADEC_Tile...`` and
+    ``Tile...`` spellings of one cutout compare equal."""
+    return tile[tile.index("Tile"):] if "Tile" in tile else tile
+
+
+def read_inspections(path):
+    """Per-tile vote Counters of the visual-inspection export (one column per
+    inspector, blank = not voted). Tiles whose row has no votes are left out, so
+    they read as not yet inspected."""
+    votes = {}
+    for row in read_csv(path):
+        tile = row.pop("object_id")
+        counts = Counter(v for v in row.values() if v)
+        unknown = set(counts) - set(INSPECTION_LABELS)
+        if unknown:
+            raise SystemExit(f"{path}: {tile} has unknown inspection labels {sorted(unknown)}")
+        if tile_key(tile) in votes:
+            raise SystemExit(f"{path}: {tile} appears twice")
+        if counts:
+            votes[tile_key(tile)] = counts
+    return votes
+
+
+def consensus(votes, threshold=CONSENSUS_THRESHOLD):
+    """The paper's rule: the single most-voted label when it holds at least
+    ``threshold`` per cent of the votes, else ``No Consensus``."""
+    n = sum(votes.values())
+    label, count = votes.most_common(1)[0]
+    if 100 * count >= threshold * n and list(votes.values()).count(count) == 1:
+        return label
+    return "No Consensus"
 
 
 def file_sha256(path):

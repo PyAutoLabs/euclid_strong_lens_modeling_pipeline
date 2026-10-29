@@ -5,9 +5,10 @@ Euclid Pipeline: CSV Snapshot Packager
 Stage 3 of ``scripts/tools/csv_snapshot/build.py``: documents and validates the
 tables ``assemble.py`` wrote into ``<out_dir>``.
 
-- Checks: one master row per included manifest object, unique identifiers and
-  tiles, grades equal to the manifest's, parent A/B objects = included +
-  excluded, ``sample_manifest.csv`` row count. Every count comes from the
+- Checks: one master row per parent A/B object (the included manifest objects
+  plus a ``not_modelled`` placeholder per excluded object), unique identifiers
+  and (non-blank) tiles, grades equal to the manifest's, parent A/B objects =
+  included + excluded, ``sample_manifest.csv`` row count. Every count comes from the
   manifest and the object catalogue, never a literal.
 - Writes ``master_columns.csv`` (column, source table, description, units),
   ``README.txt``, ``validation.csv`` and ``file_manifest.csv`` (file, bytes,
@@ -33,8 +34,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (  # noqa: E402
     BUILD_DIR,
+    CONSENSUS_THRESHOLD,
     DEFAULT_MANIFEST,
     DEFAULT_UNCOVERED,
+    INSPECTION_LABELS,
     PROJECT_ROOT,
     included_rows,
     number_word,
@@ -60,6 +63,18 @@ STATUS_TEXT = {
     "photometry_fully_available": "All expected bands have the four principal photometry medians.",
     "metadata_error_count": "Number of input/result metadata reading errors; see metadata_errors.csv.",
 }
+INSPECTION_TEXT = {
+    "inspection_status": "inspected: the model of this cutout has visual-inspection votes; pending: not yet "
+    "inspected, vote cells blank (to be filled in a later snapshot); not_modelled: placeholder row of a parent "
+    "A/B object with no model (see excluded_*_candidates.csv), every model and vote cell blank.",
+    "inspection_votes": "Number of inspectors who classified this model.",
+    f"inspection_consensus_{CONSENSUS_THRESHOLD}": f"Most-voted inspection label when it holds at least "
+    f"{CONSENSUS_THRESHOLD}% of the votes and is not tied, else No Consensus.",
+    **{
+        col: f"Inspector votes for '{label}'."
+        for label, col in INSPECTION_LABELS.items()
+    },
+}
 
 
 def describe(col):
@@ -79,9 +94,12 @@ def describe(col):
     elif col == "unique_identifier":
         desc = "Unique v5 object identifier; primary catalogue key."
     elif col == "tile_id":
-        desc = "Canonical modelling cutout selected by the consolidated manifest."
+        desc = "Canonical modelling cutout selected by the consolidated manifest; blank on not_modelled rows."
+    elif col in INSPECTION_TEXT:
+        source = "catalogue/inspection/final_classifications.csv"
+        desc = INSPECTION_TEXT[col]
     elif col == "cutout_batch":
-        desc = "Delivery batch of the modelled cutout (sep1: 1 Sep 2026; sep28: 28 Sep 2026 top-up)."
+        desc = "Delivery batch of the modelled cutout (sep1: 1 Sep 2026; sep28: 28 Sep 2026 top-up; v5: 19 Oct 2026 cutouts at the v5 positions); blank on not_modelled rows."
     else:
         if col.startswith("mass_"):
             source, stem = "lens_mass.csv", col[5:]
@@ -145,11 +163,15 @@ v5 A/B objects minus {number_word(n_excl)} without a usable model (listed below)
 This is an interim modelling snapshot, not a fully completed or scientifically
 validated model catalogue. No candidate is removed for a missing fit or band.
 
-Start with {master_file}: one row per candidate. Blank cells mean
-unavailable/non-finite measurements, never zero. Semicolons separate list values.
+Start with {master_file}: one row per parent v5 A/B object ({n + n_excl:,}): the
+{n:,} modelled candidates plus {number_word(n_excl)} placeholder row{"s" if n_excl != 1 else ""} (inspection_status
+not_modelled) for the excluded objects: identity, grade, score and position
+only; tile_id, cutout_batch and every model cell blank, flags False. Blank
+cells mean unavailable/non-finite measurements, never zero. Semicolons separate list values.
 master_columns.csv defines every master column. unique_identifier is the v5
 object key; tile_id is the cutout its model was fitted on (sample_manifest.csv).
-No object was remodelled for v5. Objects whose model was fitted on an earlier
+Objects remodelled on a new v5 cutout (cutout_batch v5; tile names end _v5):
+{stats.get('remodelled_v5_rows', 0):,}. Objects whose model was fitted on an earlier
 cutout than the v5 one centred on the final position (the fits stand):
 {stats.get('superseded_cutout_rows', 0):,}.
 
@@ -161,6 +183,18 @@ Coverage at this snapshot
 - Every expected band has a completed SED fit: {stats.get('sed_fully_complete', 0):,}.
 - Every expected band has all four main photometry medians: {stats.get('photometry_fully_available', 0):,}.
 - Metadata read errors: {stats.get('metadata_errors', 0):,} (see metadata_errors.csv).
+
+Visual inspection
+-----------------
+- Inspected models: {stats.get('inspection_inspected', 0):,}. Pending: {stats.get('inspection_pending', 0):,}.
+- The inspection columns hold the votes of the model-inspection round
+  ({stats.get('inspections_file', '')}), matched to the modelled cutout (tile_id):
+  one count per label and inspection_consensus_{CONSENSUS_THRESHOLD}, the label holding at least
+  {CONSENSUS_THRESHOLD}% of the votes (else No Consensus).
+- PENDING rows are placeholders: their models have not been inspected yet
+  (never inspected, newly remodelled on a v5 cutout, or a fit that never
+  finished). Their vote cells are blank, not zero. The inspection values of
+  the pending lenses will be added in a later snapshot.
 
 The completion and photometry flags deliberately differ: a completed search may
 lack a latent summary or have non-finite derived quantities. Neither flag is a
@@ -214,8 +248,9 @@ Excluded parent-catalogue candidates ({n_excl})
 {exclusions}
 
 These objects have no lens model (never modelled) or a model that is not of the
-lens; they are not failed fits or multiband losses. {excluded_file} supplies
-positions, grade, the reason and the recorded notes.
+lens; they are not failed fits or multiband losses. Each has a not_modelled
+placeholder row in {master_file}; {excluded_file} supplies positions, grade,
+the reason and the recorded notes.
 
 Validation: membership and uniqueness were checked against the full v5 A/B
 parent catalogue and selected manifest. {parity_text}File sizes,
@@ -232,18 +267,28 @@ def package(out_dir, manifest, uncovered_csv, parity_json=None, log=print):
     master_file = stats["master_file"]
     excluded_file = stats["excluded_file"]
     with open(out_dir / master_file, newline="") as stream:
-        rows = list(csv.DictReader(stream))
-    uids = {r["unique_identifier"] for r in rows}
-    if not (len(rows) == n == len(uids) == len({r["tile_id"] for r in rows})):
-        raise SystemExit(f"{master_file}: {len(rows)} rows / {len(uids)} ids, manifest includes {n}")
-    if uids != {r["unique_identifier"] for r in manifest_rows}:
-        raise SystemExit(f"{master_file}: identifiers differ from the manifest's included rows")
-    grades = {r["grade"] for r in rows}
-    if grades != {r["grade"] for r in manifest_rows}:
-        raise SystemExit(f"{master_file}: grades {sorted(grades)} differ from the manifest's")
+        all_rows = list(csv.DictReader(stream))
     with open(out_dir / excluded_file, newline="") as stream:
         excluded_rows = list(csv.DictReader(stream))
     excluded = {r["unique_identifier"] for r in excluded_rows}
+    # Modelled rows and the not_modelled placeholders of the excluded objects.
+    rows = [r for r in all_rows if r["inspection_status"] != "not_modelled"]
+    placeholders = {r["unique_identifier"] for r in all_rows if r["inspection_status"] == "not_modelled"}
+    uids = {r["unique_identifier"] for r in rows}
+    tiles = [r["tile_id"] for r in all_rows if r["tile_id"]]
+    if not (len(all_rows) == stats["parent_ab_count"] == len(uids | placeholders)
+            and len(rows) == n == len(uids) == len(tiles) == len(set(tiles))):
+        raise SystemExit(
+            f"{master_file}: {len(all_rows)} rows / {len(uids | placeholders)} ids / {len(set(tiles))} tiles, "
+            f"parent A/B {stats['parent_ab_count']}, manifest includes {n}"
+        )
+    if uids != {r["unique_identifier"] for r in manifest_rows}:
+        raise SystemExit(f"{master_file}: identifiers differ from the manifest's included rows")
+    if placeholders != excluded:
+        raise SystemExit(f"{master_file}: not_modelled rows differ from {excluded_file}")
+    grades = {r["grade"] for r in rows}
+    if grades != {r["grade"] for r in manifest_rows}:
+        raise SystemExit(f"{master_file}: grades {sorted(grades)} differ from the manifest's")
     if excluded & uids or len(uids) + len(excluded) != stats["parent_ab_count"]:
         raise SystemExit("included + excluded objects do not make up the parent A/B catalogue")
     with open(out_dir / "sample_manifest.csv", newline="") as stream:
@@ -266,7 +311,7 @@ def package(out_dir, manifest, uncovered_csv, parity_json=None, log=print):
                 "n_included", "parent_ab_count", "excluded_parent_count", "superseded_cutout_rows"
             ):
                 writer.writerow([k, v])
-        writer.writerow(["unique_identifiers", len(uids)])
+        writer.writerow(["unique_identifiers", len(uids | placeholders)])
         writer.writerow(["parent_ab_count", stats["parent_ab_count"]])
         writer.writerow(["excluded_parent_count", len(excluded)])
         writer.writerow(["snapshot_cutoff_utc", snap["cutoff_utc"]])
@@ -284,7 +329,7 @@ def package(out_dir, manifest, uncovered_csv, parity_json=None, log=print):
                 with open(path, newline="") as s:
                     count = sum(1 for _ in csv.reader(s)) - 1
             writer.writerow([path.name, path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest(), count])
-    log(f"package: {out_dir} ({n} candidates, cutoff {snap['cutoff_utc']})")
+    log(f"package: {out_dir} ({n} candidates + {len(placeholders)} not_modelled, cutoff {snap['cutoff_utc']})")
 
 
 def add_arguments(parser):
