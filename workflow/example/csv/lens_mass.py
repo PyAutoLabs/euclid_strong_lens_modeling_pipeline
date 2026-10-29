@@ -75,7 +75,7 @@ agg_query = agg.query(agg_query.search.name == dataset_waveband)
 """
 Extract the `AggregateCSV` object, which has specific functions for outputting results in a CSV format.
 """
-agg_csv = af.AggregateCSV(aggregator=agg_query)
+agg_csv = af.AggregateCSV(aggregator=agg_query, strict=False)
 
 """
 __Model Paths__
@@ -94,7 +94,7 @@ in the aggregator.
 A useful example is adding the name and waveband of every dataset to the .csv file in a column on the left, indicating 
 which dataset and waveband each row corresponds to.
 """
-agg_csv = af.AggregateCSV(aggregator=agg_query)
+agg_csv = af.AggregateCSV(aggregator=agg_query, strict=False)
 
 lens_name_list = [search.path_prefix.parts[-1] for search in agg_query.values("search")]
 

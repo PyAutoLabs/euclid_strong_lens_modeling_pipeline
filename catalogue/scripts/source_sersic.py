@@ -123,7 +123,7 @@ def main(counts):
         print(f"no usable completed {args.unique_tag} results")
         catalogue_util.clear_csv_rows(inspect_path, "source_sersic.csv")
         return
-    agg_csv = af.AggregateCSV(aggregator=agg_query)
+    agg_csv = af.AggregateCSV(aggregator=agg_query, strict=False)
 
     """
     __Row Identity__
