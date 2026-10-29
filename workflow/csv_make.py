@@ -102,7 +102,7 @@ agg_query = agg.query(agg_query.search.name == dataset_waveband)
 """
 Extract the `AggregateCSV` object, which has specific functions for outputting results in a CSV format.
 """
-agg_csv = af.AggregateCSV(aggregator=agg_query)
+agg_csv = af.AggregateCSV(aggregator=agg_query, strict=False)
 
 """
 __Model Paths__
@@ -152,7 +152,7 @@ shorter or more readable.
 
 We recreate the `agg_csv` first, so that we begin adding columns to a new .csv file.
 """
-agg_csv = af.AggregateCSV(aggregator=agg_query)
+agg_csv = af.AggregateCSV(aggregator=agg_query, strict=False)
 
 agg_csv.add_variable(
     argument="galaxies.lens.mass.centre.centre_0",
@@ -171,7 +171,7 @@ __Maximum Likelihood Values__
 We can also output the maximum likelihood values of each parameter to the .csv file, using the `use_max_log_likelihood`
 input.
 """
-agg_csv = af.AggregateCSV(aggregator=agg_query)
+agg_csv = af.AggregateCSV(aggregator=agg_query, strict=False)
 
 agg_csv.add_variable(
     argument="galaxies.lens.mass.einstein_radius",
@@ -194,7 +194,7 @@ uncertainty of the parameter is clear.
 The method below adds three columns to the .csv file, corresponding to the values at the median, lower and upper sigma 
 values.
 """
-agg_csv = af.AggregateCSV(aggregator=agg_query)
+agg_csv = af.AggregateCSV(aggregator=agg_query, strict=False)
 
 agg_csv.add_variable(
     argument="galaxies.lens.mass.einstein_radius",
@@ -222,7 +222,7 @@ dataset name and waveband.
 
 We then pass the column `name` and this list to the `add_label_column` method, which will add a column to the .csv file.
 """
-agg_csv = af.AggregateCSV(aggregator=agg_query)
+agg_csv = af.AggregateCSV(aggregator=agg_query, strict=False)
 
 lens_name_list = [search.path_prefix.parts[-1] for search in agg.values("search")]
 
@@ -250,7 +250,7 @@ Latent variables are not free model parameters but can be derived from the model
 This example was run with a latent variable called `example_latent`, and below we show that this latent variable
 can be added to the .csv file using the same API as above.
 """
-agg_csv = af.AggregateCSV(aggregator=agg_query)
+agg_csv = af.AggregateCSV(aggregator=agg_query, strict=False)
 
 
 def shear_magnitude_from(result):
@@ -283,7 +283,7 @@ median PDF instance as input and returns the computed value.
 
 Below, we add a trivial example of a computed column, where the value is twice the sersic index of the bulge.
 """
-agg_csv = af.AggregateCSV(aggregator=agg_query)
+agg_csv = af.AggregateCSV(aggregator=agg_query, strict=False)
 
 
 def einstein_radius_x2_from(samples):
@@ -308,7 +308,7 @@ in the aggregator.
 A useful example is adding the name and waveband of every dataset to the .csv file in a column on the left, indicating 
 which dataset and waveband each row corresponds to.
 """
-agg_csv = af.AggregateCSV(aggregator=agg_query)
+agg_csv = af.AggregateCSV(aggregator=agg_query, strict=False)
 
 lens_name_list = [search.path_prefix.parts[-1] for search in agg_query.values("search")]
 
