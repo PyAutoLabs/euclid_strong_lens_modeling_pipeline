@@ -59,8 +59,11 @@ NON-PRODUCTION DIAGNOSTICS
     ``inspect/positions_census/research/`` (``SYNTHESIS.md``,
     ``B_final_method.md``).
 
-All positions are PyAutoLens ``(y, x)`` arcsec (y up, x right, origin at the
-frame centre, half-pixel offset convention).
+All positions are PyAutoLens ``(y, x)`` arcsec (origin at the frame centre,
+half-pixel offset convention). +y is up and +x right on the pipeline's own
+plots (array row 0 at the top), but the FITS is read with no row flip, so for
+the north-up DR1 cutouts +y points south and +x west on the sky. Use the
+RA / Dec in a fit's ``wcs.json`` for sky directions.
 """
 
 import hashlib
@@ -154,16 +157,30 @@ def source_positions(positions: np.ndarray, params: Sequence[float]) -> np.ndarr
     te, e0, e1, g1, g2 = params[:5]
     y, x = positions[:, 0], positions[:, 1]
     f = min(np.hypot(e0, e1), 0.999)
-    q = min(max((1 - f) / (1 + f), 1e-4), 0.99999)
+    q = (1 - f) / (1 + f)
     ang = 0.5 * np.arctan2(e0, e1)
     c, s = np.cos(ang), np.sin(ang)
     xr = x * c + y * s
     yr = -x * s + y * c
-    sq = np.sqrt(1 - q * q)
-    psi = np.sqrt(q * q * xr * xr + yr * yr) + 1e-12
-    fac = 2.0 * (te / (1 + q)) * q / sq
-    ay = fac * np.arctanh(np.clip(sq * yr / psi, -0.999999, 0.999999))
-    ax = fac * np.arctan(sq * xr / psi)
+    # As al.mp.Isothermal (PyAutoGalaxy#634): no q clamp; below s^2 = 1 - q^2 =
+    # 1e-4 the closed form (0/0 at q = 1) is replaced by its Taylor series in
+    # s^2, with the closed form evaluated at a safe s^2 = 1 there.
+    one_minus_q2 = 1 - q * q
+    small = one_minus_q2 < 1.0e-4
+    sq = np.sqrt(np.where(small, 1.0, one_minus_q2))
+    psi = np.sqrt(q * q * xr * xr + yr * yr + 1e-16)
+    b = 2.0 * (te / (1 + q)) * q
+    ay = (b / sq) * np.arctanh(np.clip(sq * yr / psi, -0.999999, 0.999999))
+    ax = (b / sq) * np.arctan(sq * xr / psi)
+    t_y, t_x = yr / psi, xr / psi
+    # arctanh(s t) / s = t + s^2 t^3 / 3 + s^4 t^5 / 5 + s^6 t^7 / 7 + ...
+    # arctan(s t) / s  = t - s^2 t^3 / 3 + s^4 t^5 / 5 - s^6 t^7 / 7 + ...
+    u_y = one_minus_q2 * t_y**2
+    u_x = -one_minus_q2 * t_x**2
+    series_y = t_y * (1.0 + u_y * (1.0 / 3.0 + u_y * (1.0 / 5.0 + u_y / 7.0)))
+    series_x = t_x * (1.0 + u_x * (1.0 / 3.0 + u_x * (1.0 / 5.0 + u_x / 7.0)))
+    ay = np.where(small, b * series_y, ay)
+    ax = np.where(small, b * series_x, ax)
     ax2 = ax * c - ay * s
     ay2 = ax * s + ay * c
     sy = -g1 * y + g2 * x

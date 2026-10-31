@@ -197,12 +197,17 @@ shell profile.
 2. **The project path.** Export `PROJECT_PATH` to the project's root on the cluster
    before submitting; the scripts read it and it is the same location as
    `$HPC_BASE/$PROJECT_NAME` in `sync.conf`.
-3. **The partition names.** The initial-lens-model fitting scripts use
-   `--partition=cpu` and `--partition=gpu`; `batch_cpu/submit_build_inspection_bundle`
-   and `batch_cpu/submit_sersic_waveband` use `--partition=ral`, because RAL — the
-   cluster the DR1 catalogue is built on — has no `cpu` partition. Rename them to your
-   cluster's partitions, or override on the command line:
+3. **The partition names.** Every `batch_cpu/` script uses `--partition=ral` and the
+   `batch_gpu/` scripts use `--partition=gpu`, because RAL — the cluster the DR1
+   catalogue is built on — names its CPU partition `ral` (it has no `cpu` partition).
+   Rename them to your cluster's partitions, or override on the command line:
    `sbatch --partition=<name> hpc/batch_cpu/submit_initial_lens_model_two_stage`.
+   **Never put a CPU script on `gpu`** — not `gpu`, `ral,gpu` or `gpu,ral`, even when
+   `ral` is drained or busy (human rule, 2026-09-30: `ral,gpu` CPU arrays took all 124
+   CPUs on both A100 nodes and idled all 8 GPUs for hours). The only exemption is a
+   small CPU timing leg without `--gres` (≤8 CPUs/task, throttle ≤`%2`, no pending
+   gres/gpu jobs in `squeue -p gpu -t PD`). A partition name is not a device: check
+   `gres/gpu` in `scontrol show job <id>` before calling a job a GPU run.
 4. **Submit from the script's directory**, or via `hpc/sync submit`. The `-o` / `-e`
    directives are relative paths into `output/` and `error/` beside the script, and
    SLURM will not create them for you.

@@ -500,7 +500,8 @@ def check_identity(product, rows_a, rows_b, key_columns, tile_filter):
     if only_a:
         identity_lines += [""]
         identity_lines += markdown_table(
-            ["row in A with no counterpart in B"], [[key_label(key)] for key in only_a[:20]]
+            ["row in A with no counterpart in B"],
+            [[key_label(key)] for key in only_a[:20]],
         )
         if len(only_a) > 20:
             identity_lines += ["", f"_… {len(only_a) - 20} further rows not listed_"]
@@ -590,7 +591,14 @@ def check_astrometry(product, index_a, index_b, common):
                 n_exact += 1
             else:
                 n_outside += 1
-                outside.append((column, key_label(key), index_a[key].get(column), index_b[key].get(column)))
+                outside.append(
+                    (
+                        column,
+                        key_label(key),
+                        index_a[key].get(column),
+                        index_b[key].get(column),
+                    )
+                )
         table.append([column, n_exact, n_outside])
 
     lines = markdown_table(["column", "n_exact", "n_outside"], table)
@@ -710,7 +718,13 @@ def _values_check(product, index_a, index_b, common, bases, title, gating):
         lines += markdown_table(
             ["quantity", "row", "A", "B", "z"],
             [
-                [base, key_label(key), format_number(as_float(str(a)) if a is not None else None), format_number(as_float(str(b)) if b is not None else None), format_number(z)]
+                [
+                    base,
+                    key_label(key),
+                    format_number(as_float(str(a)) if a is not None else None),
+                    format_number(as_float(str(b)) if b is not None else None),
+                    format_number(z),
+                ]
                 for base, key, a, b, z in all_outside[:20]
             ],
         )
@@ -804,10 +818,16 @@ def check_ell_comps(product, index_a, index_b, common, bases):
 
         for key in common:
             row_a, row_b = index_a[key], index_b[key]
-            values_a = [(as_float(row_a.get(base)), sigma_of(row_a, base)) for base in group]
-            values_b = [(as_float(row_b.get(base)), sigma_of(row_b, base)) for base in group]
+            values_a = [
+                (as_float(row_a.get(base)), sigma_of(row_a, base)) for base in group
+            ]
+            values_b = [
+                (as_float(row_b.get(base)), sigma_of(row_b, base)) for base in group
+            ]
 
-            if any(value is None or sigma is None for value, sigma in values_a + values_b):
+            if any(
+                value is None or sigma is None for value, sigma in values_a + values_b
+            ):
                 n_outside += 1
                 outside.append((label, key_label(key), "blank cell", ""))
                 continue
@@ -848,7 +868,13 @@ def check_ell_comps(product, index_a, index_b, common, bases):
         table.append([label, len(common), n_identity, n_swapped, n_outside])
 
     lines = markdown_table(
-        ["group", "n_compared", "n_exact (same order)", "n_within (swapped)", "n_outside"],
+        [
+            "group",
+            "n_compared",
+            "n_exact (same order)",
+            "n_within (swapped)",
+            "n_outside",
+        ],
         table,
     )
     if outside:
@@ -871,7 +897,9 @@ def latent_bases(fieldnames):
     The latent columns of a header: every value base that is not a sampled model
     parameter.
     """
-    return [base for base in value_bases(fieldnames) if base not in MODEL_PARAMETER_BASES]
+    return [
+        base for base in value_bases(fieldnames) if base not in MODEL_PARAMETER_BASES
+    ]
 
 
 def check_latent_completeness(product, fieldnames, rows):
@@ -897,7 +925,9 @@ def check_latent_completeness(product, fieldnames, rows):
 
     for base in bases:
         columns = [base] + [
-            f"{base}{suffix}" for suffix in VALUE_SUFFIXES if f"{base}{suffix}" in present
+            f"{base}{suffix}"
+            for suffix in VALUE_SUFFIXES
+            if f"{base}{suffix}" in present
         ]
         n_blank = 0
         n_collapsed = 0
@@ -938,10 +968,18 @@ def check_latent_completeness(product, fieldnames, rows):
                 if median is not None and max_lh is not None and median != max_lh:
                     max_lh_differs = True
 
-        table.append([base, len(rows), n_blank, n_collapsed, "yes" if has_max_lh else "no"])
+        table.append(
+            [base, len(rows), n_blank, n_collapsed, "yes" if has_max_lh else "no"]
+        )
 
     lines = markdown_table(
-        ["latent", "n_rows", "n_blank_rows", "n_3sigma_not_outside_1sigma", "has max_lh column"],
+        [
+            "latent",
+            "n_rows",
+            "n_blank_rows",
+            "n_3sigma_not_outside_1sigma",
+            "has max_lh column",
+        ],
         table,
     )
 
@@ -960,7 +998,8 @@ def check_latent_completeness(product, fieldnames, rows):
     if findings:
         lines += [""]
         lines += markdown_table(
-            ["latent", "row", "finding", "detail"], [list(entry) for entry in findings[:20]]
+            ["latent", "row", "finding", "detail"],
+            [list(entry) for entry in findings[:20]],
         )
         if len(findings) > 20:
             lines += ["", f"_… {len(findings) - 20} further findings not listed_"]
@@ -1022,7 +1061,9 @@ def compare(directory_a: Path, directory_b: Path, tile_filter=None):
         checks.append(check_gated_values(product, index_a, index_b, common, bases))
         checks.append(check_ell_comps(product, index_a, index_b, common, bases))
         checks.append(check_latent_completeness(product, fieldnames_a, rows_a))
-        checks.append(check_informational_values(product, index_a, index_b, common, bases))
+        checks.append(
+            check_informational_values(product, index_a, index_b, common, bases)
+        )
 
     return checks
 
@@ -1047,7 +1088,10 @@ def render_report(directory_a, directory_b, tile_filter, checks):
     ]
     lines += markdown_table(
         ["check", "status", "gates result"],
-        [[check.name, check.status, "yes" if check.gating else "no"] for check in checks],
+        [
+            [check.name, check.status, "yes" if check.gating else "no"]
+            for check in checks
+        ],
     )
     lines += ["", "## Checks", ""]
     for check in checks:

@@ -24,6 +24,8 @@
 #   routes; start from `submit_initial_lens_model_two_stage`, and read its
 #   header for why the CPU path has to split the two stages across two
 #   processes and this one does not.
+#   The CPU scripts stay on the CPU partition (`ral`): never resubmit them to
+#   `gpu` or `ral,gpu` to jump the queue (see hpc/README.md, partition names).
 
 #SBATCH -J euclid_initial_lens_model
 #SBATCH --partition=gpu
