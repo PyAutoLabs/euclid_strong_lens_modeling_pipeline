@@ -3,8 +3,8 @@ Euclid Pipeline: Build A CSV-Only Catalogue Snapshot
 ====================================================
 
 The single entry point of ``scripts/tools/csv_snapshot/``: collect -> assemble
--> package. Writes the metadata-only catalogue tables of every
-``include_in_catalogue=True`` tile of the consolidated manifest into
+-> sky-frame columns (``sky_columns.py``) -> package. Writes the metadata-only
+catalogue tables of every ``include_in_catalogue=True`` tile of the consolidated manifest into
 ``<out_dir>/``, with the intermediates under ``<out_dir>/_build/``. No fit is
 rerun and no image is extracted: it reads three small JSON files per result.
 
@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import assemble  # noqa: E402
 import collect  # noqa: E402
 import package  # noqa: E402
+import sky_columns  # noqa: E402
 from common import DEFAULT_INSPECTIONS, DEFAULT_OBJECTS, DEFAULT_UNCOVERED, parse_time  # noqa: E402
 
 STAGES = ("collect", "assemble", "package")
@@ -72,6 +73,10 @@ def main(argv=None):
     if "assemble" in stages:
         assemble.assemble(out_dir, manifest, p(args.objects), p(args.uncovered), args.force,
                           inspections_csv=p(args.inspections))
+    if "assemble" in stages or "package" in stages:
+        # Idempotent, so it runs whenever the tables are (re)assembled or packaged:
+        # existing `--stage=assemble,package` callers need no new stage name.
+        sky_columns.add_sky_columns(out_dir)
     if "package" in stages:
         package.package(out_dir, manifest, p(args.uncovered), args.parity_json)
     return 0

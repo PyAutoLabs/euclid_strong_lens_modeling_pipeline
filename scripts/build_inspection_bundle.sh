@@ -130,6 +130,13 @@ python "$PROJECT_ROOT/scripts/tools/build_inspect.py" \
     --dataset_prefix="$DATASET_PREFIX" \
     ${DS_ARGS[@]+"${DS_ARGS[@]}"}
 
+echo "==> [1b/10] COOLEST templates in the sky frame (scripts/tools/regenerate_coolest.py)"
+python "$PROJECT_ROOT/scripts/tools/regenerate_coolest.py" \
+    --target_dir="$INSPECT_DIR" \
+    --sample="$SAMPLE" \
+    --output_path="$OUTPUT_DIR" \
+    --sersic_output_path="$SED_OUTPUT_DIR"
+
 echo "==> [2/10] deblended FITS (catalogue/scripts/deblending.py)"
 python "$PROJECT_ROOT/catalogue/scripts/deblending.py" \
     --sample="$SAMPLE" \
@@ -148,6 +155,11 @@ python "$PROJECT_ROOT/catalogue/scripts/lens_mass_maps.py" \
     --output_path="$OUTPUT_DIR" \
     --inspect_dir="$INSPECT_DIR" \
     ${DS_ARGS[@]+"${DS_ARGS[@]}"}
+
+echo "==> [3b/10] cut-out WCS on the model FITS (scripts/tools/add_fits_wcs.py)"
+python "$PROJECT_ROOT/scripts/tools/add_fits_wcs.py" \
+    --target_dir="$INSPECT_DIR" \
+    --sample="$SAMPLE"
 
 echo "==> [4/10] lens mass CSV (catalogue/scripts/lens_mass.py)"
 python "$PROJECT_ROOT/catalogue/scripts/lens_mass.py" \

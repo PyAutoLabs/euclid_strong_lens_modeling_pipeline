@@ -5,6 +5,7 @@ import numpy as np
 from pathlib import Path
 
 import project_paths
+from scripts.tools import sky_frame
 from PIL import Image
 from typing import List, Optional, Tuple
 import logging
@@ -737,6 +738,7 @@ class AnalysisImaging(al.AnalysisImaging):
             tracer=result.max_log_likelihood_tracer,
             dataset=self.dataset,
             file_path=paths._files_path / "coolest",
+            pixel_wcs=self.kwargs.get("pixel_wcs"),
             search_name=paths.name,
             dataset_name=(
                 Path(dataset_main_path).name if dataset_main_path is not None else None
@@ -1212,6 +1214,11 @@ def wcs_dict_from(tracer, data, pixel_wcs, fit=None) -> dict:
 #   fitted dataset stamps the template with the cut-out's own pixel grid (shape
 #   and pixel scale), which is what makes the exported model reproducible on the
 #   data it was fitted to.
+# - `pixel_wcs=`. The cut-outs are loaded with no row flip, so for the north-up
+#   DR1 WCS the model frame has +y south (`sky_frame`). The COOLEST interop
+#   assumes +y north, so the tracer is mirrored into that frame first
+#   (`sky_frame.plus_y_north_from`); without a WCS it is exported as fitted and
+#   the template's metadata says so (`frame`).
 #
 # The whole thing is best-effort: `coolest` is an optional dependency of
 # PyAutoLens (`pip install autolens[coolest]`) and a template is a record, not a
@@ -1227,6 +1234,7 @@ def coolest_json_from(
     file_path,
     search_name: Optional[str] = None,
     dataset_name: Optional[str] = None,
+    pixel_wcs=None,
 ) -> Optional[str]:
     """
     Write the COOLEST template ``AnalysisImaging.save_results`` puts in
@@ -1250,6 +1258,11 @@ def coolest_json_from(
     dataset_name
         The name of the lens the fit was made on, stored in the template's
         metadata.
+    pixel_wcs
+        The dataset's celestial ``astropy.wcs.WCS``. When its CD matrix makes
+        the native frame +y south (every DR1 cut-out), the tracer is mirrored
+        into the +y-north frame COOLEST expects before export; ``None`` exports
+        the tracer as fitted.
 
     Returns
     -------
@@ -1263,6 +1276,13 @@ def coolest_json_from(
         metadata["dataset"] = dataset_name
 
     try:
+        metadata["frame"] = "native (no WCS given)"
+        if pixel_wcs is not None:
+            cd = pixel_wcs.pixel_scale_matrix
+            if sky_frame.native_is_mirrored(cd):
+                tracer = sky_frame.plus_y_north_from(tracer)
+            metadata["frame"] = "+y north, +x west (sky_frame.plus_y_north_from)"
+
         return al.interop.coolest.to_coolest(
             galaxies=tracer,
             file_path=file_path,

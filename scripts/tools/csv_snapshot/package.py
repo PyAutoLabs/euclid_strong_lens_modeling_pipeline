@@ -78,9 +78,16 @@ INSPECTION_TEXT = {
 
 
 def describe(col):
+    from sky_columns import describe as sky_describe
+
     units = ""
     source = "sample_manifest.csv"
     desc = col
+    sky = sky_describe(col)
+    if sky is not None:
+        source = "derived from the fitted columns (sky_columns.py)"
+        units, desc = sky
+        return dict(column=col, source_table=source, description=desc, units=units)
     if col in STATUS_TEXT:
         source = "result_provenance.csv and input band inventory"
         desc = STATUS_TEXT[col]

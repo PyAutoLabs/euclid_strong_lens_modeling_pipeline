@@ -20,6 +20,8 @@
 - scripts/tools/positions_gate.py  # Pre-submit positions gate over tile directories (--tile/--root), not the runner's global args_default (--dataset=... --sample=...), and the shipped example dataset has no positions.json to gate. tests/test_positions_gate.py runs it end to end on the five DR1 exemplar tiles in tests/fixtures/positions_gate/ instead.
 - scripts/tools/rewrite_positions.py  # Rewrites positions.json across tile directories (--tile/--root) with the production positions writer, not the runner's global args_default (--dataset=... --sample=...); it overwrites dataset files, so a smoke run over the shipped example would dirty the checkout. tests/test_rewrite_positions.py runs it end to end on temp copies of the simulated tile instead.
 - scripts/tools/positions_finder_witness.py  # Witness run of the positions finder over a calibration sample (--root, tile directories with segmentation maps), not the runner's global args_default; the shipped example dataset is not a calibration sample. tests/test_positions_finder.py covers the finder it drives.
+- scripts/tools/regenerate_coolest.py  # Rewrites the COOLEST templates of a built inspect/catalogue dir in the sky frame (--target_dir/--output_path), not the runner's global args_default; a checkout has no built bundle. Stage 1b of scripts/build_inspection_bundle.sh; tests/test_regenerate_coolest.py runs it end to end.
+- scripts/tools/add_fits_wcs.py  # Adds the cut-out WCS to the model FITS of a built inspect/catalogue dir (--target_dir), not the runner's global args_default; a checkout has no built bundle. Stage 3b of scripts/build_inspection_bundle.sh; tests/test_add_fits_wcs.py runs it end to end.
 - scripts/tools/add_mass_to_image_catalogue.py  # Adds lens_mass.csv Einstein radii to a built slim image catalogue (catalogue/staging directories as arguments), not the runner's global args_default; a checkout has no built catalogue or lens_mass.csv.
 - scripts/tools/build_wcs_package.py  # Packages the WCS records of the top-graded lenses from finished vis_lp + vis_pix result zips and the v5 grades CSV, not the runner's global args_default; a checkout has neither.
 - project_paths  # Path-resolution module (dataset_root()), not a script: it only defines functions. tests/conftest.py pins and exercises DATASET_ROOT.
@@ -55,6 +57,7 @@
 
 - util  # Shared pipeline helpers (dataset loading, the latent catalogue, plotting) imported by every script. A module, not a runnable script. Stem-matched, not path-matched, so it cannot also swallow catalogue_util.py.
 - positions_finder  # Shared pure-numpy positions core (tracer, quick fit, forward solver, reconcile loop) imported by preprocess/segmentation.py, util.py and scripts/tools/positions_gate.py. A module, not a runnable script; tests/test_positions_finder.py and tests/test_positions_gate.py cover it.
+- sky_frame  # scripts/tools/sky_frame.py: shared sky-frame conversions (tracer mirror for COOLEST, PA east of north) imported by util.py and the catalogue tools; not a script. tests/test_sky_frame.py covers it.
 - catalogue/scripts/catalogue_util.py  # Shared helpers for the catalogue producers (path resolution, per-tile CSV splitting). A module, not a runnable script.
 - catalogue/scripts/witt_wynne_util.py  # Catalogue helper module (imported by catalogue/scripts/witt_wynne.py); no CLI
 
