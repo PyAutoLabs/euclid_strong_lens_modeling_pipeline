@@ -269,3 +269,41 @@ def test_a_conversion_that_raises_is_a_warning_not_a_failure(
         for message in messages
     ), messages
     assert not (tmp_path / "coolest.json").exists()
+
+
+def test_a_dr1_wcs_mirrors_the_export_into_the_plus_y_north_frame(tracer, dataset, tmp_path):
+    """With the north-up DR1 WCS the native frame is +y south, so the export is
+    mirrored: phi becomes the sky PA (east of north) and center_y north-positive.
+    Without a WCS the tracer is exported as fitted (the pre-2026-10-31 records)."""
+    import numpy as np
+    from astropy.wcs import WCS
+
+    import autolens as al
+    from scripts.tools import sky_frame
+
+    wcs = WCS(naxis=2)
+    wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    wcs.wcs.cd = np.array([[-0.1 / 3600.0, 0.0], [0.0, 0.1 / 3600.0]])
+    wcs.wcs.crval = [150.0, -30.0]
+    wcs.wcs.crpix = [10.5, 10.5]
+
+    def mass_params(path):
+        with open(path) as f:
+            template = json.load(f)
+        mass = template["lensing_entities"][0]["mass_model"][0]["parameters"]
+        return {k: mass[k]["point_estimate"]["value"] for k in ("phi", "center_x", "center_y")}, template
+
+    native, _ = mass_params(_write(tracer, dataset, tmp_path / "native"))
+    mirrored, template = mass_params(
+        util.coolest_json_from(
+            tracer=tracer, dataset=dataset, file_path=tmp_path / "dr1" / "coolest", pixel_wcs=wcs
+        )
+    )
+
+    mass = tracer.galaxies[0].mass
+    _, phi = al.convert.axis_ratio_and_angle_from(ell_comps=mass.ell_comps)
+    pa = sky_frame.pa_east_of_north(phi, wcs.pixel_scale_matrix)
+    assert ((mirrored["phi"] - pa + 90.0) % 180.0) - 90.0 == pytest.approx(0.0, abs=1e-6)
+    assert mirrored["center_y"] == pytest.approx(-native["center_y"])
+    assert mirrored["center_x"] == pytest.approx(native["center_x"])
+    assert "+y north" in template["meta"]["frame"]

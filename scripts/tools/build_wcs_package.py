@@ -404,9 +404,12 @@ Coordinate conventions
 - arcsec values are (y, x) in the image plane (or source plane for source_* /
   peak_*), relative to the tile centre at pixel (crpix_x, crpix_y).
 - IMPORTANT: +y is NOT north. The image array is loaded without a row flip, so
-  +y points along increasing FITS row, i.e. SOUTH for a north-up image. Use the
-  RA/Dec columns for sky positions; every RA/Dec went through the tile's own
-  FITS WCS, so it is right whatever the cut-out orientation.
+  FITS row 1 is the top row of the pipeline's grid and +y points towards
+  decreasing FITS row: SOUTH for a north-up image, with +x WEST. Use the RA/Dec
+  columns for sky positions; every RA/Dec went through the tile's own FITS WCS,
+  so it is right whatever the cut-out orientation. The catalogue's sky-frame
+  columns (east_offset, north_offset, pa_east_of_north) give the fitted centres
+  and angles north-positive.
 - RA/Dec are degrees in the frame of the tile's FITS WCS header.
 """
 
