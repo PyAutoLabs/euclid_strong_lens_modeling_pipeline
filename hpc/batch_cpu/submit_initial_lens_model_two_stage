@@ -43,32 +43,36 @@
 #   helps stage 2 (more pool workers) more than stage 1, whose threaded speed-up
 #   flattens off first.
 
-#SBATCH -J euclid_initial_lens_model_two_stage
+#SBATCH -J euclid_dr1_two_stage
 #SBATCH -n 1
 #SBATCH --cpus-per-task=8
 #SBATCH -o output/output.%A_%a.out
 #SBATCH -e error/error.%A_%a.err
 #SBATCH --partition=ral
-# NEVER add gpu here: CPU arrays on the gpu partition fill both A100 nodes' CPUs and idle all 8 GPUs.
+# NEVER add gpu here (2026-09-30): CPU arrays on the gpu partition fill both A100 nodes' CPUs and idle all 8 GPUs; comments above that justify ral,gpu are superseded.
 #SBATCH -t 36:00:00
 #SBATCH --mem=64gb
-#SBATCH --array=0-0
+#SBATCH --array=0-9
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=your.email@institution.ac.uk
+#SBATCH --mail-user=james.w.nightingale@durham.ac.uk
 
 # -----------------------------------------------------------------------------
 # Environment
 #
-# Set PROJECT_PATH to this project on the HPC before submitting:
-#
-#   export PROJECT_PATH=/PATH/TO/LARGE_STORAGE/YOUR_USERNAME/euclid_strong_lens_modeling_pipeline
-#   sbatch hpc/batch_cpu/submit_initial_lens_model_two_stage
-#
-# This is the same location as $HPC_BASE/$PROJECT_NAME in hpc/sync.conf.
+# PROJECT_PATH and PYAUTO_HPC_BASE are set here rather than in the submitting
+# shell, because this project is driven through `hpc/sync submit`, which runs
+# `ssh <host> "cd hpc/batch_cpu && sbatch <script>"` and so carries no exports
+# from the local machine, and the RAL login profile sets neither. PROJECT_PATH
+# is the same location as $HPC_BASE/$PROJECT_NAME in hpc/sync.conf;
+# PYAUTO_HPC_BASE is the directory holding the shared PyAuto/ virtualenv that
+# activate.sh falls back to when the project has no local .venv.
 #
 # Nothing JAX-related and no thread counts are exported here: each stage below
 # carries its own, so the two cannot interfere.
 # -----------------------------------------------------------------------------
+export PROJECT_PATH=/mnt/ral/jnightin/active/euclid_dr1
+export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
+
 source $PROJECT_PATH/activate.sh
 
 # Stop the job the moment a stage fails, rather than running the next one.
@@ -81,7 +85,7 @@ THREADS=$SLURM_CPUS_PER_TASK
 #
 # The sample is the subdirectory inside dataset/ that contains the datasets.
 # -----------------------------------------------------------------------------
-sample=q1_walsmley
+sample=dr1_sep1
 
 # -----------------------------------------------------------------------------
 # Dataset list
@@ -93,7 +97,16 @@ sample=q1_walsmley
 # match: three datasets means --array=0-2.
 # -----------------------------------------------------------------------------
 datasets=(
-102018665_NEG570040238507752998
+Tile102005065RA0135279431487DECNEG0701599765928
+Tile102007299RA0702283866574DECNEG0660415308762
+Tile102007899RA0631697483678DECNEG0650586413593
+Tile102007903RA0668824944366DECNEG0648906250124
+Tile102008165RA0109661927007DECNEG0642904268129
+Tile102008219RA0727857418392DECNEG0644388277074
+Tile102008468RA3567393529734DECNEG0647169093056
+Tile102008475RA0039777627054DECNEG0637715426503
+Tile102008532RA0683486015030DECNEG0642073552911
+Tile102008848RA0601371893270DECNEG0634606579714
 )
 
 INDEX=$SLURM_ARRAY_TASK_ID

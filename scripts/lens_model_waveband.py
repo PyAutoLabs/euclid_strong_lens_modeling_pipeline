@@ -73,6 +73,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import project_paths  # noqa: E402
 import util
 from scripts.initial_lens_model import fit
 
@@ -139,9 +140,9 @@ def fit_waveband(
     repeated for every other band, so it opens the FITS file directly.
     """
     if sample_name is not None:
-        dataset_main_path = project_root / "dataset" / sample_name / dataset_name
+        dataset_main_path = project_paths.dataset_root() / sample_name / dataset_name
     else:
-        dataset_main_path = project_root / "dataset" / dataset_name
+        dataset_main_path = project_paths.dataset_root() / dataset_name
     dataset_fits_name = f"{dataset_name}.fits"
 
     """
@@ -253,9 +254,23 @@ def fit_waveband(
     conditioned on. Each iteration repeats the whole dataset preparation for its
     band: load, centre, header, noise scaling, mask, over-sampling, then the
     search.
+
+    Bands named in the comma-separated ``SED_SKIP_BANDS`` environment variable
+    are not fitted. The SED gap-fill job sets it for a band whose search has
+    hung twice, so the remaining bands of the lens still complete.
     """
+    skip_bands = {
+        band.strip().lower()
+        for band in os.environ.get("SED_SKIP_BANDS", "").split(",")
+        if band.strip()
+    }
+
     for dataset_waveband, dataset_index in dataset_index_dict.items():
         if dataset_waveband == "vis":
+            continue
+
+        if dataset_waveband in skip_bands:
+            print(f"SKIPPED BAND (SED_SKIP_BANDS): {dataset_name} {dataset_waveband}")
             continue
 
         """

@@ -1,0 +1,2 @@
+unique_identifier,grade,score,RA_obj,DEC_obj,id_str_for_cutout,tile,reason,note
+EUCL-DR1-L020583,B,2.0000072930534114,220.28340980773064,71.86261650409571,15arcsec_near_RADEC_Tile102162315RA2202830104714DEC0718616864331,,no_model,"sep1 cutout not in the segmentation delivery, so never modelled"

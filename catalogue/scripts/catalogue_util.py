@@ -113,7 +113,36 @@ def add_common_arguments(parser: argparse.ArgumentParser, default_output_path="o
             "Default: <project_root>/inspect/<sample>."
         ),
     )
+    parser.add_argument(
+        "--datasets_file",
+        metavar="path",
+        default=None,
+        help=(
+            "Optional text file naming the dataset (lens) directories to build, "
+            "one per line. Default: every lens directory of the sample. This is "
+            "how a chunk of a chunked catalogue build "
+            "(hpc/batch_cpu/submit_catalogue_chunked.sh) scopes every producer "
+            "to its own lenses."
+        ),
+    )
     return parser
+
+
+def requested_dataset_names(datasets_file):
+    """
+    The dataset names listed in ``datasets_file`` (one per line, blank lines and
+    ``#`` comments ignored, first whitespace-separated field taken), or ``None``
+    when no file was given — meaning "the whole sample".
+    """
+    if not datasets_file:
+        return None
+    names = []
+    with open(datasets_file) as stream:
+        for line in stream:
+            line = line.split("#", 1)[0].strip()
+            if line:
+                names.append(line.split()[0])
+    return names
 
 
 def resolve_paths(args):
@@ -205,17 +234,161 @@ def write_per_tile_csv(master_csv: Path, inspect_path: Path, filename: str) -> i
     return len(rows_by_lens)
 
 
-def dataset_names_from(sample_root: Path):
+def dataset_names_from(sample_root: Path, datasets_file=None):
     """
     Sorted names of the per-lens result directories under ``sample_root``,
     or an empty list (with a message) when the sample has not been run.
+
+    With ``datasets_file`` (see ``--datasets_file``) only the listed lenses that
+    have a result directory are returned, without listing the whole sample.
     """
     if not sample_root.is_dir():
         print(f"no sample directory at {sample_root}; nothing to do")
         return []
+    requested = requested_dataset_names(datasets_file)
+    if requested is not None:
+        return sorted(
+            name for name in set(requested) if (sample_root / name).is_dir()
+        )
     return sorted(
         name for name in os.listdir(sample_root) if (sample_root / name).is_dir()
     )
+
+
+def _lens_name_of(result):
+    """
+    The lens (dataset) name a result belongs to, read off its search's
+    ``path_prefix`` (``<sample>/<lens>``), or ``None`` when it has no search —
+    which is the case for the stub results of ``tests/test_magnitudes_dedup.py``.
+    """
+    try:
+        search = result.search
+    except AttributeError:
+        return None
+    if search is None:
+        return None
+    try:
+        return Path(str(search.paths.path_prefix)).name or None
+    except AttributeError:
+        return None
+
+
+def latest_result_per_lens_band(aggregator, sample_root: Path):
+    """
+    Keep only the newest completed result for each ``(lens, stage, band)``.
+
+    A result folder is named for the model and configuration that produced it,
+    so re-running a band with anything changed (a retry sweep, a widened prior)
+    writes a *second* completed folder beside the first instead of overwriting
+    it. A catalogue wants exactly one per lens and band — the newest — or it
+    carries duplicate rows (CSVs) and duplicate HDUs (``pre_psf.fits`` /
+    ``model.fits``) with nothing to say which is current.
+
+    The key is ``<lens>/<stage>/<band>``, the first three of the trailing
+    ``<lens>/<stage>/<band>/<hash>`` parts of the result's directory. With
+    ``unzip_temporary=True`` and ``hpc_mode`` a completed search leaves only its
+    zip, so the result is extracted to a temporary root that mirrors the layout
+    *below the directory that was scanned*. Scanning the whole sample, the tail
+    is then still ``<lens>/<stage>/<band>/<hash>``; scanning one lens directory
+    (the per-lens producers, and every producer in a chunked build) the first
+    part is the temporary root's own name, so the lens is taken from the
+    result's search ``path_prefix`` instead.
+
+    Recency is the mtime of the result's zip **under the sample root** — written
+    when the search finished, so it dates completion — and never the extracted
+    directory's (the time this process unpacked it). Without a zip (an unzipped
+    test-mode run) the directory's own mtime is used. The full directory string
+    breaks ties, so the choice is deterministic.
+
+    The survivors are wrapped back into an ``Aggregator``.
+    """
+    from autofit.aggregator.aggregator import Aggregator
+
+    selected = {}
+    for result in aggregator:
+        try:
+            tail = result.directory.relative_to(sample_root).parts
+        except ValueError:
+            # A temporary extraction, outside `sample_root` entirely.
+            tail = result.directory.parts[-4:]
+            lens_name = _lens_name_of(result)
+            if lens_name is not None:
+                tail = (lens_name,) + tuple(tail[-3:])
+        if len(tail) < 4:
+            continue
+        lens_name, stage, band = tail[:3]
+        key = (lens_name, stage, band)
+        zip_path = Path(f"{Path(sample_root).joinpath(*tail)}.zip")
+        timestamp = (
+            zip_path.stat().st_mtime
+            if zip_path.exists()
+            else result.directory.stat().st_mtime
+        )
+        candidate = (timestamp, str(result.directory), result)
+        if key not in selected or candidate[:2] > selected[key][:2]:
+            selected[key] = candidate
+
+    deduplicated = [candidate[2] for candidate in selected.values()]
+    removed = len(aggregator) - len(deduplicated)
+    if removed:
+        print(f"selected newest result per lens/band; removed {removed} duplicates")
+
+    return Aggregator(
+        search_outputs=deduplicated,
+        grid_search_outputs=aggregator.grid_search_outputs,
+    )
+
+
+def lens_aggregator(sample_root: Path, dataset_name: str):
+    """
+    The completed results of one lens, newest per ``(stage, band)``.
+
+    Every per-lens producer (deblending, mass maps, multi-wavelength,
+    Witt-Wynne) opens its aggregator here, so a lens re-fitted by a retry sweep
+    contributes one result per band, never two.
+    """
+    from autofit.aggregator.aggregator import Aggregator
+
+    agg = Aggregator.from_directory(
+        directory=sample_root / dataset_name,
+        completed_only=True,
+        unzip_temporary=True,
+    )
+    return latest_result_per_lens_band(agg, sample_root=sample_root)
+
+
+def sample_aggregator(sample_root: Path, datasets_file=None):
+    """
+    The completed results of a whole sample — or, with ``datasets_file``, of
+    just the listed lenses — newest per ``(lens, stage, band)``.
+
+    A chunk of the chunked build must not walk the other ~14k lens directories
+    of its sample, so with a datasets file each listed lens is scanned on its
+    own and the search outputs are pooled into one aggregator (each output keeps
+    its own temporary extraction alive). Without one the whole sample is
+    scanned in one walk, exactly as before.
+    """
+    from autofit.aggregator.aggregator import Aggregator
+
+    requested = requested_dataset_names(datasets_file)
+    if requested is None:
+        agg = Aggregator.from_directory(
+            directory=sample_root, completed_only=True, unzip_temporary=True
+        )
+    else:
+        search_outputs, grid_search_outputs = [], []
+        for dataset_name in dataset_names_from(sample_root, datasets_file):
+            lens_agg = Aggregator.from_directory(
+                directory=sample_root / dataset_name,
+                completed_only=True,
+                unzip_temporary=True,
+            )
+            search_outputs.extend(lens_agg.search_outputs)
+            grid_search_outputs.extend(lens_agg.grid_search_outputs)
+        agg = Aggregator(
+            search_outputs=search_outputs, grid_search_outputs=grid_search_outputs
+        )
+    return latest_result_per_lens_band(agg, sample_root=sample_root)
 
 
 class BuildCounts:

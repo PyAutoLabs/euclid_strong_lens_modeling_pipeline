@@ -1,0 +1,55 @@
+#!/bin/bash -l
+#SBATCH -J euclid_rewrite_positions
+#SBATCH -n 1
+#SBATCH --cpus-per-task=8
+#SBATCH -o output/output.%A_%a.out
+#SBATCH -e error/error.%A_%a.err
+#SBATCH --partition=ral
+# NEVER add gpu here (2026-09-30): CPU arrays on the gpu partition fill both A100 nodes' CPUs and idle all 8 GPUs; comments above that justify ral,gpu are superseded.
+#SBATCH -t 04:00:00
+#SBATCH --mem=8gb
+#SBATCH --array=0-9
+#
+# Rewrite positions.json with the new positions finder (positions_finder 2.1,
+# scripts/tools/rewrite_positions.py): backs up the old file to
+# positions_segmentation_v1.json once, writes positions.json + positions_meta.json,
+# and one positions_rewrite_part<I>.csv per array task under dataset/<SAMPLE>/.
+#
+# CPU only. Pure numpy/scipy/astropy, no JAX, no PyAutoLens: ~2 s/tile mean
+# (long tail to ~30 s), so 8 workers x 10 tasks clear 250 tiles in minutes.
+#
+# --export overrides (pass through hpc/sync submit):
+#   SAMPLE      dataset/<SAMPLE> to rewrite            (default dr1_sep1)
+#   TILES_FILE  only these tiles (path relative to PROJECT_PATH or absolute)
+#   FORCE=1     re-run tiles that are already current
+# The array size is the number of parts: every task gets the same tile list and
+# takes tiles i % NPARTS == TASK over the sorted names.
+#
+#   hpc/sync submit cpu submit_rewrite_positions --export=ALL,TILES_FILE=hpc/run_manifests/positions_priority_250.txt
+#   hpc/sync submit cpu submit_rewrite_positions --array=0-19
+
+export PROJECT_PATH="${PROJECT_PATH:-/mnt/ral/jnightin/active/euclid_dr1}"
+export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
+source "$PROJECT_PATH/activate.sh"
+set -e
+
+export OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+       VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 MPLBACKEND=Agg
+
+SAMPLE="${SAMPLE:-dr1_sep1}"
+PART=${SLURM_ARRAY_TASK_ID:-0}
+NPARTS=${SLURM_ARRAY_TASK_COUNT:-1}
+THREADS=${SLURM_CPUS_PER_TASK:-1}
+EXTRA=()
+if [ -n "${TILES_FILE:-}" ]; then
+    case "$TILES_FILE" in /*) ;; *) TILES_FILE="$PROJECT_PATH/$TILES_FILE" ;; esac
+    EXTRA+=(--tiles-file "$TILES_FILE")
+fi
+[ "${FORCE:-0}" = "1" ] && EXTRA+=(--force)
+
+echo "rewrite_positions: dataset/$SAMPLE part $PART/$NPARTS workers $THREADS ${EXTRA[*]:-}"
+date
+python3 "$PROJECT_PATH/scripts/tools/rewrite_positions.py" \
+    --root "$PROJECT_PATH/dataset/$SAMPLE" --part "$PART" --nparts "$NPARTS" \
+    --nproc "$THREADS" "${EXTRA[@]}"
+date

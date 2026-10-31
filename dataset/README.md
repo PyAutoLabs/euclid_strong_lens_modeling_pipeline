@@ -1,5 +1,11 @@
 # Datasets
 
+> **Where the data lives (2026-10-29).** On the laptop the `<sample>/` trees are no longer in
+> this folder: they live in the shared Science dataset folder,
+> `Science/dataset/euclid_dr1/` (`dr1_sep1/` and any new sample), and every script reaches them
+> through `project_paths.dataset_root()` — set by `DATASET_ROOT` in `hpc/sync.conf`. On RAL they
+> are still `<project>/dataset/`. This README stays here because it is tracked with the code.
+
 Every dataset this repository ships, what it is, and what reads it.
 
 `.gitignore` has `*.fits`, so **every FITS here was force-added** (`git add -f`). A new

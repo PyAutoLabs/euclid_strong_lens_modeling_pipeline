@@ -125,7 +125,7 @@ def fit_sersic(
       the first Gaussian of the MGE source basis, which stands in for the centre of
       the whole basis. Sub-sizes 16 / 4 / 2.
     - The *lens* map, computed on the image-plane grid and centred on the dataset
-      centre (the brightest central pixel). Sub-sizes 16 / 4 / 1.
+      centre (the brightest central pixel). Sub-sizes 16 / 4 / 2.
 
     The source map has to be built on the traced grid because the source's centre is
     a source-plane position: it is the *lensed* image of that centre, wherever the

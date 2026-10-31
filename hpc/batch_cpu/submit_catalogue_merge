@@ -1,0 +1,55 @@
+#!/bin/bash -l
+#
+# Merge step of the chunked DR1 catalogue build. Submitted by
+# submit_catalogue_chunked.sh with --dependency=afterok:<chunk array>; runs
+# scripts/tools/merge_catalogue.py over inspect/$CATALOGUE/ (see its docstring):
+# one catalogue (lens folders + merged root CSVs), QA CSVs, grades.csv,
+# wcs.csv / source_clumps.csv, lens_index.csv, README.md, and with
+# ARCHIVE=chunked the distribution zips in inspect/${CATALOGUE}_dist/.
+#
+# 4 CPUs (the part zips are written and verified in parallel) / 16 GB,
+# partition `ral` only. TMPDIR is a per-job directory on /mnt/ral, removed on
+# exit.
+
+#SBATCH -J euclid_dr1_cat_merge
+#SBATCH -n 1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16gb
+#SBATCH --partition=ral
+# NEVER add gpu here (2026-09-30): CPU arrays on the gpu partition fill both A100 nodes' CPUs and idle all 8 GPUs.
+#SBATCH -t 12:00:00
+#SBATCH -o output/output.%j.out
+#SBATCH -e error/error.%j.err
+
+export PROJECT_PATH="${PROJECT_PATH:-$(cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")}/../.." && pwd)}"
+export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
+source "$PROJECT_PATH/activate.sh"
+set -euo pipefail
+
+export JAX_PLATFORM_NAME=cpu JAX_PLATFORMS=cpu
+THREADS=${SLURM_CPUS_PER_TASK:-4}
+export OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 OMP_NUM_THREADS=1
+
+CATALOGUE=${CATALOGUE:?CATALOGUE not set}
+ARCHIVE=${ARCHIVE:-0}
+PART_MAX_GB=${PART_MAX_GB:-10}
+PARTS=${PARTS:-0}
+
+export TMPDIR="$PROJECT_PATH/.tmp_catalogue_${CATALOGUE}_merge_${SLURM_JOB_ID:-$$}"
+export NUMBA_CACHE_DIR="$TMPDIR/numba_cache" MPLCONFIGDIR="$TMPDIR/matplotlib"
+mkdir -p "$TMPDIR"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+echo "Merge     : $CATALOGUE  archive=$ARCHIVE  part cap ${PART_MAX_GB} GB  parts=${PARTS} (0 = by cap)"
+echo "Node      : $(hostname) (partition ${SLURM_JOB_PARTITION:-?})"
+date
+cd "$PROJECT_PATH"
+python3 scripts/tools/merge_catalogue.py \
+    --catalogue_dir="inspect/$CATALOGUE" \
+    --archive="$ARCHIVE" \
+    --part_max_gb="$PART_MAX_GB" \
+    --n_parts="$PARTS" \
+    --workers="$THREADS" \
+    ${ALLOW_PARTIAL:+--allow_partial}
+echo "Finished merge: $CATALOGUE"
+date

@@ -112,6 +112,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import project_paths  # noqa: E402
 import util
 from scripts.tools.diagnose_latent import resolve_files_path
 
@@ -1118,12 +1119,12 @@ def simulate(args):
         dataset_root = output_root / "simulator"
         print(
             f"[simulator] PYAUTO_TEST_MODE is set — writing to {dataset_root} rather than "
-            "dataset/ so the committed dataset is never clobbered "
+            "the dataset root so the committed dataset is never clobbered "
             "(--force-dataset-dir overrides).",
             flush=True,
         )
     else:
-        dataset_root = project_root / "dataset"
+        dataset_root = project_paths.dataset_root()
 
     dataset_path = dataset_root / args.output_sample / args.output_dataset
     dataset_path.mkdir(parents=True, exist_ok=True)
@@ -1176,9 +1177,9 @@ def simulate(args):
             replacement=args.sersic_index_replacement,
         )
         source_dataset_path = (
-            project_root / "dataset" / args.sample / args.dataset
+            project_paths.dataset_root() / args.sample / args.dataset
             if args.sample
-            else project_root / "dataset" / args.dataset
+            else project_paths.dataset_root() / args.dataset
         )
         band_setup, worst_band, worst_psf_fwhm = band_setup_from_dataset(
             dataset_path=source_dataset_path,
@@ -1537,7 +1538,7 @@ def simulate(args):
         output_sample=args.output_sample,
         tracer=truth_tracer,
         magzero=reference_magzero,
-        loadable=dataset_root == project_root / "dataset",
+        loadable=dataset_root == project_paths.dataset_root(),
     )
 
     truth = {

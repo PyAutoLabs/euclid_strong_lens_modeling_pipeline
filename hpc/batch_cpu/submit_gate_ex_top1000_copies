@@ -1,0 +1,45 @@
+#!/bin/bash -l
+#
+# Gate for submit_initial_lens_model_vis_lp_ex_top1000 (2026-10-07).
+#
+# hpc/tools/consolidate_dr1_sep1.py is still copying the 1,000 ex-top1000 tiles
+# from archive_top1000_20260925/ into dataset/dr1_sep1/ when the vis_lp array is
+# submitted. This job waits until every tile in the manifest is a complete dir
+# (not .partial) with its FITS and a finder-2.1 positions_meta.json, then exits 0.
+# The array is submitted with --dependency=afterok:<this job> --kill-on-invalid-dep=yes,
+# so a failed check (exit 1) or a timeout means the array never starts.
+#
+#SBATCH -J euclid_dr1_gate_ex_top1000
+#SBATCH -n 1
+#SBATCH --cpus-per-task=1
+#SBATCH -o output/output.%j.out
+#SBATCH -e error/error.%j.err
+#SBATCH --partition=ral
+#SBATCH -t 03:00:00
+#SBATCH --mem=1gb
+
+PROJECT_PATH=${PROJECT_PATH:-/mnt/ral/jnightin/active/euclid_dr1}
+MANIFEST=$PROJECT_PATH/hpc/run_manifests/vis_lp_ex_top1000_tonight_20261007.txt
+cd "$PROJECT_PATH/dataset/dr1_sep1" || exit 1
+
+while true; do
+    missing=0
+    while read -r t; do
+        t=${t%$'\r'}
+        [[ -f "$t/$t.fits" && ! -e "$t.partial" ]] || missing=$((missing + 1))
+    done < "$MANIFEST"
+    echo "$(date +%H:%M:%S) tiles not yet in place: $missing"
+    [[ $missing -eq 0 ]] && break
+    sleep 120
+done
+
+bad=0
+while read -r t; do
+    t=${t%$'\r'}
+    if ! grep -q '"version": "2.1"' "$t/positions_meta.json" 2>/dev/null; then
+        echo "BAD: $t has no finder-2.1 positions_meta.json"; bad=$((bad + 1))
+    fi
+done < "$MANIFEST"
+echo "tiles failing the finder-2.1 check: $bad"
+[[ $bad -eq 0 ]] || exit 1
+echo "gate passed: all $(wc -l < "$MANIFEST") tiles in place"

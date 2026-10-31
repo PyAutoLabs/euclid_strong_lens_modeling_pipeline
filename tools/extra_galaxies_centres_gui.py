@@ -35,6 +35,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from util import dataset_instrument_hdu_dict_via_fits_from
+import project_paths  # noqa: E402
 
 """
 __Dataset__
@@ -57,9 +58,9 @@ dataset_name = args.dataset
 sample_name = args.sample
 
 if sample_name is not None:
-    dataset_main_path = Path("dataset") / sample_name / dataset_name
+    dataset_main_path = project_paths.dataset_root() / sample_name / dataset_name
 else:
-    dataset_main_path = Path("dataset") / dataset_name
+    dataset_main_path = project_paths.dataset_root() / dataset_name
 dataset_fits_name = f"{dataset_name}.fits"
 
 # Resolve the VIS HDU index from the FITS file rather than hardcoding it —

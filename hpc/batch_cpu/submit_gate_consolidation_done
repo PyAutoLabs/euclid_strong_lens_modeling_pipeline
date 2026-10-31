@@ -1,0 +1,41 @@
+#!/bin/bash -l
+#
+# Gate for the SED gap-fill resubmission (2026-10-07).
+#
+# hpc/tools/consolidate_dr1_sep1.py is moving output{,_sed}/{dr1_sep1_rest,dr1_v2_new}/<tile>
+# into output{,_sed}/dr1_sep1/. An SED task that created output_sed/dr1_sep1/<tile> first
+# would make the mover refuse and stop. This job waits for the mover's END line in
+# moves.log, then checks the old sample dirs are gone and output_sed/dr1_sep1 holds the
+# 14,345 moved tiles, and exits 0. The SED arrays depend on it with afterok and
+# --kill-on-invalid-dep=yes: a failed check or timeout means they never start.
+#
+#SBATCH -J euclid_dr1_gate_consolidation
+#SBATCH -n 1
+#SBATCH --cpus-per-task=1
+#SBATCH -o output/output.%j.out
+#SBATCH -e error/error.%j.err
+#SBATCH --partition=ral
+#SBATCH -t 10:00:00
+#SBATCH --mem=1gb
+
+PROJECT_PATH=${PROJECT_PATH:-/mnt/ral/jnightin/active/euclid_dr1}
+cd "$PROJECT_PATH" || exit 1
+LOG=hpc/run_manifests/consolidate_dr1_sep1_20261007/moves.log
+
+until grep -q -P '\tEND\texecute\t' "$LOG"; do
+    echo "$(date +%H:%M:%S) mover still running: $(wc -l < "$LOG") log lines"
+    sleep 300
+done
+echo "mover finished: $(grep -P '\tEND\texecute\t' "$LOG" | tail -1)"
+
+bad=0
+for d in dataset output output_sed; do
+    for s in dr1_sep1_rest dr1_v2_new; do
+        [[ -e "$d/$s" ]] && { echo "BAD: $d/$s still exists"; bad=1; }
+    done
+done
+n=$(find output_sed/dr1_sep1 -mindepth 1 -maxdepth 1 -type d | wc -l)
+echo "output_sed/dr1_sep1 dirs: $n (expect 14345)"
+[[ $n -eq 14345 ]] || bad=1
+[[ $bad -eq 0 ]] || exit 1
+echo "gate passed"

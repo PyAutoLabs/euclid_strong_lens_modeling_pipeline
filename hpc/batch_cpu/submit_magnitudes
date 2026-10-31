@@ -1,0 +1,78 @@
+#!/bin/bash -l
+#
+# Write the multi-band magnitudes CSV for one sample, plus an SED completeness
+# audit, on the cluster.
+#
+# WHAT THIS DOES
+#   1. `scripts/tools/sed_completeness.py` over the SED manifests: per lens,
+#      which `<BAND>_BGSUB` bands the cut-out holds vs which
+#      `sersic_lens_model/<band>` searches have completed ->
+#      `$INSPECT_DIR/sed_completeness.csv` and `sed_missing_lenses.txt`.
+#   2. `catalogue/scripts/magnitudes.py` (stage 9 of
+#      scripts/build_inspection_bundle.sh) over `output_sed/<sample>` ->
+#      `$INSPECT_DIR/magnitudes.csv` (one row per completed lens x band; the
+#      aggregator is opened with completed_only=True, so an unfinished or
+#      timed-out band contributes no row) and per-lens copies.
+#   Fits nothing; safe to re-run as more SED fits finish.
+#
+# HOW TO SUBMIT
+#   hpc/sync submit cpu submit_magnitudes
+#   (`--partition=gpu` without --gres runs it CPU-only when `ral` is saturated)
+
+#SBATCH -J euclid_dr1_magnitudes
+#SBATCH -n 1
+#SBATCH --cpus-per-task=4
+#SBATCH -o output/output.%A.out
+#SBATCH -e error/error.%A.err
+#SBATCH --partition=ral
+# NEVER add gpu here (2026-09-30): CPU arrays on the gpu partition fill both A100 nodes' CPUs and idle all 8 GPUs; comments above that justify ral,gpu are superseded.
+#SBATCH -t 12:00:00
+#SBATCH --mem=16gb
+
+export PROJECT_PATH="${PROJECT_PATH:-$(cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")}/../.." && pwd)}"
+export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
+
+source "$PROJECT_PATH/activate.sh"
+set -e
+
+export JAX_PLATFORM_NAME=cpu
+export JAX_PLATFORMS=cpu
+THREADS=$SLURM_CPUS_PER_TASK
+export OPENBLAS_NUM_THREADS=$THREADS MKL_NUM_THREADS=$THREADS OMP_NUM_THREADS=$THREADS
+
+SAMPLE="${SAMPLE:-dr1_sep1}"
+SED_OUTPUT_DIR="${SED_OUTPUT_DIR:-output_sed}"
+INSPECT_DIR="${INSPECT_DIR:-inspect/${SAMPLE}_magnitudes}"
+MANIFESTS="${MANIFESTS:-hpc/run_manifests/positions_priority_250.txt hpc/run_manifests/vis_pix_sed_next5000_20260926_part01.txt hpc/run_manifests/vis_pix_sed_next5000_20260926_part02.txt hpc/run_manifests/vis_pix_sed_next5000_20260926_part03.txt hpc/run_manifests/vis_pix_sed_next5000_20260926_part04.txt hpc/run_manifests/vis_pix_sed_next5000_20260926_part05.txt}"
+
+echo "Project    : $PROJECT_PATH"
+echo "Sample     : $SAMPLE"
+echo "SED dir    : $SED_OUTPUT_DIR"
+echo "Inspect dir: $INSPECT_DIR"
+date
+
+cd "$PROJECT_PATH"
+
+# magnitudes.py opens the aggregator with unzip_temporary=True, which extracts
+# every result zip into $TMPDIR and holds them all until the process exits:
+# ~3 MB per band x ~40k bands is well over 100 GB, far beyond a node's /tmp.
+# Put the extraction on the project filesystem and remove it afterwards.
+export TMPDIR="$PROJECT_PATH/.tmp_magnitudes_${SLURM_JOB_ID:-$$}"
+mkdir -p "$TMPDIR"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+manifest_args=()
+for m in $MANIFESTS; do manifest_args+=(--manifest="$m"); done
+
+echo "==> SED completeness audit"
+python3 scripts/tools/sed_completeness.py --sample="$SAMPLE" \
+    --sed_output_path="$SED_OUTPUT_DIR" "${manifest_args[@]}" \
+    --out_dir="$INSPECT_DIR"
+date
+
+echo "==> magnitudes.csv"
+python3 catalogue/scripts/magnitudes.py --sample="$SAMPLE" \
+    --output_path="$SED_OUTPUT_DIR" --inspect_dir="$INSPECT_DIR"
+
+echo "Finished magnitudes: $SAMPLE"
+date

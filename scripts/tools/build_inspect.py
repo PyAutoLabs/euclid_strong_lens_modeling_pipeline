@@ -28,6 +28,22 @@ fitted before the pipeline started writing them simply has none:
 - ``coolest_sersic.json``             — ``sersic_lens_model/vis``'s
   ``files/coolest.json``, present only once that pipeline has run for the lens
 
+Also collected, best-effort (absent from results written before the pipeline
+produced them):
+
+- ``wcs_vis_lp.json`` / ``wcs_vis_pix.json`` — each stage's ``files/wcs.json``
+  (sky positions of the lens light, source and lensed images; the per-lens twin
+  of the ``wcs.csv`` that ``build_wcs_package.py`` writes for the catalogue);
+- ``vis_pix_source_plane_reconstruction_<i>.csv`` — the pixelized source
+  reconstruction(s) PyAutoLens writes into the ``vis_pix`` result as
+  ``image/source_plane_reconstruction_<i>.csv`` (one row per source-plane mesh
+  pixel). CSV only; no FITS is made of them.
+
+The Sersic fits are read from ``--sersic_output_path`` (default: the same tree
+as ``--output_path``). In the DR1 layout they live in the multi-band SED tree
+``output_sed/`` while ``vis_lp`` / ``vis_pix`` live in ``output/``, so the bundle
+builder passes ``$SED_OUTPUT_DIR`` here.
+
 This script *collects*, it never re-renders: images come out of the result zip
 that PyAutoFit writes when a search finishes, or — when the results have not
 been zipped, as in a ``PYAUTO_TEST_MODE`` run — out of the unzipped result
@@ -69,6 +85,13 @@ from PIL import Image
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+try:
+    import project_paths  # noqa: E402
+except ImportError:  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
+    from types import SimpleNamespace
+
+    project_paths = SimpleNamespace(dataset_root=lambda: PROJECT_ROOT / "dataset")
 
 DEFAULT_SAMPLE = "q1_walsmley"
 
@@ -108,6 +131,13 @@ def validate_asset(path: Path):
     if path.suffix.lower() == ".json":
         with path.open() as stream:
             json.load(stream)
+    elif path.suffix.lower() == ".csv":
+        import csv
+
+        with path.open(newline="") as stream:
+            header = next(csv.reader(stream), None)
+        if not header:
+            raise ValueError(f"{path}: empty CSV")
     else:
         with Image.open(path) as image:
             image.verify()
@@ -166,18 +196,56 @@ def result_source(search_dir: Path):
     return latest_zip(search_dir) or latest_result_dir(search_dir)
 
 
+RECONSTRUCTION_PREFIX = "image/source_plane_reconstruction_"
+
+
+def member_names(source) -> set:
+    """Every member path of a result (zip or unzipped directory)."""
+    if source is None:
+        return set()
+    if source.is_dir():
+        return {
+            path.relative_to(source).as_posix()
+            for path in source.rglob("*")
+            if path.is_file()
+        }
+    with zipfile.ZipFile(source) as archive:
+        return set(archive.namelist())
+
+
+def reconstruction_members(names) -> list:
+    """
+    The ``image/source_plane_reconstruction_<i>.csv`` members among ``names``,
+    sorted.
+    """
+    return sorted(
+        name
+        for name in names
+        if name.startswith(RECONSTRUCTION_PREFIX) and name.endswith(".csv")
+    )
+
+
 def process_dataset(
-    dataset_dir: Path, dataset_main_dir: Path, inspect_dir: Path
+    dataset_dir: Path,
+    dataset_main_dir: Path,
+    inspect_dir: Path,
+    sersic_dataset_dir: Optional[Path] = None,
 ) -> str:
     """
     Collect one lens's images and COOLEST templates. Returns ``built``,
     ``already``, ``skipped`` or ``error``.
+
+    ``sersic_dataset_dir`` is this lens's directory in the tree holding the
+    ``sersic_lens_model`` fits (``output_sed/<sample>/<lens>`` in the DR1
+    layout); default ``dataset_dir``.
     """
     dataset_name = dataset_dir.name
+    if sersic_dataset_dir is None:
+        sersic_dataset_dir = dataset_dir
 
     vis_lp_source = result_source(dataset_dir / "initial_lens_model" / "vis_lp")
     vis_pix_source = result_source(dataset_dir / "initial_lens_model" / "vis_pix")
-    sersic_source = result_source(dataset_dir / "sersic_lens_model" / "vis")
+    sersic_source = result_source(sersic_dataset_dir / "sersic_lens_model" / "vis")
 
     if vis_lp_source is None or vis_pix_source is None:
         print(
@@ -202,7 +270,22 @@ def process_dataset(
         targets["fit_sersic.png"] = out_dir / "fit_sersic.png"
         targets["coolest_sersic.json"] = out_dir / "coolest_sersic.json"
 
-    if all(path.exists() for path in targets.values()):
+    # Best-effort extras (see the module docstring): never make a lens
+    # incomplete, but an existing bundle without them is not "already" built.
+    # Only members the result actually holds are expected.
+    vis_lp_names = member_names(vis_lp_source)
+    vis_pix_names = member_names(vis_pix_source)
+    extras = {}
+    if "files/wcs.json" in vis_lp_names:
+        extras["wcs_vis_lp.json"] = (vis_lp_source, "files/wcs.json")
+    if "files/wcs.json" in vis_pix_names:
+        extras["wcs_vis_pix.json"] = (vis_pix_source, "files/wcs.json")
+    for member in reconstruction_members(vis_pix_names):
+        extras[f"vis_pix_{Path(member).name}"] = (vis_pix_source, member)
+
+    if all(path.exists() for path in targets.values()) and all(
+        (out_dir / name).exists() for name in extras
+    ):
         for path in targets.values():
             validate_asset(path)
         return "already"
@@ -245,6 +328,9 @@ def process_dataset(
             sersic_source, "files/coolest.json", targets["coolest_sersic.json"]
         )
 
+    for name, (source, member) in extras.items():
+        collect_member(source, member, out_dir / name)
+
     missing = [name for name, path in targets.items() if not path.exists()]
     if missing:
         print(
@@ -277,10 +363,29 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--sersic_output_path",
+        metavar="path",
+        default=None,
+        help=(
+            "Root results directory holding the sersic_lens_model fits "
+            "(fit_sersic.png, coolest_sersic.json). Default: --output_path. "
+            "The DR1 bundle passes output_sed."
+        ),
+    )
+    parser.add_argument(
         "--inspect_dir",
         metavar="path",
         default=None,
         help="Directory the PNGs are written to. Default: inspect/<sample>.",
+    )
+    parser.add_argument(
+        "--datasets_file",
+        metavar="path",
+        default=None,
+        help=(
+            "Optional text file of dataset names (one per line) to collect. "
+            "Default: every dataset of the sample."
+        ),
     )
     parser.add_argument(
         "--dataset_prefix",
@@ -310,13 +415,21 @@ def main() -> int:
     output_path = resolve(
         args.output_path, Path(os.environ.get("PYAUTO_OUTPUT_DIR", "output"))
     )
+    sersic_output_path = (
+        resolve(args.sersic_output_path, None)
+        if args.sersic_output_path
+        else output_path
+    )
     inspect_dir = resolve(args.inspect_dir, Path("inspect") / args.sample)
 
     results_dir = output_path / args.sample if args.sample else output_path
+    sersic_results_dir = (
+        sersic_output_path / args.sample if args.sample else sersic_output_path
+    )
     dataset_main_dir = (
-        PROJECT_ROOT / "dataset" / args.sample
+        project_paths.dataset_root() / args.sample
         if args.sample
-        else PROJECT_ROOT / "dataset"
+        else project_paths.dataset_root()
     )
 
     if not results_dir.is_dir():
@@ -327,16 +440,33 @@ def main() -> int:
 
     counts = {"built": 0, "already": 0, "skipped": 0, "error": 0}
     started = time.time()
+    if args.datasets_file:
+        with open(args.datasets_file) as stream:
+            requested = {
+                line.split("#", 1)[0].split()[0]
+                for line in stream
+                if line.split("#", 1)[0].strip()
+            }
+        candidates = (results_dir / name for name in requested)
+    else:
+        candidates = results_dir.iterdir()
     dataset_dirs = sorted(
         path
-        for path in results_dir.iterdir()
+        for path in candidates
         if path.is_dir() and path.name.startswith(args.dataset_prefix)
     )
     print(f"Scanning {len(dataset_dirs)} datasets in {results_dir}...", flush=True)
 
     try:
         for dataset_dir in dataset_dirs:
-            counts[process_dataset(dataset_dir, dataset_main_dir, inspect_dir)] += 1
+            counts[
+                process_dataset(
+                    dataset_dir,
+                    dataset_main_dir,
+                    inspect_dir,
+                    sersic_dataset_dir=sersic_results_dir / dataset_dir.name,
+                )
+            ] += 1
     except Exception:
         counts["error"] += 1
         raise

@@ -1,0 +1,96 @@
+#!/bin/bash -l
+#
+# Initial lens model, stage 1 of 2 on CPU: the `vis_lp` search only.
+#
+# THIS RUN (2026-10-07)
+#   The 1,000 ex-`dr1_sep1_top1000` tiles plus L023428
+#   (`Tile102023006RA0839565534204DECNEG0466215622438`, re-cut on its recentred sep28
+#   FITS) = 1,001 tiles of the consolidated sample `dataset/dr1_sep1/`, read from
+#   `hpc/run_manifests/vis_lp_rerun_20261015.txt` (task N = line N; v2_score
+#   descending, ties by tile name). All v2 grades (A 395 / B 546 / C+X 59 of the
+#   top1000, + L023428 B), as dr1_sep1_rest was run. The top1000's 09-18 fits (array
+#   343480, superseded positions) stay archived under
+#   `archive_top1000_20260925/`; these tiles must start with NO output, so a task
+#   exits if `output/dr1_sep1/<tile>/initial_lens_model/vis_lp/` already holds a zip.
+#   Inputs: the 09-24 flip / artefact-fix / segmentation redraw and finder-2.1
+#   positions (n_lt_2 / no positions.json fit with no positions penalty).
+#   Resources as the rest vis_lp (`submit_initial_lens_model_vis_lp_rest_p01`):
+#   4 CPU / 12 GB / 18 h, `%100`, partition ral only.
+#
+#   2026-10-07 evening: run as 997 tiles (manifest *_tonight_*) behind the gate job
+#   submit_gate_ex_top1000_copies; L023428 and the three top1000 tiles that also exist
+#   in sep28 wait for their sep28 swap and run separately.
+#
+# WHAT THIS DOES
+#   Fits the light-profile source model (`vis_lp`) with JAX pinned to the CPU
+#   backend, then exits. It does NOT fit the pixelized source; see
+#   `submit_initial_lens_model_vis_lp_rest_01` for why the two stages are
+#   separate processes.
+#
+# SUBMIT
+#   cd hpc/batch_cpu && sbatch --export=ALL,PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto,PROJECT_PATH=/mnt/ral/jnightin/active/euclid_dr1 \
+#       submit_initial_lens_model_vis_lp_ex_top1000
+#
+#SBATCH -J euclid_dr1_vis_lp_rerun_20261015
+#SBATCH -n 1
+#SBATCH --cpus-per-task=4
+#SBATCH -o output/output.%A_%a.out
+#SBATCH -e error/error.%A_%a.err
+#SBATCH --partition=ral
+# NEVER add gpu here (2026-09-30): CPU arrays on the gpu partition fill both A100 nodes' CPUs and idle all 8 GPUs; comments above that justify ral,gpu are superseded.
+#SBATCH -t 18:00:00
+#SBATCH --mem=12gb
+#SBATCH --array=0-104%105
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=james.w.nightingale@durham.ac.uk
+
+export PROJECT_PATH=/mnt/ral/jnightin/active/euclid_dr1
+export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
+
+source $PROJECT_PATH/activate.sh
+
+export JAX_PLATFORM_NAME=cpu
+export JAX_PLATFORMS=cpu
+
+THREADS=$SLURM_CPUS_PER_TASK
+export OPENBLAS_NUM_THREADS=$THREADS
+export MKL_NUM_THREADS=$THREADS
+export OMP_NUM_THREADS=$THREADS
+export VECLIB_MAXIMUM_THREADS=$THREADS
+export NUMEXPR_NUM_THREADS=$THREADS
+export NPROC=$THREADS
+
+sample=dr1_sep1
+manifest="$PROJECT_PATH/hpc/run_manifests/vis_lp_rerun_20261015.txt"
+mapfile -t datasets < "$manifest"
+
+INDEX=$SLURM_ARRAY_TASK_ID
+dataset="${datasets[$INDEX]}"
+
+if [[ ${#datasets[@]} -ne 105 || -z "$dataset" ]]; then
+    echo "ERROR: expected a 105-tile manifest and a dataset at index $INDEX" >&2
+    exit 1
+fi
+if [[ ! -f "$PROJECT_PATH/dataset/$sample/$dataset/$dataset.fits" ]]; then
+    echo "ERROR: dataset/$sample/$dataset/$dataset.fits is missing" >&2
+    exit 1
+fi
+if compgen -G "$PROJECT_PATH/output/$sample/$dataset/initial_lens_model/vis_lp/*.zip" > /dev/null; then
+    echo "ERROR: output/$sample/$dataset/initial_lens_model/vis_lp already has a zip; this batch must start clean" >&2
+    exit 1
+fi
+
+echo "=========================================="
+echo "Array task : $INDEX / ${#datasets[@]}"
+echo "Sample     : $sample"
+echo "Dataset    : $dataset"
+echo "Stage      : vis_lp (JAX on CPU)"
+echo "CPUs       : $THREADS"
+echo "Positions  : $(cat $PROJECT_PATH/dataset/$sample/$dataset/positions_meta.json 2>/dev/null || echo 'no positions_meta.json')"
+date
+
+python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \
+    --stage=vis_lp --number_of_cores=$THREADS
+
+echo "Finished vis_lp: $dataset"
+date

@@ -40,6 +40,7 @@ from astropy.io import fits
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import positions_finder  # noqa: E402
+import project_paths  # noqa: E402
 
 N_POSITIONS = 4
 
@@ -613,7 +614,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    dataset_root = Path("dataset") / args.sample
+    dataset_root = project_paths.dataset_root() / args.sample
 
     if args.dataset:
         lens_dirs = [dataset_root / args.dataset]

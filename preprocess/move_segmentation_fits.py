@@ -24,13 +24,16 @@ Usage (from project root)::
 import argparse
 import shutil
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import project_paths  # noqa: E402
 
 
 def main(
     sample_name: str, segmentation_name: str, dry_run: bool = False, force: bool = False
 ) -> None:
     Q1_OUTPUT = Path(segmentation_name) / sample_name
-    DATASET_ROOT = Path("dataset") / sample_name
+    DATASET_ROOT = project_paths.dataset_root() / sample_name
     walmsley_names = {d.name for d in DATASET_ROOT.iterdir() if d.is_dir()}
     q1_names = {d.name for d in Q1_OUTPUT.iterdir() if d.is_dir()}
 

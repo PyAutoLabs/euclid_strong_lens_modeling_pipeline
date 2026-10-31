@@ -75,6 +75,8 @@ fit already wrote.
 | `fit_sersic.png` | `scripts/tools/build_inspect.py` | collects `image/fit.png` | `sersic_lens_model/vis` |
 | `coolest.json` | `scripts/tools/build_inspect.py` | collects `files/coolest.json` (best-effort) | `initial_lens_model/vis_pix` |
 | `coolest_sersic.json` | `scripts/tools/build_inspect.py` | collects `files/coolest.json` (best-effort) | `sersic_lens_model/vis` |
+| `wcs_vis_lp.json` / `wcs_vis_pix.json` | `scripts/tools/build_inspect.py` | collects `files/wcs.json` (best-effort) | `initial_lens_model/vis_lp`, `vis_pix` |
+| `vis_pix_source_plane_reconstruction_<i>.csv` | `scripts/tools/build_inspect.py` | collects `image/source_plane_reconstruction_<i>.csv` (best-effort; CSV only, no FITS) | `initial_lens_model/vis_pix` |
 
 `build_inspect.py` never re-renders: it streams the image out of the result zip
 PyAutoFit writes when a search finishes, falling back to the unzipped result
@@ -121,12 +123,13 @@ bash scripts/build_inspection_bundle.sh dr1_prelim_grade_ab run250
 
 | Stage | Script | Reads | Writes |
 |---|---|---|---|
-| 1/10 | `scripts/tools/build_inspect.py` | `output/<sample>/` | the 6 collected PNGs + 2 COOLEST templates |
-| 2/10 | `catalogue/scripts/deblending.py` | `output/<sample>/` | `pre_psf.fits`, `model.fits` |
+| 1/10 | `scripts/tools/build_inspect.py` | `output/<sample>/` (+ `output_sed/<sample>/` for the Sersic fit) | the 6 collected PNGs, 2 COOLEST templates, 2 wcs JSONs, source-reconstruction CSVs |
+| 2/10 | `catalogue/scripts/deblending.py` | `output_sed/<sample>/` | `pre_psf.fits`, `model.fits` (newest result per band) |
+| 2b | `catalogue/scripts/deduplicate_deblending_fits.py` | the bundle | EXTNAME guard; `fits_deduplication_validation.csv` / `_summary.json` |
 | 3/10 | `catalogue/scripts/lens_mass_maps.py` | `output/<sample>/` | `convergence.fits`, `potential.fits`, `deflections.fits` |
 | 4/10 | `catalogue/scripts/lens_mass.py` | `output/<sample>/` | `lens_mass.csv` |
-| 5/10 | `catalogue/scripts/lens_sersic.py` | `output/<sample>/` | `lens_sersic.csv` |
-| 6/10 | `catalogue/scripts/source_sersic.py` | `output/<sample>/` | `source_sersic.csv` |
+| 5/10 | `catalogue/scripts/lens_sersic.py` | `output_sed/<sample>/` | `lens_sersic.csv` |
+| 6/10 | `catalogue/scripts/source_sersic.py` | `output_sed/<sample>/` | `source_sersic.csv` |
 | 7/10 | `catalogue/scripts/witt_wynne.py` | `output/<sample>/` | `witt_wynne.csv`, `witt_wynne.in` |
 | 8/10 | `catalogue/scripts/multi_wavelength.py` | `output_sed/<sample>/` | `fit_multi_wavelength.png` |
 | 9/10 | `catalogue/scripts/magnitudes.py` | `output_sed/<sample>/` | `magnitudes.csv` |
@@ -135,7 +138,12 @@ bash scripts/build_inspection_bundle.sh dr1_prelim_grade_ab run250
 Everything lands in `inspect/<sample>[_<run_tag>]/`, with the master CSVs at the
 root and one folder per lens holding that lens's own copy of every product.
 
-Stages 8-10 read a **separate** results tree. The multi-band SED fits are run
+Every stage keeps only the **newest** completed result per lens, stage and
+band (`catalogue_util.latest_result_per_lens_band`), so a retry sweep that
+re-fitted a band never adds a second row or HDU.
+
+All Sersic fits — the VIS `sersic_lens_model/vis` fit (stages 1, 5, 6) and the
+per-band ones (stages 2, 8-10) — live in the **separate** `output_sed` tree. The multi-band SED fits are run
 with `PYAUTO_OUTPUT_DIR=output_sed` (see `scripts/sersic_lens_model_waveband.py`
 and `scripts/lens_model_waveband.py`), so those three stages are skipped when
 `output_sed/<sample>/` does not exist. Set `SKIP_SED=1` to skip them
@@ -158,14 +166,140 @@ plus `preprocess/segmentation.py` for `segmentation.png`.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `OUTPUT_DIR` | `output` | results tree read by stages 1-7 |
-| `SED_OUTPUT_DIR` | `output_sed` | results tree read by stages 8-10 |
+| `OUTPUT_DIR` | `output` | vis_lp / vis_pix tree: stages 1, 3, 4, 7 |
+| `SED_OUTPUT_DIR` | `output_sed` | Sersic + SED tree: stages 1 (Sersic), 2, 5, 6, 8-10 |
 | `SKIP_SED` | `0` | `1` skips stages 8-10 |
-| `CREATE_ARCHIVE` | `1` | `0` skips the closing `tar czf` |
+| `CREATE_ARCHIVE` | `0` | `1` runs the closing `tar czf` |
+| `DATASETS_FILE` | *(empty)* | build only the lenses listed (one per line) |
+| `INSPECT_DIR` | `inspect/<sample>[_<run_tag>]` | bundle directory |
 | `DATASET_PREFIX` | *(empty)* | restrict stage 1 to lens folders with this name prefix (`Tile` for DR1) |
 
 Every producer can also be run on its own; each takes `--sample`,
-`--output_path` and `--inspect_dir`, and `--help` documents the rest.
+`--output_path`, `--inspect_dir` and `--datasets_file`, and `--help` documents
+the rest.
+
+### The full DR1 catalogue: chunked build on RAL
+
+One serial bundle is ~11 min per 100 lenses, ~27 h for DR1. The chunked build
+splits the tile list of every sample into N chunks (a `ral` array), then a merge
+job (`afterok`) assembles ONE catalogue over all samples, with the QA CSVs,
+`grades.csv`, `wcs.csv` / `source_clumps.csv` and, with `ARCHIVE=chunked`, the
+distribution zips (`catalogue_csvs.zip`, size-capped `catalogue_part_NN.zip`,
+`parts_manifest.csv`, `SHA256SUMS`):
+
+```bash
+ssh euclid_jump
+bash /mnt/ral/jnightin/active/euclid_dr1/hpc/batch_cpu/submit_catalogue_chunked.sh \
+    CATALOGUE=dr1_catalogue_<date> N=6 ARCHIVE=chunked PART_MAX_GB=10
+```
+
+`PARTS=<k>` instead writes exactly k part zips (contiguous in tile order,
+near-equal bytes; overrides `PART_MAX_GB`). `EXCLUDED_FILE=<csv>`
+(`tile,sample,reason`) records tiles deliberately left out of the build as
+`excluded_tiles.csv` at the catalogue root.
+
+See the header of `hpc/batch_cpu/submit_catalogue_chunked.sh` and the docstring
+of `scripts/tools/merge_catalogue.py`.
+
+### Release tiers
+
+A release is cut from ONE chunked build into three download tiers. All three
+carry the same snapshot cutoff and the same membership manifest
+(`catalogue/grades/dr1_sep1_consolidated_manifest.csv`, its
+`include_in_catalogue=True` rows), so a lens has the same values in each.
+
+**Membership and provenance.** The manifest is built by
+`scripts/tools/consolidated_manifest.py` from the lens-finding catalogue v5
+(Holloway, 19 Oct 2026), `catalogue/DR1_full_Object_Catalogue_v5_fits.csv`: one
+row per v5 Grade A/B object (15,072), keyed on the v5 `unique_identifier`, with
+its v5 `grade` / `score`, the dataset tile its existing model was fitted on and
+`include_in_catalogue` + `reason`. Nothing was remodelled for v5: 15,064 objects
+are included, and the 8 without a usable model (`no_model`, `model_unusable`)
+stay in the object list through `catalogue/grades/dr1_sep1_uncovered_ab.csv`,
+shipped as the snapshot's `excluded_<n>_candidates.csv`. Included objects whose
+fits never finished keep their row, flagged by the completion columns (and by
+`EXCLUDED_FILE` in the vis/full tiers). Details and counts:
+[`grades/README.md`](grades/README.md).
+
+| Tier | Per lens | Approx. size per lens |
+|------|----------|----------------------:|
+| `csv` | nothing: the CSV tables only | none (2026-10-11: 0.36 GB of tables, 0.12 GB zipped) |
+| `vis` | the VIS products below + the dataset cutout | ~2.5 MB + 1.2 MB |
+| `full` | the whole lens folder + the dataset cutout | ~7 MB + 1.2 MB |
+
+Sizes are estimates: ~7 MB is the 2026-10-07 build's average folder (10 x 10.7
+GB over 14,905 lenses); the vis figure and the 1.2 MB dataset cutout are
+measured on single local lenses. Multiply by ~15,000 lenses for a tier.
+
+Per-lens products:
+
+- **vis**: FITS `model.fits`, `pre_psf.fits`, `convergence.fits`,
+  `deflections.fits`, `potential.fits`; PNG `vis_lp_fit.png`, `vis_pix_fit.png`,
+  `vis_lp_image_with_positions.png`, `rgb.png`, `segmentation.png`; text
+  `coolest.json`, `wcs_vis_lp.json`, `wcs_vis_pix.json`, `lens_mass.csv`,
+  `lens_sersic.csv`, `source_sersic.csv`, `vis_pix_source_plane_reconstruction_<i>.csv`,
+  `witt_wynne.csv`, `witt_wynne.in`. The build's `model.fits` and `pre_psf.fits`
+  hold one HDU pair per band (VIS, NIR_Y, NIR_J, NIR_H) and ship whole in
+  every tier; the extra bands cost about 1 MB per lens.
+- **full**: every file in the lens folder, unchanged: the vis list plus `fit_multi_wavelength.png`,
+  `fit_sersic.png`, `coolest_sersic.json`, `magnitudes.csv`,
+  `astrometric_offsets.csv`. Its `catalogue_csvs.zip` also holds the build's
+  root tables under `catalogue_tables/` (not `lens_index.csv` or
+  `parts_manifest.csv`, which describe the build's own distribution).
+- **dataset cutout** (vis and full), under `<tile>/dataset/`: `<tile>.fits`
+  (every delivered band, unchanged), `segmentation/*.fits`, `positions*.json`,
+  `info.json`.
+
+Each tier directory `inspect/<CATALOGUE>_release/<tier>/` holds
+`catalogue_csvs.zip` (`README.md`, `KNOWN_ISSUES.md`, `snapshot.json`,
+`file_manifest.csv` with every zip member's bytes and sha256, the CSV tables
+under `csv/`, and for vis/full `parts_manifest.csv`, `missing_files.csv`,
+`excluded_tiles.csv`), the `catalogue_part_NN.zip` lens folders (vis/full),
+`SHA256SUMS` and, beside the zips, `snapshot.json`, `missing_files.csv` and
+`parts_manifest.csv`. `snapshot.json` records the cutoff, the manifest sha256,
+the project git HEAD, the product list, the lens count and missing files per
+product. A product absent from a lens folder (no Sersic fit, so no
+`fit_sersic.png`) is counted, never fatal. A manifest tile with no lens folder
+at all stops the packaging unless it is listed in `EXCLUDED` / `--excluded`.
+
+The tools: `scripts/tools/csv_snapshot/build.py` (the CSV tables, from stored
+result metadata, no refitting; the table set of the 2026-10-11
+`dr1_catalogue_15067_20261011_csv_only` release),
+`scripts/tools/package_release.py` (the tiers) and
+`hpc/batch_cpu/submit_release_package` (both, as one `ral` job).
+
+End to end on RAL:
+
+```bash
+ssh euclid_jump
+cd /mnt/ral/jnightin/active/euclid_dr1
+# 1. build + merge, tile list from the manifest (sample dr1_sep1)
+bash hpc/batch_cpu/submit_catalogue_chunked.sh CATALOGUE=dr1_catalogue_<date> \
+    MANIFEST=catalogue/grades/dr1_sep1_consolidated_manifest.csv N=6 [EXCLUDED_FILE=<csv>]
+# 2. after the merge job: CSV snapshot + the three tiers
+cd hpc/batch_cpu
+sbatch --dependency=afterok:<merge id> \
+    --export=ALL,CATALOGUE=dr1_catalogue_<date>,PARTS=10 submit_release_package
+```
+
+The merge does not need `ARCHIVE=chunked`; the release tiers replace its
+distribution. The snapshot cutoff defaults to the build start (the mtime of
+`inspect/<CATALOGUE>/_build/tiles.txt`), so the CSV tables select the same fits
+as the lens folders. If the packaging stops on tiles with no lens folder, they
+are written to `inspect/<CATALOGUE>_release_absent_tiles.csv`; review it, then
+re-submit with `EXCLUDED=<that csv>` and `SKIP_CSV=1`. `DRY=1` plans the tiers
+and writes nothing.
+
+A collaborator verifies a download by putting every file of the tier in one
+directory and running
+
+```bash
+sha256sum -c SHA256SUMS
+```
+
+Every line must print `OK`. The part zips never share a file, so they unzip
+into one directory. `file_manifest.csv` in `catalogue_csvs.zip` gives the sha256
+of every unzipped file.
 
 ---
 

@@ -37,3 +37,9 @@ PROJECT_NAME=euclid_strong_lens_modeling_pipeline
 # Appended to this project's own PULL_DIRS, never replacing them. Leave it unset
 # for the ordinary pull.
 # PYAUTO_PULL_DIRS=
+
+# Where this machine keeps the project's datasets (the <sample>/<dataset>/ trees).
+# Unset: <project>/dataset. On the laptop they live in the shared Science dataset
+# folder. The remote is always ${HPC_BASE}/${PROJECT_NAME}/dataset/. Read by
+# hpc/sync (push, push-data-init) and by project_paths.py (every script).
+# DATASET_ROOT=/mnt/c/Users/Jammy/Workspace/Science/dataset/euclid_dr1

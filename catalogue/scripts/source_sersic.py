@@ -99,9 +99,9 @@ def main(counts):
         print(f"no sample directory at {sample_root}; nothing to do")
         return
 
-    agg = Aggregator.from_directory(
-        directory=sample_root, completed_only=True, unzip_temporary=True
-    )
+    # Newest result per lens/search (a re-fit leaves two), scoped to
+    # ``--datasets_file`` when given (one chunk of a chunked build).
+    agg = catalogue_util.sample_aggregator(sample_root, args.datasets_file)
 
     agg_query = agg.query(agg.unique_tag == args.unique_tag)
     agg_query = agg_query.query(agg_query.search.name == args.search_name)

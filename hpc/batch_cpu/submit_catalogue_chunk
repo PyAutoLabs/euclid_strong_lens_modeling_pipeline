@@ -1,0 +1,73 @@
+#!/bin/bash -l
+#
+# One chunk of the chunked DR1 catalogue build (array task k = chunk k).
+# Submitted by submit_catalogue_chunked.sh — see that script for the design; do
+# not sbatch this by hand except to re-run one failed chunk (the driver prints
+# the command).
+#
+# Task k reads inspect/$CATALOGUE/_build/chunk_<k>.txt ("<sample> <tile>" lines)
+# and, per sample, runs scripts/build_inspection_bundle.sh scoped to its tiles
+# (DATASETS_FILE) into _build/chunk_<k>/<sample>/. On success it touches
+# _build/chunk_<k>.done, which the merge requires.
+#
+# RESOURCES: 4 CPUs / 16 GB / walltime set by the driver from the chunk size,
+# partition `ral` only. The producers are serial, I/O-bound unzip-and-read work;
+# 16 GB holds a chunk's pooled aggregator (~2,500 lenses x 9 searches).
+# TMPDIR: the aggregators extract every result zip they open into $TMPDIR and
+# hold them until the producer exits (~20 MB per lens of SED results) — far
+# beyond a node's /tmp — so it is a per-task directory on /mnt/ral, removed on
+# exit.
+
+#SBATCH -J euclid_dr1_cat_chunk
+#SBATCH -n 1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16gb
+#SBATCH --partition=ral
+# NEVER add gpu here (2026-09-30): CPU arrays on the gpu partition fill both A100 nodes' CPUs and idle all 8 GPUs.
+#SBATCH -t 12:00:00
+#SBATCH -o output/output.%A_%a.out
+#SBATCH -e error/error.%A_%a.err
+
+export PROJECT_PATH="${PROJECT_PATH:-$(cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")}/../.." && pwd)}"
+export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
+source "$PROJECT_PATH/activate.sh"
+set -euo pipefail
+
+export JAX_PLATFORM_NAME=cpu JAX_PLATFORMS=cpu
+THREADS=${SLURM_CPUS_PER_TASK:-4}
+export OPENBLAS_NUM_THREADS=$THREADS MKL_NUM_THREADS=$THREADS OMP_NUM_THREADS=$THREADS
+export VECLIB_MAXIMUM_THREADS=$THREADS NUMEXPR_NUM_THREADS=$THREADS
+
+CATALOGUE=${CATALOGUE:?CATALOGUE not set}
+K=$(printf '%02d' "${SLURM_ARRAY_TASK_ID:?not an array task}")
+BUILD=$PROJECT_PATH/inspect/$CATALOGUE/_build
+CHUNK_LIST=$BUILD/chunk_$K.txt
+CHUNK_DIR=$BUILD/chunk_$K
+
+export TMPDIR="$PROJECT_PATH/.tmp_catalogue_${CATALOGUE}_${SLURM_ARRAY_JOB_ID:-$$}_$K"
+export NUMBA_CACHE_DIR="$TMPDIR/numba_cache" MPLCONFIGDIR="$TMPDIR/matplotlib"
+mkdir -p "$TMPDIR" "$CHUNK_DIR"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+export OUTPUT_DIR=output SED_OUTPUT_DIR=output_sed CREATE_ARCHIVE=0
+rm -f "$BUILD/chunk_$K.done"
+
+echo "=========================================="
+echo "Catalogue : $CATALOGUE  chunk $K  ($(wc -l < "$CHUNK_LIST") lenses)"
+echo "Node      : $(hostname) (partition ${SLURM_JOB_PARTITION:-?})"
+echo "TMPDIR    : $TMPDIR"
+date
+
+cd "$PROJECT_PATH"
+for sample in $(awk '{print $1}' "$CHUNK_LIST" | sort -u); do
+    list="$CHUNK_DIR/datasets_$sample.txt"
+    awk -v s="$sample" '$1 == s {print $2}' "$CHUNK_LIST" > "$list"
+    echo "########## $sample: $(wc -l < "$list") lenses ##########"
+    INSPECT_DIR="$CHUNK_DIR/$sample" DATASETS_FILE="$list" \
+        bash scripts/build_inspection_bundle.sh "$sample"
+    date
+done
+
+touch "$BUILD/chunk_$K.done"
+echo "Finished chunk $K"
+date

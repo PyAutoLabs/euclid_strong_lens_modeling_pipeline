@@ -120,9 +120,9 @@ def main(counts):
     """
     # One aggregator over the whole sample. completed_only filters out lenses
     # whose search has not produced a `.completed` marker.
-    agg = Aggregator.from_directory(
-        directory=sample_root, completed_only=True, unzip_temporary=True
-    )
+    # Newest result per lens/search (a re-fit leaves two), scoped to
+    # ``--datasets_file`` when given (one chunk of a chunked build).
+    agg = catalogue_util.sample_aggregator(sample_root, args.datasets_file)
 
     """
     __Query: Pipeline Stage And Search__

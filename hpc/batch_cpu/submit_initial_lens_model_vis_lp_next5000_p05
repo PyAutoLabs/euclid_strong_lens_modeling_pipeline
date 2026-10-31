@@ -1,0 +1,81 @@
+#!/bin/bash -l
+#
+# Initial lens model, stage 1 of 2 on CPU: the `vis_lp` search only.
+#
+# THIS RUN
+#   Part 05 of 5 covering the NEXT 5,000 lenses of `dataset/dr1_sep1_rest/`
+#   after the first 250 (array 350804): tiles 250-5249 of the tile-ID-ordered
+#   union of the rest_01..15 dataset lists, skipping 4 tiles with a missing
+#   FITS or an empty info.json, read from
+#   `hpc/run_manifests/vis_lp_next5000_20260925_part05.txt` (task N = line N). All positions are the
+#   finder-2.1 files rolled out on 2026-09-25; 109 of the 5,000 have no
+#   positions.json and fit with no positions penalty.
+#
+# WHAT THIS DOES
+#   Fits the light-profile source model (`vis_lp`) with JAX pinned to the CPU
+#   backend, then exits. It does NOT fit the pixelized source; see
+#   `submit_initial_lens_model_vis_lp_rest_01` for why the two stages are
+#   separate processes.
+#
+# SUBMIT
+#   hpc/sync submit cpu submit_initial_lens_model_vis_lp_next5000_p05
+#
+#SBATCH -J euclid_dr1_vis_lp_n5k_p05
+#SBATCH -n 1
+#SBATCH --cpus-per-task=8
+#SBATCH -o output/output.%A_%a.out
+#SBATCH -e error/error.%A_%a.err
+#SBATCH --partition=ral
+# NEVER add gpu here (2026-09-30): CPU arrays on the gpu partition fill both A100 nodes' CPUs and idle all 8 GPUs; comments above that justify ral,gpu are superseded.
+#SBATCH -t 18:00:00
+#SBATCH --mem=64gb
+#SBATCH --array=0-999%100
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=james.w.nightingale@durham.ac.uk
+
+export PROJECT_PATH=/mnt/ral/jnightin/active/euclid_dr1
+export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
+
+source $PROJECT_PATH/activate.sh
+
+export JAX_PLATFORM_NAME=cpu
+export JAX_PLATFORMS=cpu
+
+THREADS=$SLURM_CPUS_PER_TASK
+export OPENBLAS_NUM_THREADS=$THREADS
+export MKL_NUM_THREADS=$THREADS
+export OMP_NUM_THREADS=$THREADS
+export VECLIB_MAXIMUM_THREADS=$THREADS
+export NUMEXPR_NUM_THREADS=$THREADS
+export NPROC=$THREADS
+
+sample=dr1_sep1_rest
+manifest="$PROJECT_PATH/hpc/run_manifests/vis_lp_next5000_20260925_part05.txt"
+mapfile -t datasets < "$manifest"
+
+INDEX=$SLURM_ARRAY_TASK_ID
+dataset="${datasets[$INDEX]}"
+
+if [[ ${#datasets[@]} -ne 1000 || -z "$dataset" ]]; then
+    echo "ERROR: expected a 1000-tile manifest and a dataset at index $INDEX" >&2
+    exit 1
+fi
+if [[ ! -f "$PROJECT_PATH/dataset/$sample/$dataset/$dataset.fits" ]]; then
+    echo "ERROR: dataset/$sample/$dataset/$dataset.fits is missing" >&2
+    exit 1
+fi
+
+echo "=========================================="
+echo "Array task : $INDEX / ${#datasets[@]}"
+echo "Sample     : $sample"
+echo "Dataset    : $dataset"
+echo "Stage      : vis_lp (JAX on CPU)"
+echo "CPUs       : $THREADS"
+echo "Positions  : $(cat $PROJECT_PATH/dataset/$sample/$dataset/positions_meta.json 2>/dev/null || echo 'no positions_meta.json')"
+date
+
+python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \
+    --stage=vis_lp --number_of_cores=$THREADS
+
+echo "Finished vis_lp: $dataset"
+date
