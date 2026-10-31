@@ -59,8 +59,11 @@ NON-PRODUCTION DIAGNOSTICS
     ``inspect/positions_census/research/`` (``SYNTHESIS.md``,
     ``B_final_method.md``).
 
-All positions are PyAutoLens ``(y, x)`` arcsec (y up, x right, origin at the
-frame centre, half-pixel offset convention).
+All positions are PyAutoLens ``(y, x)`` arcsec (origin at the frame centre,
+half-pixel offset convention). +y is up and +x right on the pipeline's own
+plots (array row 0 at the top), but the FITS is read with no row flip, so for
+the north-up DR1 cutouts +y points south and +x west on the sky. Use the
+RA / Dec in a fit's ``wcs.json`` for sky directions.
 """
 
 import hashlib
