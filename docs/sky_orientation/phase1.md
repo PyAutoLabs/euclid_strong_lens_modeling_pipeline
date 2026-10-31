@@ -73,7 +73,10 @@ laptop rather than RAL: same files, headers only).
 
 - **15,032 / 15,032 pass every check:** CD1_1 = -0.1"/px and CD2_2 = +0.1"/px exactly, with no
   rotation, no parity outlier and shape 100x100.
-- **2 tile folders contain no cutout FITS** (`no_fits`), so the scan skipped them.
+- **2 folders contain no cutout FITS** (`no_fits`), so the scan skipped them:
+  - `positions_rewrite_priority250/` is not a tile; it holds positions-rewrite CSVs.
+  - `Tile102012389RA0685761206842DECNEG0584642793881/` is a real tile holding only positions JSONs:
+    its cutout is missing locally (check on RAL).
 
 The conversion rules above therefore hold for every DR1 cutout. `conversions.py` stays general
 (any CD matrix) for future samples.
