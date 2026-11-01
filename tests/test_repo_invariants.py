@@ -35,9 +35,15 @@ NO_RUN = PROJECT_ROOT / "config" / "build" / "no_run.yaml"
 SIMULATOR = PROJECT_ROOT / "scripts" / "simulator.py"
 
 # Tokens that mean "this file can bring a dataset into being". ``SimulatorImaging``
-# is the library entry point; ``should_simulate`` / ``auto_simulate`` are the
-# workspace idioms for the simulate-if-missing fallback.
-AUTO_SIMULATE_TOKENS = ("SimulatorImaging", "should_simulate", "auto_simulate")
+# is the library entry point; ``should_simulate`` / ``simulate_if_needed`` /
+# ``auto_simulate`` are the workspace idioms for the simulate-if-missing fallback
+# (``simulate_if_needed`` is the one-line wrapper around ``should_simulate``).
+AUTO_SIMULATE_TOKENS = (
+    "SimulatorImaging",
+    "should_simulate",
+    "simulate_if_needed",
+    "auto_simulate",
+)
 
 # The trees the release mega-run walks (the runner is pointed at "." for this
 # repository, and `find_scripts_in_folder` rglobs — dotted directories
