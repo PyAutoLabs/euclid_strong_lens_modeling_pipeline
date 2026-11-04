@@ -15,6 +15,7 @@ Usage:
     python scripts/research/sky_orientation/positions_overlay.py \
         --output <euclid_dr1>/output/dr1_sep1 --dataset <dataset>/dr1_sep1 --out <dir> [--n 8]
 """
+
 import argparse
 import glob
 import json
@@ -59,7 +60,9 @@ def main():
     os.makedirs(a.out, exist_ok=True)
 
     cands = []
-    for zp in sorted(glob.glob(os.path.join(a.output, "*", "initial_lens_model", "vis_lp", "*.zip"))):
+    for zp in sorted(
+        glob.glob(os.path.join(a.output, "*", "initial_lens_model", "vis_lp", "*.zip"))
+    ):
         tile = zp.split(os.sep)[-4]
         pos_path = os.path.join(a.dataset, tile, "positions.json")
         if not os.path.exists(pos_path):
@@ -71,37 +74,90 @@ def main():
 
     summary = []
     for _, tile, zp, pos in cands[: a.n]:
-        fpath = [q for q in glob.glob(os.path.join(a.dataset, tile, "*.fits")) if "segmentation" not in q][0]
+        fpath = [
+            q
+            for q in glob.glob(os.path.join(a.dataset, tile, "*.fits"))
+            if "segmentation" not in q
+        ][0]
         with fits.open(fpath) as h:
             vis, header = h["VIS_BGSUB"].data.astype(float), h["VIS_BGSUB"].header
         wcs = WCS(header)
         with zipfile.ZipFile(zp) as z:
             wj = json.loads(z.read("files/wcs.json"))["arguments"]
         r, c = native_to_pixel(pos, vis.shape)
-        ra, dec = listed(wj, "lensed_source_image_ra_deg"), listed(wj, "lensed_source_image_dec_deg")
+        ra, dec = listed(wj, "lensed_source_image_ra_deg"), listed(
+            wj, "lensed_source_image_dec_deg"
+        )
         sx, sy = wcs.wcs_world2pix(np.array(ra), np.array(dec), 0) if ra else ([], [])
-        my, mx = np.array(listed(wj, "lensed_source_image_y_arcsec")), np.array(listed(wj, "lensed_source_image_x_arcsec"))
+        my, mx = np.array(listed(wj, "lensed_source_image_y_arcsec")), np.array(
+            listed(wj, "lensed_source_image_x_arcsec")
+        )
         mr, mc = native_to_pixel(np.c_[my, mx], vis.shape) if len(my) else ([], [])
-        d = float(np.max(np.hypot(np.asarray(sx) - mc, np.asarray(sy) - mr))) if len(my) else float("nan")
+        d = (
+            float(np.max(np.hypot(np.asarray(sx) - mc, np.asarray(sy) - mr)))
+            if len(my)
+            else float("nan")
+        )
         summary.append((tile, len(pos), d))
 
         lo, hi = np.percentile(vis, [1, 99.5])
         fig, ax = plt.subplots(1, 2, figsize=(9, 4.6))
-        for k, (title, origin) in enumerate([("pipeline frame (origin=upper)\n+y south, +x west", "upper"),
-                                             ("north up, east left (origin=lower)", "lower")]):
+        for k, (title, origin) in enumerate(
+            [
+                ("pipeline frame (origin=upper)\n+y south, +x west", "upper"),
+                ("north up, east left (origin=lower)", "lower"),
+            ]
+        ):
             ax[k].imshow(vis, origin=origin, cmap="gray", vmin=lo, vmax=hi)
-            ax[k].plot(c, r, "x", color="orange", ms=10, mew=2, label="positions.json (native)")
+            ax[k].plot(
+                c, r, "x", color="orange", ms=10, mew=2, label="positions.json (native)"
+            )
             if k == 1 and len(sx):
-                ax[k].plot(sx, sy, "o", mfc="none", mec="cyan", ms=12, mew=1.5, label="wcs.json RA/Dec (astropy)")
+                ax[k].plot(
+                    sx,
+                    sy,
+                    "o",
+                    mfc="none",
+                    mec="cyan",
+                    ms=12,
+                    mew=1.5,
+                    label="wcs.json RA/Dec (astropy)",
+                )
             ax[k].set_title(title, fontsize=9)
             ax[k].set_xticks([])
             ax[k].set_yticks([])
-        ax[1].annotate("", xy=(0.9, 0.95), xytext=(0.9, 0.78), xycoords="axes fraction",
-                       arrowprops=dict(arrowstyle="->", color="w"))
-        ax[1].text(0.9, 0.96, "N", color="w", transform=ax[1].transAxes, ha="center", va="bottom")
-        ax[1].annotate("", xy=(0.73, 0.78), xytext=(0.9, 0.78), xycoords="axes fraction",
-                       arrowprops=dict(arrowstyle="->", color="w"))
-        ax[1].text(0.71, 0.78, "E", color="w", transform=ax[1].transAxes, ha="right", va="center")
+        ax[1].annotate(
+            "",
+            xy=(0.9, 0.95),
+            xytext=(0.9, 0.78),
+            xycoords="axes fraction",
+            arrowprops=dict(arrowstyle="->", color="w"),
+        )
+        ax[1].text(
+            0.9,
+            0.96,
+            "N",
+            color="w",
+            transform=ax[1].transAxes,
+            ha="center",
+            va="bottom",
+        )
+        ax[1].annotate(
+            "",
+            xy=(0.73, 0.78),
+            xytext=(0.9, 0.78),
+            xycoords="axes fraction",
+            arrowprops=dict(arrowstyle="->", color="w"),
+        )
+        ax[1].text(
+            0.71,
+            0.78,
+            "E",
+            color="w",
+            transform=ax[1].transAxes,
+            ha="right",
+            va="center",
+        )
         ax[1].legend(loc="lower left", fontsize=7)
         fig.suptitle(tile, fontsize=9)
         fig.tight_layout()

@@ -67,18 +67,26 @@ def main():
         completed = bands(row["completed_bands"])
         have = mag_bands.get(tile, set())
         if len(have) < len(completed):
-            short.append({
-                "tile_name": tile,
-                "completed_band_count": len(completed),
-                "magnitude_band_count": len(have),
-                "missing_magnitude_bands": ";".join(sorted(completed - have)),
-                "qa_fully_complete": row.get("fully_complete", ""),
-            })
+            short.append(
+                {
+                    "tile_name": tile,
+                    "completed_band_count": len(completed),
+                    "magnitude_band_count": len(have),
+                    "missing_magnitude_bands": ";".join(sorted(completed - have)),
+                    "qa_fully_complete": row.get("fully_complete", ""),
+                }
+            )
     with open(out / "magnitude_rows_short.csv", "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["tile_name", "completed_band_count",
-                                          "magnitude_band_count",
-                                          "missing_magnitude_bands",
-                                          "qa_fully_complete"])
+        w = csv.DictWriter(
+            f,
+            fieldnames=[
+                "tile_name",
+                "completed_band_count",
+                "magnitude_band_count",
+                "missing_magnitude_bands",
+                "qa_fully_complete",
+            ],
+        )
         w.writeheader()
         w.writerows(short)
 
@@ -93,9 +101,13 @@ def main():
     for tile, sample in lenses:
         folder = cat / tile
         if not folder.is_dir():
-            missing_model.append({"tile_name": tile, "sample": sample, "reason": "no_lens_folder"})
+            missing_model.append(
+                {"tile_name": tile, "sample": sample, "reason": "no_lens_folder"}
+            )
         elif not (folder / "model.fits").exists():
-            missing_model.append({"tile_name": tile, "sample": sample, "reason": "no_model_fits"})
+            missing_model.append(
+                {"tile_name": tile, "sample": sample, "reason": "no_model_fits"}
+            )
     with open(out / "no_model_fits.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["tile_name", "sample", "reason"])
         w.writeheader()

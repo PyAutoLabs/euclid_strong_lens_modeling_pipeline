@@ -116,7 +116,6 @@ import project_paths  # noqa: E402
 import util
 from scripts.tools.diagnose_latent import resolve_files_path
 
-
 SIMULATOR_VERSION = "1.0"
 
 DEFAULT_OUTPUT_SAMPLE = "simulated"

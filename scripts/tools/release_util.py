@@ -134,7 +134,9 @@ def add_file_hashed(archive: zipfile.ZipFile, source: Path, arcname: str):
     info.compress_type = compression_for(source)
     digest = hashlib.sha256()
     size = 0
-    with Path(source).open("rb") as src, archive.open(info, "w", force_zip64=True) as dest:
+    with Path(source).open("rb") as src, archive.open(
+        info, "w", force_zip64=True
+    ) as dest:
         for block in iter(lambda: src.read(HASH_BLOCK), b""):
             digest.update(block)
             dest.write(block)
@@ -142,7 +144,9 @@ def add_file_hashed(archive: zipfile.ZipFile, source: Path, arcname: str):
     return size, digest.hexdigest()
 
 
-def add_bytes_hashed(archive: zipfile.ZipFile, data: bytes, arcname: str, like: Path = None):
+def add_bytes_hashed(
+    archive: zipfile.ZipFile, data: bytes, arcname: str, like: Path = None
+):
     """Write in-memory ``data`` as ``arcname`` (compression chosen from the
     arcname's suffix; timestamp from ``like`` when given); return
     ``(bytes, sha256)``."""

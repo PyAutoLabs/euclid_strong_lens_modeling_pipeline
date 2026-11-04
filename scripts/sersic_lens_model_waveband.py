@@ -39,7 +39,6 @@ from scripts.initial_lens_model import fit
 from scripts.sersic_lens_model import fit_sersic
 from scripts.lens_model_waveband import fit_waveband
 
-
 if __name__ == "__main__":
     (
         sample_name,

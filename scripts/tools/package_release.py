@@ -82,19 +82,49 @@ from release_util import (  # noqa: E402
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "csv_snapshot"))
-from common import file_sha256, git_revision, included_rows, read_csv, utc_iso  # noqa: E402
+from common import (
+    file_sha256,
+    git_revision,
+    included_rows,
+    read_csv,
+    utc_iso,
+)  # noqa: E402
 
 TIERS = ("csv", "vis", "full")
 
-VIS_FITS = ["model.fits", "pre_psf.fits", "convergence.fits", "deflections.fits", "potential.fits"]
-VIS_PNGS = ["vis_lp_fit.png", "vis_pix_fit.png", "vis_lp_image_with_positions.png", "rgb.png", "segmentation.png"]
+VIS_FITS = [
+    "model.fits",
+    "pre_psf.fits",
+    "convergence.fits",
+    "deflections.fits",
+    "potential.fits",
+]
+VIS_PNGS = [
+    "vis_lp_fit.png",
+    "vis_pix_fit.png",
+    "vis_lp_image_with_positions.png",
+    "rgb.png",
+    "segmentation.png",
+]
 VIS_TEXT = [
-    "coolest.json", "wcs_vis_lp.json", "wcs_vis_pix.json", "lens_mass.csv", "lens_sersic.csv",
-    "source_sersic.csv", "witt_wynne.csv", "witt_wynne.in",
+    "coolest.json",
+    "wcs_vis_lp.json",
+    "wcs_vis_pix.json",
+    "lens_mass.csv",
+    "lens_sersic.csv",
+    "source_sersic.csv",
+    "witt_wynne.csv",
+    "witt_wynne.in",
 ]
 VIS_PRODUCTS = VIS_FITS + VIS_PNGS + VIS_TEXT
 SOURCE_RECONSTRUCTION = "vis_pix_source_plane_reconstruction_*.csv"
-FULL_EXTRA = ["fit_multi_wavelength.png", "fit_sersic.png", "coolest_sersic.json", "magnitudes.csv", "astrometric_offsets.csv"]
+FULL_EXTRA = [
+    "fit_multi_wavelength.png",
+    "fit_sersic.png",
+    "coolest_sersic.json",
+    "magnitudes.csv",
+    "astrometric_offsets.csv",
+]
 FULL_PRODUCTS = VIS_PRODUCTS + FULL_EXTRA
 MULTI_BAND_PRODUCTS = set(FULL_EXTRA)
 # FITS with one HDU pair per band. The human chose (2026-10-15) to ship them whole in every tier;
@@ -156,14 +186,20 @@ def read_excluded(path):
 # ---------------------------------------------------------------------------
 
 
-def plan_tile(tile, tier, catalogue_dir: Path, dataset_dir: Path, png_palette=PNG_PALETTE):
+def plan_tile(
+    tile, tier, catalogue_dir: Path, dataset_dir: Path, png_palette=PNG_PALETTE
+):
     """``(members, missing)`` for one lens. A member is ``(kind, source, arc,
     size)`` with ``kind`` ``file``, ``vis_fits`` (rewrite to VIS HDUs) or
     ``png_palette`` (256-colour palette PNG) and ``arc`` relative to the zip
     root; ``size`` is the source size. ``missing`` lists absent product names."""
     lens_dir = catalogue_dir / tile
     members, missing = [], []
-    present = {p.name: p for p in lens_dir.iterdir() if p.is_file() and not p.name.startswith(".")}
+    present = {
+        p.name: p
+        for p in lens_dir.iterdir()
+        if p.is_file() and not p.name.startswith(".")
+    }
     if tier == "full":
         chosen = sorted(present)
         missing += [name for name in FULL_PRODUCTS if name not in present]
@@ -184,7 +220,11 @@ def plan_tile(tile, tier, catalogue_dir: Path, dataset_dir: Path, png_palette=PN
     seen = set()
     for pattern in DATASET_EXPECTED + DATASET_OPTIONAL:
         pattern = pattern.format(tile=tile)
-        found = sorted(p for p in data_dir.glob(pattern) if p.is_file()) if data_dir.is_dir() else []
+        found = (
+            sorted(p for p in data_dir.glob(pattern) if p.is_file())
+            if data_dir.is_dir()
+            else []
+        )
         if not found and pattern in [p.format(tile=tile) for p in DATASET_EXPECTED]:
             missing.append(f"dataset/{pattern.replace(tile, '{tile}')}")
         for path in found:
@@ -192,7 +232,9 @@ def plan_tile(tile, tier, catalogue_dir: Path, dataset_dir: Path, png_palette=PN
             if relative in seen:
                 continue
             seen.add(relative)
-            members.append(("file", str(path), f"{tile}/dataset/{relative}", path.stat().st_size))
+            members.append(
+                ("file", str(path), f"{tile}/dataset/{relative}", path.stat().st_size)
+            )
     return members, missing
 
 
@@ -200,7 +242,9 @@ def plan_tier(tier, tiles, catalogue_dir, dataset_dir, png_palette=PNG_PALETTE):
     """Members and missing products of every lens of a vis / full tier."""
     plans, missing_rows = {}, []
     for tile in tiles:
-        members, missing = plan_tile(tile, tier, catalogue_dir, dataset_dir, png_palette)
+        members, missing = plan_tile(
+            tile, tier, catalogue_dir, dataset_dir, png_palette
+        )
         plans[tile] = members
         missing_rows += [(tile, product) for product in missing]
     return plans, missing_rows
@@ -217,7 +261,11 @@ def vis_only_fits(path):
     from astropy.io import fits
 
     with fits.open(path, memmap=False) as hdus:
-        keep = [i for i, h in enumerate(hdus) if i == 0 or (h.name or "").upper().startswith("VIS")]
+        keep = [
+            i
+            for i, h in enumerate(hdus)
+            if i == 0 or (h.name or "").upper().startswith("VIS")
+        ]
         if len(keep) == len(hdus):
             return None
         buffer = io.BytesIO()
@@ -237,7 +285,9 @@ def palette_png(path):
             im = im.convert("RGB")
         if im.mode not in ("RGB", "RGBA"):
             return None
-        method = Image.Quantize.FASTOCTREE if im.mode == "RGBA" else Image.Quantize.MEDIANCUT
+        method = (
+            Image.Quantize.FASTOCTREE if im.mode == "RGBA" else Image.Quantize.MEDIANCUT
+        )
         q = im.quantize(256, method=method, dither=Image.Dither.NONE)
     buffer = io.BytesIO()
     q.save(buffer, "PNG", optimize=True)
@@ -260,7 +310,9 @@ def write_part(job):
             elif kind == "png_palette":
                 data = palette_png(source)
             if data is not None:
-                size, digest = add_bytes_hashed(archive, data, arcname, like=Path(source))
+                size, digest = add_bytes_hashed(
+                    archive, data, arcname, like=Path(source)
+                )
             else:
                 size, digest = add_file_hashed(archive, Path(source), arcname)
             rows.append((arcname, size, digest))
@@ -278,7 +330,9 @@ def check_zip(zip_path, expected_rows):
     if set(names) != set(expected):
         extra = sorted(set(names) - set(expected))[:5]
         absent = sorted(set(expected) - set(names))[:5]
-        raise RuntimeError(f"{name}: members differ from the plan (extra {extra}, absent {absent})")
+        raise RuntimeError(
+            f"{name}: members differ from the plan (extra {extra}, absent {absent})"
+        )
     wrong = [m for m in names if sizes[m] != expected[m]]
     if wrong:
         raise RuntimeError(f"{name}: member sizes differ from the plan: {wrong[:5]}")
@@ -344,10 +398,14 @@ def readme_text(tier, root, snapshot, csv_snapshot):
         ]
         if tier == "vis":
             lines += [
-                "VIS only. FITS: " + ", ".join(VIS_FITS) + " (model.fits and pre_psf.fits keep the "
+                "VIS only. FITS: "
+                + ", ".join(VIS_FITS)
+                + " (model.fits and pre_psf.fits keep the "
                 "PRIMARY and VIS_* HDUs: VIS_GALAXY_0 = lens, VIS_GALAXY_1 = lensed source).",
                 "PNG: " + ", ".join(VIS_PNGS) + ".",
-                "Text: " + ", ".join(VIS_TEXT) + ", vis_pix_source_plane_reconstruction_<i>.csv.",
+                "Text: "
+                + ", ".join(VIS_TEXT)
+                + ", vis_pix_source_plane_reconstruction_<i>.csv.",
             ]
         else:
             lines += [
@@ -368,8 +426,11 @@ def readme_text(tier, root, snapshot, csv_snapshot):
             "`<tile_id>/dataset/`: the modelling input cutout, unchanged: `<tile_id>.fits` "
             "(`<BAND>_BGSUB`, `<BAND>_PSF` and `<BAND>_RMS` HDUs for every delivered band), "
             "`segmentation/*.fits`, `positions*.json`, `info.json`."
-            + (" The cutout keeps every band in this tier too, since it is the modelling input."
-               if tier == "vis" else ""),
+            + (
+                " The cutout keeps every band in this tier too, since it is the modelling input."
+                if tier == "vis"
+                else ""
+            ),
         ]
     lines += [
         "",
@@ -401,7 +462,10 @@ def known_issues_text(tier, snapshot, known_issues_path, excluded):
                 "| Product | Lenses without it |",
                 "|---------|------------------:|",
             ]
-            lines += [f"| `{k}` | {v:,} |" for k, v in sorted(snapshot["missing_counts"].items())]
+            lines += [
+                f"| `{k}` | {v:,} |"
+                for k, v in sorted(snapshot["missing_counts"].items())
+            ]
         else:
             lines.append("None: every lens has every product of this tier.")
         lines.append("")
@@ -424,7 +488,9 @@ def known_issues_text(tier, snapshot, known_issues_path, excluded):
 def csv_snapshot_info(csv_dir: Path, manifest: Path):
     snap_path = csv_dir / "_build" / "snapshot.json"
     if not snap_path.exists():
-        raise SystemExit(f"{snap_path} not found: --csv_dir must be a csv_snapshot/build.py output")
+        raise SystemExit(
+            f"{snap_path} not found: --csv_dir must be a csv_snapshot/build.py output"
+        )
     snap = json.loads(snap_path.read_text())
     digest = file_sha256(manifest)
     if snap.get("manifest_sha256") != digest:
@@ -434,7 +500,11 @@ def csv_snapshot_info(csv_dir: Path, manifest: Path):
         )
     counts_path = csv_dir / "_build" / "validation_counts.json"
     counts = json.loads(counts_path.read_text()) if counts_path.exists() else {}
-    files = sorted(p for p in csv_dir.iterdir() if p.is_file() and not p.name.startswith((".", "_")))
+    files = sorted(
+        p
+        for p in csv_dir.iterdir()
+        if p.is_file() and not p.name.startswith((".", "_"))
+    )
     if not files:
         raise SystemExit(f"{csv_dir}: no tables")
     return snap, counts, files
@@ -456,12 +526,16 @@ def package_tier(tier, args, ctx):
     tiles = ctx["tiles"]
     plans, missing_rows = ({}, [])
     if tier != "csv":
-        plans, missing_rows = plan_tier(tier, tiles, ctx["catalogue_dir"], ctx["dataset_dir"], ctx["png_palette"])
+        plans, missing_rows = plan_tier(
+            tier, tiles, ctx["catalogue_dir"], ctx["dataset_dir"], ctx["png_palette"]
+        )
     missing_counts = Counter(product for _tile, product in missing_rows)
     sizes = [sum(m[3] for m in plans[t]) for t in tiles] if plans else []
     parts = []
     if plans:
-        parts = plan(tiles, sizes, int(args.part_max_gb * 1024**3), args.n_parts or None)
+        parts = plan(
+            tiles, sizes, int(args.part_max_gb * 1024**3), args.n_parts or None
+        )
         if args.n_parts and len(parts) != args.n_parts:
             raise RuntimeError(f"planned {len(parts)} parts, --n_parts={args.n_parts}")
     part_names = [part_name(i, len(parts)) for i in range(1, len(parts) + 1)]
@@ -482,12 +556,15 @@ def package_tier(tier, args, ctx):
         "dataset_dir": str(ctx["dataset_rel"]) if ctx["dataset_dir"] else "",
         "csv_dir": str(ctx["csv_rel"]),
         "products": tier_products(tier) + (dataset_products() if tier != "csv" else []),
-        "multi_band_fits_reduced_to_vis": sorted(VIS_STRIP_FITS) if tier == "vis" else [],
+        "multi_band_fits_reduced_to_vis": (
+            sorted(VIS_STRIP_FITS) if tier == "vis" else []
+        ),
         "png_palette": bool(ctx["png_palette"]) and tier != "csv",
         "png_note": (
             "Per-lens PNGs are 256-colour palette reductions of the pipeline figures "
             "(regenerable from the FITS); FITS and all other files are unchanged."
-            if ctx["png_palette"] and tier != "csv" else ""
+            if ctx["png_palette"] and tier != "csv"
+            else ""
         ),
         "n_manifest_included": ctx["n_included"],
         "lens_count": len(tiles) if tier != "csv" else 0,
@@ -497,8 +574,13 @@ def package_tier(tier, args, ctx):
         "n_missing_files": len(missing_rows),
         "lenses_with_missing_files": len({t for t, _p in missing_rows}),
         "parts": [
-            {"zip": name, "tiles": len(group), "first_tile": group[0], "last_tile": group[-1],
-             "planned_bytes": sum(size_of[t] for t in group)}
+            {
+                "zip": name,
+                "tiles": len(group),
+                "first_tile": group[0],
+                "last_tile": group[-1],
+                "planned_bytes": sum(size_of[t] for t in group),
+            }
             for name, group in zip(part_names, parts)
         ],
         "created_utc": utc_iso(time.time()),
@@ -508,14 +590,18 @@ def package_tier(tier, args, ctx):
         f"{sum(sizes) / 1024**3:.2f} GB planned, {len(missing_rows)} missing files"
     )
     for name, group in zip(part_names, parts):
-        log(f"  {name}: {len(group)} lenses, {sum(size_of[t] for t in group) / 1024**3:.2f} GB")
+        log(
+            f"  {name}: {len(group)} lenses, {sum(size_of[t] for t in group) / 1024**3:.2f} GB"
+        )
     for product, n in sorted(missing_counts.items()):
         log(f"  missing {product}: {n}")
     if args.dry_run:
         return snapshot
 
     if (tier_dir / "SHA256SUMS").exists() and not args.force:
-        raise SystemExit(f"{tier_dir} is already packaged (SHA256SUMS exists); --force to rewrite")
+        raise SystemExit(
+            f"{tier_dir} is already packaged (SHA256SUMS exists); --force to rewrite"
+        )
     if tier_dir.exists():
         shutil.rmtree(tier_dir)
     tier_dir.mkdir(parents=True)
@@ -528,35 +614,52 @@ def package_tier(tier, args, ctx):
     written = dict(run_pool(write_part, jobs, args.workers))
     for name in part_names:
         log(f"  wrote {name}: {len(written[name])} members")
-    digests = dict(run_pool(_verify_job, [(str(tier_dir / n), written[n]) for n in part_names], args.workers))
+    digests = dict(
+        run_pool(
+            _verify_job,
+            [(str(tier_dir / n), written[n]) for n in part_names],
+            args.workers,
+        )
+    )
     seen = Counter()
     for name in part_names:
         for tile in {m.split("/")[1] for m, _s, _h in written[name]}:
             seen[tile] += 1
             if part_of.get(tile) != name:
-                raise RuntimeError(f"{tile} found in {name}, plan says {part_of.get(tile)}")
+                raise RuntimeError(
+                    f"{tile} found in {name}, plan says {part_of.get(tile)}"
+                )
     packaged = set(tiles) if plans else set()
     if set(seen) != packaged or any(v != 1 for v in seen.values()):
-        raise RuntimeError(f"part zips cover {len(seen)} lenses, the tier has {len(packaged)}")
+        raise RuntimeError(
+            f"part zips cover {len(seen)} lenses, the tier has {len(packaged)}"
+        )
 
     # Documents (also written beside the zips).
     uid_of = ctx["uid_of"]
     docs = {}
     if tier != "csv":
         docs["parts_manifest.csv"] = csv_text(
-            ["tile_id", "unique_identifier", "part_zip"], [(t, uid_of[t], part_of[t]) for t in tiles]
+            ["tile_id", "unique_identifier", "part_zip"],
+            [(t, uid_of[t], part_of[t]) for t in tiles],
         )
         docs["missing_files.csv"] = csv_text(
-            ["tile_id", "unique_identifier", "product"], [(t, uid_of[t], p) for t, p in missing_rows]
+            ["tile_id", "unique_identifier", "product"],
+            [(t, uid_of[t], p) for t, p in missing_rows],
         )
         if ctx["excluded"]:
             docs["excluded_tiles.csv"] = csv_text(
                 ["tile_id", "unique_identifier", "reason", "in_catalogue_tree"],
-                [(t, uid_of.get(t, ""), r, (ctx["catalogue_dir"] / t).is_dir()) for t, r in sorted(ctx["excluded"].items())],
+                [
+                    (t, uid_of.get(t, ""), r, (ctx["catalogue_dir"] / t).is_dir())
+                    for t, r in sorted(ctx["excluded"].items())
+                ],
             )
     docs["snapshot.json"] = json.dumps(snapshot, indent=2) + "\n"
     docs["README.md"] = readme_text(tier, root, snapshot, ctx["csv_counts"])
-    docs["KNOWN_ISSUES.md"] = known_issues_text(tier, snapshot, ctx["known_issues"], ctx["excluded"])
+    docs["KNOWN_ISSUES.md"] = known_issues_text(
+        tier, snapshot, ctx["known_issues"], ctx["excluded"]
+    )
     for name in ("snapshot.json", "missing_files.csv", "parts_manifest.csv"):
         if name in docs:
             (tier_dir / name).write_text(docs[name])
@@ -567,14 +670,18 @@ def package_tier(tier, args, ctx):
         files += [
             (p, f"catalogue_tables/{p.name}")
             for p in sorted(ctx["catalogue_dir"].iterdir())
-            if p.is_file() and not p.name.startswith(".") and p.name not in CATALOGUE_ROOT_SKIP
+            if p.is_file()
+            and not p.name.startswith(".")
+            and p.name not in CATALOGUE_ROOT_SKIP
         ]
     csv_zip = tier_dir / "catalogue_csvs.zip"
     staged = csv_zip.with_name(f".{csv_zip.name}.tmp")
     csv_rows = []
     with zipfile.ZipFile(staged, "w", allowZip64=True) as archive:
         for name in sorted(docs):
-            size, digest = add_bytes_hashed(archive, docs[name].encode(), f"{root}/{name}")
+            size, digest = add_bytes_hashed(
+                archive, docs[name].encode(), f"{root}/{name}"
+            )
             csv_rows.append((f"{root}/{name}", size, digest))
         for path, arc in files:
             size, digest = add_file_hashed(archive, path, f"{root}/{arc}")
@@ -583,7 +690,9 @@ def package_tier(tier, args, ctx):
         for name in part_names:
             manifest_rows += [(name, m, s, h) for m, s, h in written[name]]
         file_manifest = csv_text(FILE_MANIFEST_COLUMNS, manifest_rows).encode()
-        size, digest = add_bytes_hashed(archive, file_manifest, f"{root}/file_manifest.csv")
+        size, digest = add_bytes_hashed(
+            archive, file_manifest, f"{root}/file_manifest.csv"
+        )
         csv_rows.append((f"{root}/file_manifest.csv", size, digest))
     staged.replace(csv_zip)
     digests["catalogue_csvs.zip"] = check_zip(csv_zip, csv_rows)
@@ -595,7 +704,9 @@ def package_tier(tier, args, ctx):
             digests[name] = sha256(tier_dir / name)
     write_sha256sums(tier_dir / "SHA256SUMS", digests)
     total = sum((tier_dir / n).stat().st_size for n in digests if n.endswith(".zip"))
-    log(f"{tier}: verified {len(digests)} files, {total / 1024**3:.2f} GB of zips -> {tier_dir}")
+    log(
+        f"{tier}: verified {len(digests)} files, {total / 1024**3:.2f} GB of zips -> {tier_dir}"
+    )
     return snapshot
 
 
@@ -603,28 +714,72 @@ def package_tier(tier, args, ctx):
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="Package the csv / vis / full catalogue release tiers.")
-    parser.add_argument("--catalogue_dir", default=None, help="merged catalogue tree (required for vis/full)")
+    parser = argparse.ArgumentParser(
+        description="Package the csv / vis / full catalogue release tiers."
+    )
+    parser.add_argument(
+        "--catalogue_dir",
+        default=None,
+        help="merged catalogue tree (required for vis/full)",
+    )
     parser.add_argument("--dataset_dir", default="dataset/dr1_sep1")
-    parser.add_argument("--manifest", default="catalogue/grades/dr1_sep1_consolidated_manifest.csv")
-    parser.add_argument("--csv_dir", required=True, help="output of scripts/tools/csv_snapshot/build.py")
-    parser.add_argument("--tier", action="append", default=None,
-                        help="csv, vis, full (repeatable) or all; default all")
-    parser.add_argument("--out_dir", default=None, help="default <catalogue_dir>_release")
-    parser.add_argument("--release_name", default=None, help="zip root prefix; default the catalogue_dir name")
-    parser.add_argument("--excluded", default=None, help="CSV (tile or tile_id column) of tiles allowed to be absent")
-    parser.add_argument("--absent_out", default=None,
-                        help="write manifest tiles with no lens folder to this CSV (for review, then --excluded)")
-    parser.add_argument("--known_issues", default=None, help="markdown prepended to every KNOWN_ISSUES.md")
+    parser.add_argument(
+        "--manifest", default="catalogue/grades/dr1_sep1_consolidated_manifest.csv"
+    )
+    parser.add_argument(
+        "--csv_dir", required=True, help="output of scripts/tools/csv_snapshot/build.py"
+    )
+    parser.add_argument(
+        "--tier",
+        action="append",
+        default=None,
+        help="csv, vis, full (repeatable) or all; default all",
+    )
+    parser.add_argument(
+        "--out_dir", default=None, help="default <catalogue_dir>_release"
+    )
+    parser.add_argument(
+        "--release_name",
+        default=None,
+        help="zip root prefix; default the catalogue_dir name",
+    )
+    parser.add_argument(
+        "--excluded",
+        default=None,
+        help="CSV (tile or tile_id column) of tiles allowed to be absent",
+    )
+    parser.add_argument(
+        "--absent_out",
+        default=None,
+        help="write manifest tiles with no lens folder to this CSV (for review, then --excluded)",
+    )
+    parser.add_argument(
+        "--known_issues",
+        default=None,
+        help="markdown prepended to every KNOWN_ISSUES.md",
+    )
     parser.add_argument("--part_max_gb", type=float, default=10.0)
-    parser.add_argument("--n_parts", type=int, default=0,
-                        help="EXACTLY this many part zips per tier (contiguous, near-equal bytes); "
-                        "overrides --part_max_gb. 0 = use --part_max_gb.")
-    parser.add_argument("--workers", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", 1)))
-    parser.add_argument("--dry_run", action="store_true", help="plan and report; write nothing")
-    parser.add_argument("--force", action="store_true", help="rewrite an already packaged tier")
-    parser.add_argument("--no_png_palette", action="store_true",
-                        help="ship per-lens PNGs unchanged instead of as 256-colour palette PNGs")
+    parser.add_argument(
+        "--n_parts",
+        type=int,
+        default=0,
+        help="EXACTLY this many part zips per tier (contiguous, near-equal bytes); "
+        "overrides --part_max_gb. 0 = use --part_max_gb.",
+    )
+    parser.add_argument(
+        "--workers", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
+    )
+    parser.add_argument(
+        "--dry_run", action="store_true", help="plan and report; write nothing"
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="rewrite an already packaged tier"
+    )
+    parser.add_argument(
+        "--no_png_palette",
+        action="store_true",
+        help="ship per-lens PNGs unchanged instead of as 256-colour palette PNGs",
+    )
     return parser.parse_args(argv)
 
 
@@ -652,10 +807,20 @@ def main(argv=None):
     csv_dir = resolve(args.csv_dir)
     if any(t != "csv" for t in tiers):
         if catalogue_dir is None or not catalogue_dir.is_dir():
-            raise SystemExit(f"--catalogue_dir {catalogue_dir} is required for the vis / full tiers")
-    release_name = args.release_name or (catalogue_dir.name if catalogue_dir else csv_dir.name)
-    out_dir = resolve(args.out_dir) if args.out_dir else (
-        catalogue_dir.parent / f"{catalogue_dir.name}_release" if catalogue_dir else csv_dir.parent / f"{release_name}_release"
+            raise SystemExit(
+                f"--catalogue_dir {catalogue_dir} is required for the vis / full tiers"
+            )
+    release_name = args.release_name or (
+        catalogue_dir.name if catalogue_dir else csv_dir.name
+    )
+    out_dir = (
+        resolve(args.out_dir)
+        if args.out_dir
+        else (
+            catalogue_dir.parent / f"{catalogue_dir.name}_release"
+            if catalogue_dir
+            else csv_dir.parent / f"{release_name}_release"
+        )
     )
 
     rows = included_rows(manifest)
@@ -663,20 +828,37 @@ def main(argv=None):
     uid_of = {r["tile"]: r["unique_identifier"] for r in rows}
     unknown_excluded = sorted(set(excluded) - set(uid_of))
     if unknown_excluded:
-        log(f"warning: {len(unknown_excluded)} --excluded tiles are not included manifest rows "
-            f"(e.g. {unknown_excluded[:3]}); ignored")
+        log(
+            f"warning: {len(unknown_excluded)} --excluded tiles are not included manifest rows "
+            f"(e.g. {unknown_excluded[:3]}); ignored"
+        )
     tiles = sorted(t for t in uid_of if t not in excluded)
     extra = 0
-    if catalogue_dir is not None and catalogue_dir.is_dir() and any(t != "csv" for t in tiers):
-        folders = {p.name for p in catalogue_dir.iterdir() if p.is_dir() and not p.name.startswith(("_", "."))}
+    if (
+        catalogue_dir is not None
+        and catalogue_dir.is_dir()
+        and any(t != "csv" for t in tiers)
+    ):
+        folders = {
+            p.name
+            for p in catalogue_dir.iterdir()
+            if p.is_dir() and not p.name.startswith(("_", "."))
+        }
         absent = [t for t in tiles if t not in folders]
         if absent and args.absent_out:
             absent_out = resolve(args.absent_out)
-            absent_out.write_text(csv_text(
-                ["tile", "unique_identifier", "reason"],
-                [(t, uid_of[t], f"no lens folder in {catalogue_dir.name}") for t in absent],
-            ))
-            log(f"wrote the {len(absent)} absent tiles to {absent_out}; review it, then pass it as --excluded")
+            absent_out.write_text(
+                csv_text(
+                    ["tile", "unique_identifier", "reason"],
+                    [
+                        (t, uid_of[t], f"no lens folder in {catalogue_dir.name}")
+                        for t in absent
+                    ],
+                )
+            )
+            log(
+                f"wrote the {len(absent)} absent tiles to {absent_out}; review it, then pass it as --excluded"
+            )
         if absent:
             raise SystemExit(
                 f"{len(absent)} manifest tiles have no lens folder in {catalogue_dir} and are not in "
@@ -684,10 +866,14 @@ def main(argv=None):
             )
         present_excluded = sorted(t for t in excluded if t in folders)
         if present_excluded:
-            log(f"warning: {len(present_excluded)} --excluded tiles do have a lens folder; not packaged")
+            log(
+                f"warning: {len(present_excluded)} --excluded tiles do have a lens folder; not packaged"
+            )
         extra = len(folders - set(uid_of))
         if extra:
-            log(f"note: {extra} lens folders are not included manifest rows; not packaged")
+            log(
+                f"note: {extra} lens folders are not included manifest rows; not packaged"
+            )
 
     csv_snap, csv_counts, csv_files = csv_snapshot_info(csv_dir, manifest)
     ctx = {
@@ -699,7 +885,9 @@ def main(argv=None):
         "extra_folders": extra,
         "catalogue_dir": catalogue_dir,
         "catalogue_rel": relative(catalogue_dir) if catalogue_dir else "",
-        "catalogue_revision": catalogue_revision(catalogue_dir) if catalogue_dir else "",
+        "catalogue_revision": (
+            catalogue_revision(catalogue_dir) if catalogue_dir else ""
+        ),
         "dataset_dir": dataset_dir,
         "dataset_rel": relative(dataset_dir),
         "manifest_rel": relative(manifest),
@@ -713,7 +901,9 @@ def main(argv=None):
         "known_issues": resolve(args.known_issues),
         "png_palette": PNG_PALETTE and not args.no_png_palette,
     }
-    log(f"release {release_name}: tiers {tiers}, {len(tiles)} lenses, cutoff {csv_snap['cutoff_utc']}, -> {out_dir}")
+    log(
+        f"release {release_name}: tiers {tiers}, {len(tiles)} lenses, cutoff {csv_snap['cutoff_utc']}, -> {out_dir}"
+    )
     summary = {tier: package_tier(tier, args, ctx) for tier in tiers}
     if args.dry_run:
         log("dry run: nothing written")

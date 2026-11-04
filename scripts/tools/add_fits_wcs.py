@@ -32,6 +32,7 @@ Usage
         --dataset_path=dataset/dr1_sep1 [--dry_run]
     python scripts/tools/add_fits_wcs.py --target_dir=inspect/dr1_sep1 --sample=dr1_sep1
 """
+
 import argparse
 import glob
 import sys
@@ -46,13 +47,21 @@ from astropy.wcs import WCS  # noqa: E402
 
 import sky_frame  # noqa: E402
 
-PRODUCTS = ("model.fits", "pre_psf.fits", "convergence.fits", "potential.fits", "deflections.fits")
+PRODUCTS = (
+    "model.fits",
+    "pre_psf.fits",
+    "convergence.fits",
+    "potential.fits",
+    "deflections.fits",
+)
 SKYFRAME = "pipeline +y south, +x west"
 
 
 def cutout_headers(dataset_dir: Path) -> dict:
     """``{band: header}`` of the cut-out's ``<BAND>_BGSUB`` HDUs."""
-    paths = [p for p in glob.glob(str(dataset_dir / "*.fits")) if "segmentation" not in p]
+    paths = [
+        p for p in glob.glob(str(dataset_dir / "*.fits")) if "segmentation" not in p
+    ]
     if not paths:
         raise FileNotFoundError(f"no cut-out FITS in {dataset_dir}")
     headers = {}
@@ -93,13 +102,29 @@ def add_wcs(path: Path, headers: dict, dry_run=False) -> int:
                 continue
             band = band_of(hdu.name or "", headers)
             if band not in headers:
-                raise KeyError(f"{path.name}[{hdu.name}]: no {band}_BGSUB HDU in the cut-out")
+                raise KeyError(
+                    f"{path.name}[{hdu.name}]: no {band}_BGSUB HDU in the cut-out"
+                )
             cutout_header, cutout_shape = headers[band]
-            if abs(float(hdu.header["PIXSCAY"]) - abs(sky_frame.cd_matrix_from(cutout_header)[1, 1]) * 3600) > 1e-6:
-                raise ValueError(f"{path.name}[{hdu.name}]: pixel scale differs from the {band} cut-out")
+            if (
+                abs(
+                    float(hdu.header["PIXSCAY"])
+                    - abs(sky_frame.cd_matrix_from(cutout_header)[1, 1]) * 3600
+                )
+                > 1e-6
+            ):
+                raise ValueError(
+                    f"{path.name}[{hdu.name}]: pixel scale differs from the {band} cut-out"
+                )
             new = sky_wcs_header(
-                cutout_header, cutout_shape, hdu.data.shape, float(hdu.header["PIXSCAY"]),
-                (float(hdu.header.get("ORIGINY", 0.0)), float(hdu.header.get("ORIGINX", 0.0))),
+                cutout_header,
+                cutout_shape,
+                hdu.data.shape,
+                float(hdu.header["PIXSCAY"]),
+                (
+                    float(hdu.header.get("ORIGINY", 0.0)),
+                    float(hdu.header.get("ORIGINX", 0.0)),
+                ),
             )
             if not dry_run:
                 hdu.header.update(new)
@@ -112,9 +137,19 @@ def add_wcs(path: Path, headers: dict, dry_run=False) -> int:
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--target_dir", required=True, help="inspect/ or catalogue dir of <lens>/ folders")
-    p.add_argument("--dataset_path", default=None, help="dataset tree (default: project_paths.dataset_root())")
-    p.add_argument("--sample", default=None, help="sample subdirectory appended to --dataset_path")
+    p.add_argument(
+        "--target_dir",
+        required=True,
+        help="inspect/ or catalogue dir of <lens>/ folders",
+    )
+    p.add_argument(
+        "--dataset_path",
+        default=None,
+        help="dataset tree (default: project_paths.dataset_root())",
+    )
+    p.add_argument(
+        "--sample", default=None, help="sample subdirectory appended to --dataset_path"
+    )
     p.add_argument("--dry_run", action="store_true")
     a = p.parse_args()
 
@@ -127,7 +162,9 @@ def main():
             import project_paths
 
             a.dataset_path = str(project_paths.dataset_root())
-        except ImportError:  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
+        except (
+            ImportError
+        ):  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
             a.dataset_path = str(PROJECT_ROOT / "dataset")
     dataset_tree = Path(a.dataset_path) / (a.sample or "")
 
@@ -154,8 +191,10 @@ def main():
             counts["errors"] += 1
             print(f"ERROR {lens_dir.name}: {type(e).__name__}: {e}")
     verb = "would add" if a.dry_run else "added"
-    print(f"{verb} WCS to {counts['hdus']} HDUs in {counts['files']} files of {counts['lenses']} lenses; "
-          f"{counts['skipped']} skipped (no cut-out); {counts['errors']} errors")
+    print(
+        f"{verb} WCS to {counts['hdus']} HDUs in {counts['files']} files of {counts['lenses']} lenses; "
+        f"{counts['skipped']} skipped (no cut-out); {counts['errors']} errors"
+    )
     return 1 if counts["errors"] else 0
 
 

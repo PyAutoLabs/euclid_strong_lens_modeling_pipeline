@@ -18,6 +18,7 @@ Usage:
         --output <euclid_dr1>/output/dr1_sep1 --dataset <dataset>/dr1_sep1 \
         --out <report dir> [--n 20]
 """
+
 import argparse
 import csv
 import glob
@@ -54,7 +55,8 @@ def load_zip(zip_path, tmp):
 
 def cutout_from(dataset_dir, tile):
     fits_path = [
-        p for p in glob.glob(os.path.join(dataset_dir, tile, "*.fits"))
+        p
+        for p in glob.glob(os.path.join(dataset_dir, tile, "*.fits"))
         if "segmentation" not in p
     ][0]
     with fits.open(fits_path) as h:
@@ -64,7 +66,7 @@ def cutout_from(dataset_dir, tile):
 def shear_image(shear, grid, sigma=0.3):
     """Lensed image of a round Gaussian source through the shear alone."""
     traced = np.asarray(grid) - np.asarray(shear.deflections_yx_2d_from(grid=grid))
-    return np.exp(-0.5 * (traced ** 2).sum(axis=1) / sigma ** 2)
+    return np.exp(-0.5 * (traced**2).sum(axis=1) / sigma**2)
 
 
 def main():
@@ -76,7 +78,9 @@ def main():
     a = p.parse_args()
     os.makedirs(a.out, exist_ok=True)
 
-    zips = sorted(glob.glob(os.path.join(a.output, "*", "initial_lens_model", "vis_lp", "*.zip")))
+    zips = sorted(
+        glob.glob(os.path.join(a.output, "*", "initial_lens_model", "vis_lp", "*.zip"))
+    )
     rows = []
     for zip_path in zips[: a.n]:
         tile = Path(zip_path).parents[2].name
@@ -91,8 +95,12 @@ def main():
         shear = tracer.fields[0].shear if getattr(tracer, "fields", None) else None
 
         # Frame: the fitted array is the FITS array in native order.
-        same_frame = bool(np.array_equal(data.astype(np.float32), vis.astype(np.float32)))
-        flipped_frame = bool(np.array_equal(data.astype(np.float32), vis[::-1].astype(np.float32)))
+        same_frame = bool(
+            np.array_equal(data.astype(np.float32), vis.astype(np.float32))
+        )
+        flipped_frame = bool(
+            np.array_equal(data.astype(np.float32), vis[::-1].astype(np.float32))
+        )
 
         # Centre: analytic east/north from the image centre vs stored crval.
         cy, cx = lens.bulge.centre
@@ -101,12 +109,18 @@ def main():
         ra = ra0 + east / 3600.0 / np.cos(np.radians(dec0))
         dec = dec0 + north / 3600.0
         d_centre = 3600.0 * np.hypot(
-            (ra - wj["crval_ra_deg"]) * np.cos(np.radians(dec0)), dec - wj["crval_dec_deg"]
+            (ra - wj["crval_ra_deg"]) * np.cos(np.radians(dec0)),
+            dec - wj["crval_dec_deg"],
         )
 
         row = dict(
-            tile=tile, same_frame=same_frame, flipped_frame=flipped_frame,
-            centre_y=cy, centre_x=cx, centre_east=float(east), centre_north=float(north),
+            tile=tile,
+            same_frame=same_frame,
+            flipped_frame=flipped_frame,
+            centre_y=cy,
+            centre_x=cx,
+            centre_east=float(east),
+            centre_north=float(north),
             centre_vs_wcs_json_arcsec=float(d_centre),
         )
 
@@ -123,9 +137,13 @@ def main():
         pa_l_pix, q_l_pix = cv.moments_pa(light_model, cd, PS, (cy, cx), radius=1.0)
         pa_l_dat, q_l_dat = cv.moments_pa(vis, cd, PS, (cy, cx), radius=0.6)
         row.update(
-            light_q=q_l, light_phi_native=phi_l, light_pa=float(pa_l),
-            light_pa_model_moments=float(pa_l_pix), light_q_model_moments=q_l_pix,
-            light_pa_data_moments=float(pa_l_dat), light_q_data_moments=q_l_dat,
+            light_q=q_l,
+            light_phi_native=phi_l,
+            light_pa=float(pa_l),
+            light_pa_model_moments=float(pa_l_pix),
+            light_q_model_moments=q_l_pix,
+            light_pa_data_moments=float(pa_l_dat),
+            light_q_data_moments=q_l_dat,
         )
 
         # Lens mass: convergence moments within a circular aperture.
@@ -133,17 +151,30 @@ def main():
         pa_m = cv.pa_from_native_angle(phi_m, cd, PS)
         kappa = np.asarray(lens.mass.convergence_2d_from(grid=grid)).reshape(shape)
         pa_m_pix, _ = cv.moments_pa(kappa, cd, PS, lens.mass.centre, radius=1.0)
-        row.update(mass_q=q_m, mass_phi_native=phi_m, mass_pa=float(pa_m),
-                   mass_pa_moments=float(pa_m_pix))
+        row.update(
+            mass_q=q_m,
+            mass_phi_native=phi_m,
+            mass_pa=float(pa_m),
+            mass_pa_moments=float(pa_m_pix),
+        )
 
         if shear is not None:
-            g, phi_s = cv.phi_from_shear(*shear.gamma_1_2 if hasattr(shear, "gamma_1_2")
-                                         else (shear.gamma_1, shear.gamma_2))
+            g, phi_s = cv.phi_from_shear(
+                *(
+                    shear.gamma_1_2
+                    if hasattr(shear, "gamma_1_2")
+                    else (shear.gamma_1, shear.gamma_2)
+                )
+            )
             pa_s = cv.pa_from_native_angle(phi_s, cd, PS)
             img = shear_image(shear, grid).reshape(shape)
             pa_s_pix, _ = cv.moments_pa(img, cd, PS)
-            row.update(shear_mag=g, shear_phi_native=phi_s, shear_pa=float(pa_s),
-                       shear_stretch_pa_moments=float(pa_s_pix))
+            row.update(
+                shear_mag=g,
+                shear_phi_native=phi_s,
+                shear_pa=float(pa_s),
+                shear_stretch_pa_moments=float(pa_s_pix),
+            )
         rows.append(row)
 
     with open(os.path.join(a.out, "witness_real.csv"), "w", newline="") as f:

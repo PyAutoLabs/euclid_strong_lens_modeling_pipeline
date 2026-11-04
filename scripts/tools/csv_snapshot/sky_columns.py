@@ -31,12 +31,15 @@ counter-clockwise from +x.
 Idempotent: a table that already has the columns is rewritten with the same
 values.
 """
+
 import csv
 import math
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # scripts/tools, for sky_frame
+sys.path.insert(
+    0, str(Path(__file__).resolve().parent.parent)
+)  # scripts/tools, for sky_frame
 
 import numpy as np  # noqa: E402
 
@@ -48,14 +51,29 @@ TABLES = {"lens_mass.csv": "", "lens_sersic.csv": "", "source_sersic.csv": ""}
 PREFIXES = ("mass_", "lens_light_", "source_light_")
 
 DESCRIPTIONS = {
-    "east_offset": ("arcsec", "offset of the centre east of the cut-out centre (sky frame; = -centre_1)"),
-    "north_offset": ("arcsec", "offset of the centre north of the cut-out centre (sky frame; = -centre_0)"),
-    "pa_east_of_north": ("deg", "major-axis position angle east of north, [0, 180), of the ellipse with the "
-                                "posterior-median ell_comps (PA of the median components, not a median PA)"),
-    "pa_east_of_north_max_lh": ("deg", "major-axis position angle east of north, [0, 180), of the "
-                                       "max-likelihood ell_comps"),
-    "shear_pa_east_of_north": ("deg", "external-shear stretch direction east of north, [0, 180), of the "
-                                      "posterior-median gamma_1 / gamma_2"),
+    "east_offset": (
+        "arcsec",
+        "offset of the centre east of the cut-out centre (sky frame; = -centre_1)",
+    ),
+    "north_offset": (
+        "arcsec",
+        "offset of the centre north of the cut-out centre (sky frame; = -centre_0)",
+    ),
+    "pa_east_of_north": (
+        "deg",
+        "major-axis position angle east of north, [0, 180), of the ellipse with the "
+        "posterior-median ell_comps (PA of the median components, not a median PA)",
+    ),
+    "pa_east_of_north_max_lh": (
+        "deg",
+        "major-axis position angle east of north, [0, 180), of the "
+        "max-likelihood ell_comps",
+    ),
+    "shear_pa_east_of_north": (
+        "deg",
+        "external-shear stretch direction east of north, [0, 180), of the "
+        "posterior-median gamma_1 / gamma_2",
+    ),
 }
 
 
@@ -103,12 +121,17 @@ def sky_values(row, p):
                 out[p + "north_offset" + lo] = _neg(get("centre_0" + hi))
                 out[p + "north_offset" + hi] = _neg(get("centre_0" + lo))
     if p + "ell_comps_0" in row:
-        out[p + "pa_east_of_north"] = pa_from_ell_comps(get("ell_comps_0"), get("ell_comps_1"))
+        out[p + "pa_east_of_north"] = pa_from_ell_comps(
+            get("ell_comps_0"), get("ell_comps_1")
+        )
         if p + "ell_comps_0_max_lh" in row:
-            out[p + "pa_east_of_north_max_lh"] = pa_from_ell_comps(get("ell_comps_0_max_lh"),
-                                                                   get("ell_comps_1_max_lh"))
+            out[p + "pa_east_of_north_max_lh"] = pa_from_ell_comps(
+                get("ell_comps_0_max_lh"), get("ell_comps_1_max_lh")
+            )
     if p + "shear_gamma_1" in row:
-        out[p + "shear_pa_east_of_north"] = shear_pa(get("shear_gamma_1"), get("shear_gamma_2"))
+        out[p + "shear_pa_east_of_north"] = shear_pa(
+            get("shear_gamma_1"), get("shear_gamma_2")
+        )
     return out
 
 
@@ -139,7 +162,9 @@ def add_to_table(path: Path, prefixes):
             row.update({k: _fmt(v) for k, v in sky_values(row, p).items()})
     staged = path.with_suffix(".csv.sky_tmp")
     with open(staged, "w", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields + new_fields, lineterminator=terminator)
+        writer = csv.DictWriter(
+            stream, fieldnames=fields + new_fields, lineterminator=terminator
+        )
         writer.writeheader()
         writer.writerows(rows)
     staged.replace(path)
@@ -150,7 +175,9 @@ def add_sky_columns(out_dir, log=print):
     out_dir = Path(out_dir)
     masters = sorted(out_dir.glob("dr1_catalogue_*_master.csv"))
     if len(masters) != 1:
-        raise SystemExit(f"expected one master table in {out_dir}, found {[m.name for m in masters]}")
+        raise SystemExit(
+            f"expected one master table in {out_dir}, found {[m.name for m in masters]}"
+        )
     n = add_to_table(masters[0], PREFIXES)
     log(f"sky: {masters[0].name}: {n} sky-frame columns added")
     for name in TABLES:
@@ -164,12 +191,14 @@ def describe(col):
     for p in PREFIXES + ("",):
         if not col.startswith(p):
             continue
-        stem = col[len(p):]
+        stem = col[len(p) :]
         for key, (units, text) in DESCRIPTIONS.items():
             for suffix in ["", "_max_lh"] + [s for pair in INTERVALS for s in pair]:
                 if stem == key + suffix:
                     if suffix.startswith("_lower") or suffix.startswith("_upper"):
-                        text += f"; {suffix[1:].replace('_', ' ')} credible-interval bound"
+                        text += (
+                            f"; {suffix[1:].replace('_', ' ')} credible-interval bound"
+                        )
                     elif suffix == "_max_lh":
                         text += "; max likelihood"
                     return units, text

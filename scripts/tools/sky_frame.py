@@ -30,6 +30,7 @@ to ``-phi``. With PyAutoGalaxy's definitions that is:
 Scalar parameters (Einstein radii, slopes, radii, intensities, Sersic indices,
 redshifts) are unchanged.
 """
+
 import copy
 
 import numpy as np
@@ -53,9 +54,13 @@ def native_is_mirrored(cd) -> bool:
     """
     cd = np.asarray(cd, dtype=float)
     if abs(cd[0, 1]) > 1e-12 or abs(cd[1, 0]) > 1e-12:
-        raise ValueError(f"rotated WCS not supported by the DR1 sky frame: CD = {cd.tolist()}")
+        raise ValueError(
+            f"rotated WCS not supported by the DR1 sky frame: CD = {cd.tolist()}"
+        )
     if cd[0, 0] >= 0:
-        raise ValueError(f"east-right WCS (CD1_1 >= 0) not supported: CD = {cd.tolist()}")
+        raise ValueError(
+            f"east-right WCS (CD1_1 >= 0) not supported: CD = {cd.tolist()}"
+        )
     return bool(cd[1, 1] > 0)
 
 

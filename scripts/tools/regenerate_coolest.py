@@ -44,6 +44,7 @@ Usage
     python scripts/tools/regenerate_coolest.py --target_dir=inspect/dr1_sep1 \
         --sample=dr1_sep1 --output_path=output --sersic_output_path=output_sed
 """
+
 import argparse
 import csv
 import glob
@@ -90,8 +91,10 @@ def latest_source(search_dir: Path):
     zips = sorted(search_dir.glob("*.zip"), key=lambda p: p.stat().st_mtime)
     if zips:
         return zips[-1]
-    dirs = sorted([p for p in search_dir.iterdir() if (p / "files" / "tracer.json").exists()],
-                  key=lambda p: p.stat().st_mtime)
+    dirs = sorted(
+        [p for p in search_dir.iterdir() if (p / "files" / "tracer.json").exists()],
+        key=lambda p: p.stat().st_mtime,
+    )
     return dirs[-1] if dirs else None
 
 
@@ -104,7 +107,9 @@ def read_member(source: Path, member: str) -> bytes:
 
 def cutout_cd(dataset_dir: Path):
     """CD matrix of the lens's cut-out (its first celestial image HDU)."""
-    paths = [p for p in glob.glob(str(dataset_dir / "*.fits")) if "segmentation" not in p]
+    paths = [
+        p for p in glob.glob(str(dataset_dir / "*.fits")) if "segmentation" not in p
+    ]
     if not paths:
         raise FileNotFoundError(f"no cut-out FITS in {dataset_dir}")
     with fits.open(paths[0]) as hdul:
@@ -124,7 +129,9 @@ def oriented_values(template: dict) -> dict:
                     if name in ORIENTED and isinstance(param, dict):
                         value = (param.get("point_estimate") or {}).get("value")
                         if value is not None:
-                            values[f"{entity.get('name')}/{profile.get('type')}/{name}"] = float(value)
+                            values[
+                                f"{entity.get('name')}/{profile.get('type')}/{name}"
+                            ] = float(value)
     return values
 
 
@@ -138,7 +145,9 @@ def all_values(template: dict) -> dict:
                     if isinstance(param, dict):
                         value = (param.get("point_estimate") or {}).get("value")
                         if isinstance(value, (int, float)):
-                            values[f"{entity.get('name')}/{kind}/{i}/{name}"] = float(value)
+                            values[f"{entity.get('name')}/{kind}/{i}/{name}"] = float(
+                                value
+                            )
     return values
 
 
@@ -147,22 +156,35 @@ def export(tracer, shape, metadata, mirror):
 
     if mirror:
         tracer = sky_frame.plus_y_north_from(tracer)
-    dataset = SimpleNamespace(shape_native=tuple(shape), pixel_scales=(sky_frame.DR1_PIXEL_SCALE,) * 2)
+    dataset = SimpleNamespace(
+        shape_native=tuple(shape), pixel_scales=(sky_frame.DR1_PIXEL_SCALE,) * 2
+    )
     with tempfile.TemporaryDirectory() as tmp:
         path = al.interop.coolest.to_coolest(
-            galaxies=tracer, file_path=Path(tmp) / "coolest", dataset=dataset,
-            on_unsupported="skip", metadata=dict(metadata),
+            galaxies=tracer,
+            file_path=Path(tmp) / "coolest",
+            dataset=dataset,
+            on_unsupported="skip",
+            metadata=dict(metadata),
         )
         with open(path) as f:
             return json.load(f)
 
 
-def regenerate_one(template_path: Path, source: Path, dataset_dir: Path, snapshot_dir: Path, dry_run: bool):
+def regenerate_one(
+    template_path: Path,
+    source: Path,
+    dataset_dir: Path,
+    snapshot_dir: Path,
+    dry_run: bool,
+):
     from autonerves.dictable import from_json
 
     original = json.loads(template_path.read_text())
     meta = original.get("meta", {})
-    row = dict(file=str(template_path), source=str(source), sha256_before=sha256(template_path))
+    row = dict(
+        file=str(template_path), source=str(source), sha256_before=sha256(template_path)
+    )
     if "frame" in meta:
         return dict(row, status="already")
 
@@ -171,13 +193,21 @@ def regenerate_one(template_path: Path, source: Path, dataset_dir: Path, snapsho
         tracer_path.write_bytes(read_member(source, "files/tracer.json"))
         tracer = from_json(str(tracer_path))
     pixels = original.get("observation", {}).get("pixels", {})
-    data_shape = (int(pixels.get("num_pix_y") or 100), int(pixels.get("num_pix_x") or 100))
+    data_shape = (
+        int(pixels.get("num_pix_y") or 100),
+        int(pixels.get("num_pix_x") or 100),
+    )
 
-    keep = {k: v for k, v in meta.items()
-            if k not in ("skipped_profiles", "coolest.__version__", "generated_by")}
+    keep = {
+        k: v
+        for k, v in meta.items()
+        if k not in ("skipped_profiles", "coolest.__version__", "generated_by")
+    }
     native = export(tracer, data_shape, keep, mirror=False)
     before, check = all_values(original), all_values(native)
-    if set(before) != set(check) or any(abs(before[k] - check[k]) > 1e-9 for k in before):
+    if set(before) != set(check) or any(
+        abs(before[k] - check[k]) > 1e-9 for k in before
+    ):
         return dict(row, status="input_mismatch")
 
     try:
@@ -207,16 +237,37 @@ def regenerate_one(template_path: Path, source: Path, dataset_dir: Path, snapsho
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--target_dir", required=True, help="inspect/ or catalogue dir of <lens>/ folders")
-    p.add_argument("--output_path", required=True, help="results tree holding <lens>/initial_lens_model")
-    p.add_argument("--sersic_output_path", default=None, help="results tree holding <lens>/sersic_lens_model")
-    p.add_argument("--dataset_path", default=None,
-                   help="dataset tree holding <lens>/<lens>.fits (default: project_paths.dataset_root())")
-    p.add_argument("--sample", default=None,
-                   help="sample subdirectory appended to --output_path, --sersic_output_path and "
-                        "--dataset_path (the build_inspection_bundle.sh layout)")
-    p.add_argument("--report_dir", default=None,
-                   help="where the snapshot and report go (default: <target_dir>_coolest_regeneration)")
+    p.add_argument(
+        "--target_dir",
+        required=True,
+        help="inspect/ or catalogue dir of <lens>/ folders",
+    )
+    p.add_argument(
+        "--output_path",
+        required=True,
+        help="results tree holding <lens>/initial_lens_model",
+    )
+    p.add_argument(
+        "--sersic_output_path",
+        default=None,
+        help="results tree holding <lens>/sersic_lens_model",
+    )
+    p.add_argument(
+        "--dataset_path",
+        default=None,
+        help="dataset tree holding <lens>/<lens>.fits (default: project_paths.dataset_root())",
+    )
+    p.add_argument(
+        "--sample",
+        default=None,
+        help="sample subdirectory appended to --output_path, --sersic_output_path and "
+        "--dataset_path (the build_inspection_bundle.sh layout)",
+    )
+    p.add_argument(
+        "--report_dir",
+        default=None,
+        help="where the snapshot and report go (default: <target_dir>_coolest_regeneration)",
+    )
     p.add_argument("--dry_run", action="store_true")
     a = p.parse_args()
 
@@ -229,11 +280,20 @@ def main():
             import project_paths
 
             a.dataset_path = str(project_paths.dataset_root())
-        except ImportError:  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
+        except (
+            ImportError
+        ):  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
             a.dataset_path = str(PROJECT_ROOT / "dataset")
-    report_dir = Path(a.report_dir) if a.report_dir else target.with_name(target.name + "_coolest_regeneration")
+    report_dir = (
+        Path(a.report_dir)
+        if a.report_dir
+        else target.with_name(target.name + "_coolest_regeneration")
+    )
     report_dir.mkdir(parents=True, exist_ok=True)
-    trees = {"output": Path(a.output_path), "sersic": Path(a.sersic_output_path or a.output_path)}
+    trees = {
+        "output": Path(a.output_path),
+        "sersic": Path(a.sersic_output_path or a.output_path),
+    }
     dataset_tree = Path(a.dataset_path)
     if a.sample:
         trees = {k: v / a.sample for k, v in trees.items()}
@@ -249,10 +309,19 @@ def main():
                 rows.append(dict(file=str(template), status="no_result"))
                 continue
             try:
-                rows.append(regenerate_one(template, source, dataset_tree / lens_dir.name,
-                                           report_dir / SNAPSHOT_DIR / lens_dir.name, a.dry_run))
+                rows.append(
+                    regenerate_one(
+                        template,
+                        source,
+                        dataset_tree / lens_dir.name,
+                        report_dir / SNAPSHOT_DIR / lens_dir.name,
+                        a.dry_run,
+                    )
+                )
             except Exception as e:  # noqa: BLE001 — report and continue
-                rows.append(dict(file=str(template), status=f"error:{type(e).__name__}: {e}"))
+                rows.append(
+                    dict(file=str(template), status=f"error:{type(e).__name__}: {e}")
+                )
 
     stamp = time.strftime("%Y%m%dT%H%M%S")
     suffix = f"_{stamp}" + ("_dry_run" if a.dry_run else "")

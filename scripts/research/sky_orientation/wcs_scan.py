@@ -5,6 +5,7 @@ Scan every cutout's VIS_BGSUB WCS for rotation, parity or scale outliers
 Usage:
     python scripts/research/sky_orientation/wcs_scan.py --dataset <dataset>/dr1_sep1 --out <csv>
 """
+
 import argparse
 import csv
 import glob
@@ -30,7 +31,11 @@ def main():
 
     rows, flags = [], Counter()
     for tile_dir in sorted(glob.glob(os.path.join(a.dataset, "*"))):
-        paths = [q for q in glob.glob(os.path.join(tile_dir, "*.fits")) if "segmentation" not in q]
+        paths = [
+            q
+            for q in glob.glob(os.path.join(tile_dir, "*.fits"))
+            if "segmentation" not in q
+        ]
         if not paths:
             flags["no_fits"] += 1
             continue
@@ -57,11 +62,21 @@ def main():
         if shape != (100, 100):
             flag.append("shape")
         flags["ok" if not flag else "+".join(flag)] += 1
-        rows.append(dict(
-            tile=os.path.basename(tile_dir), cd1_1=cd[0, 0], cd1_2=cd[0, 1], cd2_1=cd[1, 0],
-            cd2_2=cd[1, 1], rotation_deg=rot, scale_arcsec=scale * 3600, ny=shape[0], nx=shape[1],
-            ctype1=hd.get("CTYPE1"), flag="+".join(flag) or "ok",
-        ))
+        rows.append(
+            dict(
+                tile=os.path.basename(tile_dir),
+                cd1_1=cd[0, 0],
+                cd1_2=cd[0, 1],
+                cd2_1=cd[1, 0],
+                cd2_2=cd[1, 1],
+                rotation_deg=rot,
+                scale_arcsec=scale * 3600,
+                ny=shape[0],
+                nx=shape[1],
+                ctype1=hd.get("CTYPE1"),
+                flag="+".join(flag) or "ok",
+            )
+        )
 
     with open(a.out, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=sorted({k for r in rows for k in r}))

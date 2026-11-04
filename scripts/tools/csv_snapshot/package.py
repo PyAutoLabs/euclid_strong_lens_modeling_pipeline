@@ -145,13 +145,27 @@ def readme_text(snap, stats, n, master_file, excluded_file, excluded_rows, parit
     else:
         bands_text = "Expected bands are read from the input FITS headers."
     exclusions = "\n".join(
-        f"- {r['unique_identifier']}" + (f" ({r['reason']})" if r.get("reason") else "") + f": {r.get('note', '')}"
+        f"- {r['unique_identifier']}"
+        + (f" ({r['reason']})" if r.get("reason") else "")
+        + f": {r.get('note', '')}"
         for r in excluded_rows
     )
     if parity:
-        lead = f"A {parity['candidates']:,}-candidate extraction check" if parity.get("candidates") else "An extraction check"
-        tol = f" to tolerance {parity['tolerance']}" if parity.get("tolerance") is not None else ""
-        verdict = "identical" if not parity.get("difference_count") else f"with {parity['difference_count']:,} differences"
+        lead = (
+            f"A {parity['candidates']:,}-candidate extraction check"
+            if parity.get("candidates")
+            else "An extraction check"
+        )
+        tol = (
+            f" to tolerance {parity['tolerance']}"
+            if parity.get("tolerance") is not None
+            else ""
+        )
+        verdict = (
+            "identical"
+            if not parity.get("difference_count")
+            else f"with {parity['difference_count']:,} differences"
+        )
         parity_text = (
             f"{lead} found\n{parity['numeric_comparisons']:,} numerical comparisons across "
             f"{parity['matched_result_rows']:,} matching old/new result rows {verdict}{tol}.\n"
@@ -280,31 +294,49 @@ def package(out_dir, manifest, uncovered_csv, parity_json=None, log=print):
     excluded = {r["unique_identifier"] for r in excluded_rows}
     # Modelled rows and the not_modelled placeholders of the excluded objects.
     rows = [r for r in all_rows if r["inspection_status"] != "not_modelled"]
-    placeholders = {r["unique_identifier"] for r in all_rows if r["inspection_status"] == "not_modelled"}
+    placeholders = {
+        r["unique_identifier"]
+        for r in all_rows
+        if r["inspection_status"] == "not_modelled"
+    }
     uids = {r["unique_identifier"] for r in rows}
     tiles = [r["tile_id"] for r in all_rows if r["tile_id"]]
-    if not (len(all_rows) == stats["parent_ab_count"] == len(uids | placeholders)
-            and len(rows) == n == len(uids) == len(tiles) == len(set(tiles))):
+    if not (
+        len(all_rows) == stats["parent_ab_count"] == len(uids | placeholders)
+        and len(rows) == n == len(uids) == len(tiles) == len(set(tiles))
+    ):
         raise SystemExit(
             f"{master_file}: {len(all_rows)} rows / {len(uids | placeholders)} ids / {len(set(tiles))} tiles, "
             f"parent A/B {stats['parent_ab_count']}, manifest includes {n}"
         )
     if uids != {r["unique_identifier"] for r in manifest_rows}:
-        raise SystemExit(f"{master_file}: identifiers differ from the manifest's included rows")
+        raise SystemExit(
+            f"{master_file}: identifiers differ from the manifest's included rows"
+        )
     if placeholders != excluded:
-        raise SystemExit(f"{master_file}: not_modelled rows differ from {excluded_file}")
+        raise SystemExit(
+            f"{master_file}: not_modelled rows differ from {excluded_file}"
+        )
     grades = {r["grade"] for r in rows}
     if grades != {r["grade"] for r in manifest_rows}:
-        raise SystemExit(f"{master_file}: grades {sorted(grades)} differ from the manifest's")
+        raise SystemExit(
+            f"{master_file}: grades {sorted(grades)} differ from the manifest's"
+        )
     if excluded & uids or len(uids) + len(excluded) != stats["parent_ab_count"]:
-        raise SystemExit("included + excluded objects do not make up the parent A/B catalogue")
+        raise SystemExit(
+            "included + excluded objects do not make up the parent A/B catalogue"
+        )
     with open(out_dir / "sample_manifest.csv", newline="") as stream:
         if sum(1 for _ in csv.DictReader(stream)) != n:
             raise SystemExit("sample_manifest.csv row count differs from the manifest")
     parity = json.loads(Path(parity_json).read_text()) if parity_json else None
 
     with open(out_dir / "master_columns.csv", "w", newline="") as stream:
-        writer = csv.DictWriter(stream, ["column", "source_table", "description", "units"], lineterminator="\n")
+        writer = csv.DictWriter(
+            stream,
+            ["column", "source_table", "description", "units"],
+            lineterminator="\n",
+        )
         writer.writeheader()
         writer.writerows(describe(col) for col in rows[0])
     (out_dir / "README.txt").write_text(
@@ -314,8 +346,16 @@ def package(out_dir, manifest, uncovered_csv, parity_json=None, log=print):
         writer = csv.writer(stream, lineterminator="\n")
         writer.writerow(["check", "value"])
         for k, v in stats.items():
-            if isinstance(v, (int, float)) and not isinstance(v, bool) and k not in (
-                "n_included", "parent_ab_count", "excluded_parent_count", "superseded_cutout_rows"
+            if (
+                isinstance(v, (int, float))
+                and not isinstance(v, bool)
+                and k
+                not in (
+                    "n_included",
+                    "parent_ab_count",
+                    "excluded_parent_count",
+                    "superseded_cutout_rows",
+                )
             ):
                 writer.writerow([k, v])
         writer.writerow(["unique_identifiers", len(uids | placeholders)])
@@ -329,14 +369,27 @@ def package(out_dir, manifest, uncovered_csv, parity_json=None, log=print):
         writer = csv.writer(stream, lineterminator="\n")
         writer.writerow(["file", "bytes", "sha256", "data_rows"])
         for path in sorted(out_dir.iterdir()):
-            if not path.is_file() or path.name == "file_manifest.csv" or path.name.startswith("."):
+            if (
+                not path.is_file()
+                or path.name == "file_manifest.csv"
+                or path.name.startswith(".")
+            ):
                 continue
             count = ""
             if path.suffix == ".csv":
                 with open(path, newline="") as s:
                     count = sum(1 for _ in csv.reader(s)) - 1
-            writer.writerow([path.name, path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest(), count])
-    log(f"package: {out_dir} ({n} candidates + {len(placeholders)} not_modelled, cutoff {snap['cutoff_utc']})")
+            writer.writerow(
+                [
+                    path.name,
+                    path.stat().st_size,
+                    hashlib.sha256(path.read_bytes()).hexdigest(),
+                    count,
+                ]
+            )
+    log(
+        f"package: {out_dir} ({n} candidates + {len(placeholders)} not_modelled, cutoff {snap['cutoff_utc']})"
+    )
 
 
 def add_arguments(parser):
@@ -344,7 +397,9 @@ def add_arguments(parser):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Document and validate a CSV snapshot.")
+    parser = argparse.ArgumentParser(
+        description="Document and validate a CSV snapshot."
+    )
     parser.add_argument("--out_dir", required=True)
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
     parser.add_argument("--uncovered", default=str(DEFAULT_UNCOVERED))

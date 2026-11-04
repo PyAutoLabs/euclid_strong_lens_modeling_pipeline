@@ -80,9 +80,12 @@ from build_inspect import (  # noqa: E402
     extract_zip_member,
     validate_asset,
 )
+
 try:
     import project_paths  # noqa: E402
-except ImportError:  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
+except (
+    ImportError
+):  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
     from types import SimpleNamespace
 
     project_paths = SimpleNamespace(dataset_root=lambda: PROJECT_ROOT / "dataset")
@@ -172,7 +175,9 @@ def stage_zip(stage_dir: Path):
     """
     if not stage_dir.is_dir():
         return None, 0
-    zips = sorted(stage_dir.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+    zips = sorted(
+        stage_dir.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
     return (zips[0] if zips else None), len(zips)
 
 
@@ -181,8 +186,11 @@ def ranked_tiles(grades_csv: Path) -> list:
     Rows a manifest marks ``include_in_catalogue=False`` are left out."""
     with open(grades_csv, newline="", encoding="utf-8-sig") as f:
         rows = [
-            row for row in csv.DictReader(f)
-            if row.get("score") and row.get("tile") and row.get("include_in_catalogue", "True") == "True"
+            row
+            for row in csv.DictReader(f)
+            if row.get("score")
+            and row.get("tile")
+            and row.get("include_in_catalogue", "True") == "True"
         ]
     rows.sort(key=lambda row: (-float(row["score"]), row["tile"]))
     return rows
@@ -218,7 +226,9 @@ def check_lens(results_dir: Path, tile: str):
         if zip_path is None:
             return None, f"{stage} not finished (no zip)"
         if n_zips > 1:
-            print(f"NOTE {tile} stage={stage}: {n_zips} zips; using newest {zip_path.name}")
+            print(
+                f"NOTE {tile} stage={stage}: {n_zips} zips; using newest {zip_path.name}"
+            )
         with zipfile.ZipFile(zip_path) as archive:
             if "files/wcs.json" not in archive.namelist():
                 return None, f"{stage} zip has no files/wcs.json"
@@ -238,7 +248,10 @@ def build_lens(tile, zips, out_dir: Path, dataset_main_dir: Path, images=True):
     if not images:
         return wcs
 
-    for stage, name in (("vis_lp", "subplot_fit_lp.png"), ("vis_pix", "subplot_fit_pix.png")):
+    for stage, name in (
+        ("vis_lp", "subplot_fit_lp.png"),
+        ("vis_pix", "subplot_fit_pix.png"),
+    ):
         if not extract_zip_member(zips[stage], "image/fit.png", out_dir / name):
             raise RuntimeError(f"{tile} stage={stage}: missing image/fit.png")
 
@@ -270,8 +283,14 @@ def rows_for_lens(rank, grade_row, zips, wcs, mass_row):
             "result_zip": zips[stage].name,
         }
         for key in (
-            "crpix_x", "crpix_y", "crval_ra_deg", "crval_dec_deg", "source_model",
-            "source_centre_y_arcsec", "source_centre_x_arcsec", "source_clump_rule",
+            "crpix_x",
+            "crpix_y",
+            "crval_ra_deg",
+            "crval_dec_deg",
+            "source_model",
+            "source_centre_y_arcsec",
+            "source_centre_x_arcsec",
+            "source_clump_rule",
         ):
             row[key] = record.get(key, "")
         if all(key in record for key in LIST_KEYS):
@@ -282,7 +301,9 @@ def rows_for_lens(rank, grade_row, zips, wcs, mass_row):
             clumps = record.get("source_clumps")
             row["n_source_clumps"] = "" if clumps is None else len(clumps)
             if mass_row:
-                row["effective_einstein_radius"] = mass_row.get("effective_einstein_radius", "")
+                row["effective_einstein_radius"] = mass_row.get(
+                    "effective_einstein_radius", ""
+                )
                 row["effective_einstein_radius_lower_1sigma"] = mass_row.get(
                     "effective_einstein_radius_lower_1_sigma", ""
                 )
@@ -478,9 +499,15 @@ def main() -> int:
     wcs_rows, clump_rows = [], []
     for rank, (grade_row, zips) in enumerate(taken, start=1):
         tile = grade_row["tile"]
-        dataset_main_dir = project_paths.dataset_root() / (grade_row.get("sample") or samples[0])
+        dataset_main_dir = project_paths.dataset_root() / (
+            grade_row.get("sample") or samples[0]
+        )
         wcs = build_lens(
-            tile, zips, package_dir / tile, dataset_main_dir, images=not args.skip_images
+            tile,
+            zips,
+            package_dir / tile,
+            dataset_main_dir,
+            images=not args.skip_images,
         )
         mass_row = lens_mass.get(tile)
         if lens_mass and mass_row is None:
@@ -496,22 +523,28 @@ def main() -> int:
         ["score_rank", "lens_name", "grade", "score", "sample", "reason"],
         skipped,
     )
-    title = f"WCS package: top {args.n} {args.sample} lenses by v5 lens-finding grade score"
+    title = (
+        f"WCS package: top {args.n} {args.sample} lenses by v5 lens-finding grade score"
+    )
     (package_dir / "README.txt").write_text(
         README.format(
             n=len(taken),
             sample=args.sample,
             underline="=" * len(title),
             today=date.today().isoformat(),
-            grades=grades_csv.relative_to(PROJECT_ROOT)
-            if grades_csv.is_relative_to(PROJECT_ROOT)
-            else grades_csv,
+            grades=(
+                grades_csv.relative_to(PROJECT_ROOT)
+                if grades_csv.is_relative_to(PROJECT_ROOT)
+                else grades_csv
+            ),
             score_max=taken[0][0]["score"] if taken else "",
             score_min=taken[-1][0]["score"] if taken else "",
         )
     )
 
-    validate_package(package_dir, taken, wcs_rows, clump_rows, images=not args.skip_images)
+    validate_package(
+        package_dir, taken, wcs_rows, clump_rows, images=not args.skip_images
+    )
     print(
         f"Built {len(taken)} lenses ({len(skipped)} skipped) in "
         f"{time.time() - started:.1f}s -> {package_dir}",
@@ -525,7 +558,8 @@ def main() -> int:
             for path in sorted(package_dir.rglob("*")):
                 if path.is_file():
                     archive.write(
-                        path, arcname=f"{package_dir.name}/{path.relative_to(package_dir)}"
+                        path,
+                        arcname=f"{package_dir.name}/{path.relative_to(package_dir)}",
                     )
         staged.replace(zip_path)
         print(f"Zip -> {zip_path} ({zip_path.stat().st_size / 1024 / 1024:.1f} MB)")

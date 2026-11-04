@@ -64,6 +64,7 @@ Usage
 -----
     python scripts/tools/consolidated_manifest.py
 """
+
 import argparse
 import collections
 import csv
@@ -71,10 +72,13 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 import sys
+
 sys.path.insert(0, str(PROJECT_ROOT))
 try:
     import project_paths  # noqa: E402
-except ImportError:  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
+except (
+    ImportError
+):  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
     from types import SimpleNamespace
 
     project_paths = SimpleNamespace(dataset_root=lambda: PROJECT_ROOT / "dataset")
@@ -84,30 +88,52 @@ DATASET_DIR = project_paths.dataset_root() / "dr1_sep1"
 OUTPUT_DIR = PROJECT_ROOT / "output" / "dr1_sep1"
 
 BATCHES = ("sep1", "sep28")
-MANIFEST_COLUMNS = ["tile", "unique_identifier", "grade", "score", "cutout_batch",
-                    "include_in_catalogue", "reason", "note", "v5_tile", "v5_status"]
+MANIFEST_COLUMNS = [
+    "tile",
+    "unique_identifier",
+    "grade",
+    "score",
+    "cutout_batch",
+    "include_in_catalogue",
+    "reason",
+    "note",
+    "v5_tile",
+    "v5_status",
+]
 
 # Recentred objects whose existing model is of the right galaxy (fitted lens
 # centre within 0.1" of the v5 position; lens-finding team notes 2026-10-19):
 # keep it until the v5 run has a vis_pix result (human steer 2026-10-19).
 V5_KEEP_UNTIL_DONE = {
-    "EUCL-DR1-L000144", "EUCL-DR1-L001542", "EUCL-DR1-L018877",
-    "EUCL-DR1-L019987", "EUCL-DR1-L019994", "EUCL-DR1-L020612",
+    "EUCL-DR1-L000144",
+    "EUCL-DR1-L001542",
+    "EUCL-DR1-L018877",
+    "EUCL-DR1-L019987",
+    "EUCL-DR1-L019994",
+    "EUCL-DR1-L020612",
 }
-UNCOVERED_COLUMNS = ["unique_identifier", "grade", "score", "RA_obj", "DEC_obj", "id_str_for_cutout",
-                     "tile", "reason", "note"]
+UNCOVERED_COLUMNS = [
+    "unique_identifier",
+    "grade",
+    "score",
+    "RA_obj",
+    "DEC_obj",
+    "id_str_for_cutout",
+    "tile",
+    "reason",
+    "note",
+]
 
 # v5 modelled file name -> the dataset/dr1_sep1 tile holding it.
 TILE_ALIASES = {
     # L020528: the sep1 delivery stored this cutout without the prefix.
-    "15arcsec_near_RADEC_Tile102161607RA2267255398997DEC0704364979868":
-        "Tile102161607RA2267255398997DEC0704364979868",
+    "15arcsec_near_RADEC_Tile102161607RA2267255398997DEC0704364979868": "Tile102161607RA2267255398997DEC0704364979868",
 }
 
 MODEL_UNUSABLE = {
-    "EUCL-DR1-L001796": "model is of the saturated star the old cutout was centred on (fitted centre 5.3\" "
-                        "from the v4 position)",
-    "EUCL-DR1-L020505": "fitted lens centre 1.6\" from the v5 position (multi-galaxy system)",
+    "EUCL-DR1-L001796": 'model is of the saturated star the old cutout was centred on (fitted centre 5.3" '
+    "from the v4 position)",
+    "EUCL-DR1-L020505": 'fitted lens centre 1.6" from the v5 position (multi-galaxy system)',
     "EUCL-DR1-L002411": "sep1 cutout has an all-zero VIS image (blank wide-plan mosaic at the deep-field edge)",
 }
 
@@ -130,7 +156,9 @@ def _clean(value):
 
 def _read(path):
     with open(path, newline="", encoding="utf-8-sig") as f:
-        return [{_clean(k): _clean(v) for k, v in row.items()} for row in csv.DictReader(f)]
+        return [
+            {_clean(k): _clean(v) for k, v in row.items()} for row in csv.DictReader(f)
+        ]
 
 
 def modelled_tile(obj):
@@ -140,7 +168,9 @@ def modelled_tile(obj):
         return "", ""
     batch, _, name = value.partition(":")
     if batch not in BATCHES or not name:
-        raise SystemExit(f"{obj['Unique_Identifier']}: unexpected fits_modelled_20261011 {value!r}")
+        raise SystemExit(
+            f"{obj['Unique_Identifier']}: unexpected fits_modelled_20261011 {value!r}"
+        )
     return batch, TILE_ALIASES.get(name, name)
 
 
@@ -155,14 +185,21 @@ def v5_done(output_dir: Path, tile: str) -> bool:
     return any((output_dir / tile / "initial_lens_model" / "vis_pix").glob("*.zip"))
 
 
-def build(out_dir: Path, objects_csv: Path = OBJECT_CSV, dataset_dir: Path = DATASET_DIR,
-          output_dir: Path = OUTPUT_DIR):
+def build(
+    out_dir: Path,
+    objects_csv: Path = OBJECT_CSV,
+    dataset_dir: Path = DATASET_DIR,
+    output_dir: Path = OUTPUT_DIR,
+):
     objects = _read(objects_csv)
     uids = [o["Unique_Identifier"] for o in objects]
     if len(set(uids)) != len(uids):
         raise SystemExit(f"{objects_csv}: repeated Unique_Identifier")
-    stray = [o["Unique_Identifier"] for o in objects
-             if o["fits_modelled_20261011"] and o["SWAP_Grade"] not in ("A", "B")]
+    stray = [
+        o["Unique_Identifier"]
+        for o in objects
+        if o["fits_modelled_20261011"] and o["SWAP_Grade"] not in ("A", "B")
+    ]
     if stray:
         raise SystemExit(f"modelled objects that are not grade A/B in v5: {stray}")
 
@@ -174,7 +211,11 @@ def build(out_dir: Path, objects_csv: Path = OBJECT_CSV, dataset_dir: Path = DAT
         uid = obj["Unique_Identifier"]
         batch, tile = modelled_tile(obj)
         if not tile:
-            include, reason, note = False, "no_model", NO_MODEL.get(uid, "not in the 2026-10-11 model snapshot")
+            include, reason, note = (
+                False,
+                "no_model",
+                NO_MODEL.get(uid, "not in the 2026-10-11 model snapshot"),
+            )
         elif uid in MODEL_UNUSABLE:
             include, reason, note = False, "model_unusable", MODEL_UNUSABLE[uid]
         else:
@@ -183,20 +224,39 @@ def build(out_dir: Path, objects_csv: Path = OBJECT_CSV, dataset_dir: Path = DAT
         if v5_tile:
             previous = f"previous {batch}:{tile}" if tile else "no previous model"
             if uid in V5_KEEP_UNTIL_DONE and not include:
-                raise SystemExit(f"{uid}: in V5_KEEP_UNTIL_DONE but its old model is not included")
+                raise SystemExit(
+                    f"{uid}: in V5_KEEP_UNTIL_DONE but its old model is not included"
+                )
             if uid in V5_KEEP_UNTIL_DONE and not v5_done(output_dir, v5_tile):
                 v5_status = "pending"
-                note = (f"v5 run pending: switches to {v5_tile} when its vis_pix result exists"
-                        + (f"; {note}" if note else ""))
+                note = (
+                    f"v5 run pending: switches to {v5_tile} when its vis_pix result exists"
+                    + (f"; {note}" if note else "")
+                )
             elif uid in V5_KEEP_UNTIL_DONE or v5_tile in on_disk:
                 batch, tile, v5_status = "v5", v5_tile, "v5"
-                include, reason, note = True, "included", f"v5 cutout (2026-10-19); {previous}"
+                include, reason, note = (
+                    True,
+                    "included",
+                    f"v5 cutout (2026-10-19); {previous}",
+                )
             else:
                 v5_status = "not_ingested"
                 note = f"{note}; v5 cutout {v5_tile} not yet in {dataset_dir.name}"
-        rows.append(dict(tile=tile, unique_identifier=uid, grade=obj["SWAP_Grade"], score=obj["SWAP_Score"],
-                         cutout_batch=batch, include_in_catalogue=include, reason=reason, note=note,
-                         v5_tile=v5_tile, v5_status=v5_status))
+        rows.append(
+            dict(
+                tile=tile,
+                unique_identifier=uid,
+                grade=obj["SWAP_Grade"],
+                score=obj["SWAP_Score"],
+                cutout_batch=batch,
+                include_in_catalogue=include,
+                reason=reason,
+                note=note,
+                v5_tile=v5_tile,
+                v5_status=v5_status,
+            )
+        )
     listed = {r["unique_identifier"] for r in rows}
     for key in [*MODEL_UNUSABLE, *NO_MODEL, *RELABELLED, *V5_KEEP_UNTIL_DONE]:
         if key not in listed:
@@ -220,36 +280,75 @@ def build(out_dir: Path, objects_csv: Path = OBJECT_CSV, dataset_dir: Path = DAT
         w.writeheader()
         for r in sorted(uncovered, key=lambda r: r["unique_identifier"]):
             o = by_uid[r["unique_identifier"]]
-            w.writerow(dict(unique_identifier=r["unique_identifier"], grade=r["grade"], score=r["score"],
-                            RA_obj=o["RA_obj"], DEC_obj=o["DEC_obj"], id_str_for_cutout=o["id_str_for_cutout"],
-                            tile=r["tile"], reason=r["reason"], note=r["note"]))
+            w.writerow(
+                dict(
+                    unique_identifier=r["unique_identifier"],
+                    grade=r["grade"],
+                    score=r["score"],
+                    RA_obj=o["RA_obj"],
+                    DEC_obj=o["DEC_obj"],
+                    id_str_for_cutout=o["id_str_for_cutout"],
+                    tile=r["tile"],
+                    reason=r["reason"],
+                    note=r["note"],
+                )
+            )
 
     included = [r for r in rows if r["include_in_catalogue"]]
-    print(f"{manifest}: {len(rows)} v5 A/B objects {dict(collections.Counter(r['grade'] for r in rows))}")
-    for key, n in sorted(collections.Counter((r["reason"], r["cutout_batch"]) for r in rows).items()):
+    print(
+        f"{manifest}: {len(rows)} v5 A/B objects {dict(collections.Counter(r['grade'] for r in rows))}"
+    )
+    for key, n in sorted(
+        collections.Counter((r["reason"], r["cutout_batch"]) for r in rows).items()
+    ):
         print(f"  {key[0]:15s} {key[1] or '-':6s} {n}")
-    print(f"  included: {len(included)} {dict(collections.Counter(r['grade'] for r in included))}")
+    print(
+        f"  included: {len(included)} {dict(collections.Counter(r['grade'] for r in included))}"
+    )
     print(f"  not included: {len(uncovered)} -> dr1_sep1_uncovered_ab.csv")
-    print(f"  v5 cutouts: {dict(collections.Counter(r['v5_status'] for r in rows if r['v5_tile']))}")
+    print(
+        f"  v5 cutouts: {dict(collections.Counter(r['v5_status'] for r in rows if r['v5_tile']))}"
+    )
     if dataset_dir.is_dir():
         absent = sorted(r["tile"] for r in included if r["tile"] not in on_disk)
-        print(f"  {dataset_dir}: {len(absent)} included tiles not present"
-              + (f" (e.g. {absent[0]})" if absent else ""))
+        print(
+            f"  {dataset_dir}: {len(absent)} included tiles not present"
+            + (f" (e.g. {absent[0]})" if absent else "")
+        )
     return rows, uncovered
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    parser.add_argument("--out_dir", default=str(GRADES_DIR), help="Output directory (default catalogue/grades).")
-    parser.add_argument("--objects", default=str(OBJECT_CSV), help="v5 object catalogue with the cutout columns.")
-    parser.add_argument("--dataset_dir", default=str(DATASET_DIR),
-                        help="Tile directory: the included tiles are checked against it, and a v5 tile "
-                             "present here switches its no-usable-model object to it.")
-    parser.add_argument("--output_dir", default=str(OUTPUT_DIR),
-                        help="Fit output of the sample: a v5 tile with a vis_pix zip here switches its "
-                             "V5_KEEP_UNTIL_DONE object from the old tile.")
+    parser.add_argument(
+        "--out_dir",
+        default=str(GRADES_DIR),
+        help="Output directory (default catalogue/grades).",
+    )
+    parser.add_argument(
+        "--objects",
+        default=str(OBJECT_CSV),
+        help="v5 object catalogue with the cutout columns.",
+    )
+    parser.add_argument(
+        "--dataset_dir",
+        default=str(DATASET_DIR),
+        help="Tile directory: the included tiles are checked against it, and a v5 tile "
+        "present here switches its no-usable-model object to it.",
+    )
+    parser.add_argument(
+        "--output_dir",
+        default=str(OUTPUT_DIR),
+        help="Fit output of the sample: a v5 tile with a vis_pix zip here switches its "
+        "V5_KEEP_UNTIL_DONE object from the old tile.",
+    )
     args = parser.parse_args()
-    build(Path(args.out_dir), Path(args.objects), Path(args.dataset_dir), Path(args.output_dir))
+    build(
+        Path(args.out_dir),
+        Path(args.objects),
+        Path(args.dataset_dir),
+        Path(args.output_dir),
+    )
 
 
 if __name__ == "__main__":

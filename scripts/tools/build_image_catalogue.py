@@ -53,9 +53,12 @@ from build_inspect import (  # noqa: E402
     result_source,
     validate_asset,
 )
+
 try:
     import project_paths  # noqa: E402
-except ImportError:  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
+except (
+    ImportError
+):  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
     from types import SimpleNamespace
 
     project_paths = SimpleNamespace(dataset_root=lambda: PROJECT_ROOT / "dataset")
@@ -81,9 +84,7 @@ def process_dataset(
     vis_pix_source = result_source(dataset_dir / "initial_lens_model" / "vis_pix")
 
     if vis_lp_source is None or vis_pix_source is None:
-        print(
-            f"WARNING {dataset_name}: skipping; missing vis_lp or vis_pix result"
-        )
+        print(f"WARNING {dataset_name}: skipping; missing vis_lp or vis_pix result")
         return "skipped"
 
     out_dir = catalogue_dir / dataset_name
@@ -191,7 +192,9 @@ def main() -> int:
     output_path = resolve(
         args.output_path, Path(os.environ.get("PYAUTO_OUTPUT_DIR", "output"))
     )
-    catalogue_dir = resolve(args.catalogue_dir, Path("inspect") / f"{args.sample}_images")
+    catalogue_dir = resolve(
+        args.catalogue_dir, Path("inspect") / f"{args.sample}_images"
+    )
     manifest = str(resolve(args.manifest, None)) if args.manifest else None
 
     results_dir = output_path / args.sample

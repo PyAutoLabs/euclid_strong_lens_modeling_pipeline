@@ -76,8 +76,14 @@ def decode(x):
 
 
 class Collector:
-    def __init__(self, project_root: Path, sample: str, cutoff: float, band_cache=None,
-                 band_cache_before=None):
+    def __init__(
+        self,
+        project_root: Path,
+        sample: str,
+        cutoff: float,
+        band_cache=None,
+        band_cache_before=None,
+    ):
         self.root = Path(project_root)
         self.sample = sample
         self.cutoff = cutoff
@@ -113,7 +119,11 @@ class Collector:
                     }
                     for key, name in RESULT_FILES:
                         if has(name):
-                            raw = archive.read(name) if archive else (path / name).read_bytes()
+                            raw = (
+                                archive.read(name)
+                                if archive
+                                else (path / name).read_bytes()
+                            )
                             record[key] = decode(json.loads(raw))
                     # The stored model object is unnecessary and can be huge.
                     for key in ("summary", "latent"):
@@ -159,7 +169,8 @@ class Collector:
         self.expected_bands(tile, fits_path, record, errors)
         for band in ("vis_lp", "vis_pix"):
             record[band] = self.result(
-                self.root / "output" / self.sample / tile / "initial_lens_model" / band, errors
+                self.root / "output" / self.sample / tile / "initial_lens_model" / band,
+                errors,
             )
         sed = self.root / "output_sed" / self.sample / tile / "sersic_lens_model"
         if sed.is_dir():
@@ -188,11 +199,22 @@ def shard_rows(rows, shard, n_shards):
     if not 1 <= shard <= n_shards:
         raise SystemExit(f"--shard must be in 1..{n_shards}")
     per = -(-len(rows) // n_shards)
-    return rows[(shard - 1) * per: shard * per]
+    return rows[(shard - 1) * per : shard * per]
 
 
-def collect(project_root, sample, manifest, cutoff, out_dir, workers=16, band_inventory=None,
-            band_inventory_before=None, shard=0, n_shards=0, log=print):
+def collect(
+    project_root,
+    sample,
+    manifest,
+    cutoff,
+    out_dir,
+    workers=16,
+    band_inventory=None,
+    band_inventory_before=None,
+    shard=0,
+    n_shards=0,
+    log=print,
+):
     """Run the collector; return the path of the JSON-lines file written."""
     project_root = Path(project_root)
     out_dir = Path(out_dir)
@@ -202,7 +224,11 @@ def collect(project_root, sample, manifest, cutoff, out_dir, workers=16, band_in
     band_cache = load_band_cache(band_inventory)
     before = None
     if band_inventory:
-        before = parse_time(band_inventory_before) if band_inventory_before else Path(band_inventory).stat().st_mtime
+        before = (
+            parse_time(band_inventory_before)
+            if band_inventory_before
+            else Path(band_inventory).stat().st_mtime
+        )
     if not n_shards or shard == 1:
         write_json(
             build / SNAPSHOT_JSON,
@@ -224,7 +250,9 @@ def collect(project_root, sample, manifest, cutoff, out_dir, workers=16, band_in
     target = build / (f"results_{shard}.jsonl.gz" if n_shards else "results.jsonl.gz")
     staged = target.with_name(f".{target.name}.tmp")
     start = time.time()
-    with gzip.open(staged, "wt", compresslevel=3) as out, ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+    with gzip.open(staged, "wt", compresslevel=3) as out, ThreadPoolExecutor(
+        max_workers=max(1, workers)
+    ) as pool:
         for i, record in enumerate(pool.map(collector.one, rows), 1):
             out.write(json.dumps(record, separators=(",", ":")) + "\n")
             if i % 500 == 0:
@@ -238,18 +266,30 @@ def add_arguments(parser):
     parser.add_argument("--project_root", default=str(PROJECT_ROOT))
     parser.add_argument("--sample", default="dr1_sep1")
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
-    parser.add_argument("--cutoff", default=None,
-                        help="ISO-8601 (UTC if naive) or unix seconds; results modified later are "
-                        "ignored. Default: now.")
+    parser.add_argument(
+        "--cutoff",
+        default=None,
+        help="ISO-8601 (UTC if naive) or unix seconds; results modified later are "
+        "ignored. Default: now.",
+    )
     parser.add_argument("--out_dir", required=True)
-    parser.add_argument("--workers", type=int,
-                        default=int(os.environ.get("SLURM_CPUS_PER_TASK", 4)) * 4,
-                        help="reader threads (I/O bound; default 4 x SLURM_CPUS_PER_TASK)")
-    parser.add_argument("--band_inventory", default=None,
-                        help="band_inventory.csv of an earlier build; its expected_bands are reused "
-                        "for cutouts not modified since --band_inventory_before")
-    parser.add_argument("--band_inventory_before", default=None,
-                        help="ISO or unix; default the --band_inventory file's mtime")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=int(os.environ.get("SLURM_CPUS_PER_TASK", 4)) * 4,
+        help="reader threads (I/O bound; default 4 x SLURM_CPUS_PER_TASK)",
+    )
+    parser.add_argument(
+        "--band_inventory",
+        default=None,
+        help="band_inventory.csv of an earlier build; its expected_bands are reused "
+        "for cutouts not modified since --band_inventory_before",
+    )
+    parser.add_argument(
+        "--band_inventory_before",
+        default=None,
+        help="ISO or unix; default the --band_inventory file's mtime",
+    )
     parser.add_argument("--shard", type=int, default=0)
     parser.add_argument("--n_shards", type=int, default=0)
 
@@ -260,7 +300,9 @@ def resolve(path, root):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Collect completed-result metadata for a CSV snapshot.")
+    parser = argparse.ArgumentParser(
+        description="Collect completed-result metadata for a CSV snapshot."
+    )
     add_arguments(parser)
     args = parser.parse_args(argv)
     root = Path(args.project_root)

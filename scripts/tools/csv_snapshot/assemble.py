@@ -62,7 +62,14 @@ from common import (  # noqa: E402
     write_json,
 )
 
-SUFFIXES = ["", "_max_lh", "_lower_1_sigma", "_upper_1_sigma", "_lower_3_sigma", "_upper_3_sigma"]
+SUFFIXES = [
+    "",
+    "_max_lh",
+    "_lower_1_sigma",
+    "_upper_1_sigma",
+    "_lower_3_sigma",
+    "_upper_3_sigma",
+]
 MASS = {
     k: "galaxies.lens.mass." + p
     for k, p in [
@@ -93,18 +100,39 @@ FLUX = dict(
     source_flux="total_source_flux_mujy",
     magnification="magnification",
 )
-FLUX.update({f"lens_flux_{i}_fwhm": f"total_lens_flux_{i}_fwhm_mujy" for i in range(1, 5)})
+FLUX.update(
+    {f"lens_flux_{i}_fwhm": f"total_lens_flux_{i}_fwhm_mujy" for i in range(1, 5)}
+)
 OFFSET = {
     "grid_offset_y": "dataset_model.grid_offset.grid_offset_0",
     "grid_offset_x": "dataset_model.grid_offset.grid_offset_1",
 }
-BASE = ["unique_identifier", "tile_id", "grade", "score", "RA_obj", "DEC_obj", "cutout_batch"]
+BASE = [
+    "unique_identifier",
+    "tile_id",
+    "grade",
+    "score",
+    "RA_obj",
+    "DEC_obj",
+    "cutout_batch",
+]
 STATUS = [
-    "vis_lp_completed", "vis_pix_completed", "vis_pix_summary_available",
-    "vis_pix_latents_available", "sersic_vis_completed", "sersic_vis_summary_available",
-    "expected_bands", "completed_bands", "photometry_bands", "missing_bands",
-    "missing_photometry_bands", "expected_band_count", "completed_band_count",
-    "photometry_band_count", "sed_fully_complete", "photometry_fully_available",
+    "vis_lp_completed",
+    "vis_pix_completed",
+    "vis_pix_summary_available",
+    "vis_pix_latents_available",
+    "sersic_vis_completed",
+    "sersic_vis_summary_available",
+    "expected_bands",
+    "completed_bands",
+    "photometry_bands",
+    "missing_bands",
+    "missing_photometry_bands",
+    "expected_band_count",
+    "completed_band_count",
+    "photometry_band_count",
+    "sed_fully_complete",
+    "photometry_fully_available",
     "metadata_error_count",
 ]
 INSPECTION = (
@@ -112,7 +140,7 @@ INSPECTION = (
     + list(INSPECTION_LABELS.values())
     + [f"inspection_consensus_{CONSENSUS_THRESHOLD}"]
 )
-ID =["unique_identifier", "tile_id", "id"]
+ID = ["unique_identifier", "tile_id", "id"]
 MASTER_DROP = ("_max_lh", "_lower_3_sigma", "_upper_3_sigma")
 
 TABLE_FILES = {
@@ -193,9 +221,14 @@ class Table:
 def result_files(out_dir: Path):
     build = Path(out_dir) / BUILD_DIR
     whole = build / "results.jsonl.gz"
-    shards = sorted(build.glob("results_*.jsonl.gz"), key=lambda p: int(p.stem.split("_")[1].split(".")[0]))
+    shards = sorted(
+        build.glob("results_*.jsonl.gz"),
+        key=lambda p: int(p.stem.split("_")[1].split(".")[0]),
+    )
     if whole.exists() and shards:
-        raise SystemExit(f"{build}: both results.jsonl.gz and shard files exist; remove one set")
+        raise SystemExit(
+            f"{build}: both results.jsonl.gz and shard files exist; remove one set"
+        )
     paths = [whole] if whole.exists() else shards
     if not paths:
         raise SystemExit(f"{build}: no collected results (run collect.py)")
@@ -223,8 +256,15 @@ def inspection(votes):
 def placeholder(uid, obj):
     """Master row of a parent A/B object without a model: v5 identity and
     position, no cutout, False flags, zero counts and blank model cells."""
-    row = dict(unique_identifier=uid, tile_id="", grade=obj["SWAP_Grade"], score=obj["SWAP_Score"],
-               RA_obj=obj["RA_obj"], DEC_obj=obj["DEC_obj"], cutout_batch="")
+    row = dict(
+        unique_identifier=uid,
+        tile_id="",
+        grade=obj["SWAP_Grade"],
+        score=obj["SWAP_Score"],
+        RA_obj=obj["RA_obj"],
+        DEC_obj=obj["DEC_obj"],
+        cutout_batch="",
+    )
     for k in STATUS:
         # Lists blank, counts 0 and flags False, as a modelled row with nothing done.
         row[k] = "" if k.endswith("_bands") else 0 if k.endswith("_count") else False
@@ -240,11 +280,21 @@ def superseded(obj, manifest_row):
     if not use:
         return False
     batch, _, tile = use.partition(":")
-    return (batch, tile_key(tile)) != (manifest_row["cutout_batch"], tile_key(manifest_row["tile"]))
+    return (batch, tile_key(tile)) != (
+        manifest_row["cutout_batch"],
+        tile_key(manifest_row["tile"]),
+    )
 
 
-def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=print,
-             inspections_csv=DEFAULT_INSPECTIONS):
+def assemble(
+    out_dir,
+    manifest,
+    objects_csv,
+    uncovered_csv,
+    force=False,
+    log=print,
+    inspections_csv=DEFAULT_INSPECTIONS,
+):
     out_dir = Path(out_dir)
     inspections = read_inspections(inspections_csv)
     manifest_rows = included_rows(manifest)
@@ -253,7 +303,9 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
     uncovered = read_csv(uncovered_csv)
     master_file = out_dir / master_name(n_included + len(uncovered))
     if master_file.exists() and not force:
-        raise SystemExit(f"{master_file} exists; a snapshot directory is written once (--force to redo)")
+        raise SystemExit(
+            f"{master_file} exists; a snapshot directory is written once (--force to redo)"
+        )
 
     # Discover actual band, WCS and clump columns in one streaming pass.
     bands, wcskeys, clumpkeys, n = set(), set(), set(), 0
@@ -272,12 +324,21 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
         raise SystemExit(f"collected {n} records, manifest includes {n_included}")
     bands, wcskeys, clumpkeys = sorted(bands), sorted(wcskeys), sorted(clumpkeys)
 
-    masterfields = BASE + STATUS + INSPECTION + [
-        prefix + k
-        for prefix, mapping in [("mass_", MASS), ("lens_light_", LIGHT), ("source_light_", LIGHT)]
-        for k in cols(mapping)
-        if not k.endswith(MASTER_DROP)
-    ]
+    masterfields = (
+        BASE
+        + STATUS
+        + INSPECTION
+        + [
+            prefix + k
+            for prefix, mapping in [
+                ("mass_", MASS),
+                ("lens_light_", LIGHT),
+                ("source_light_", LIGHT),
+            ]
+            for k in cols(mapping)
+            if not k.endswith(MASTER_DROP)
+        ]
+    )
     masterfields += [
         band + "_" + k
         for band in bands
@@ -289,21 +350,43 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
         "mass": Table(out_dir / TABLE_FILES["mass"], ID + cols(MASS)),
         "lens": Table(out_dir / TABLE_FILES["lens"], ID + cols(LIGHT)),
         "source": Table(out_dir / TABLE_FILES["source"], ID + cols(LIGHT)),
-        "flux": Table(out_dir / TABLE_FILES["flux"], ID + ["waveband", "crval_ra_deg", "crval_dec_deg"] + cols(FLUX)),
-        "offset": Table(out_dir / TABLE_FILES["offset"], ID + ["waveband"] + cols(OFFSET)),
-        "wcs": Table(out_dir / TABLE_FILES["wcs"], ID + ["stage", "waveband"] + wcskeys),
-        "clump": Table(out_dir / TABLE_FILES["clump"], ID + ["stage", "waveband", "clump_index"] + clumpkeys),
+        "flux": Table(
+            out_dir / TABLE_FILES["flux"],
+            ID + ["waveband", "crval_ra_deg", "crval_dec_deg"] + cols(FLUX),
+        ),
+        "offset": Table(
+            out_dir / TABLE_FILES["offset"], ID + ["waveband"] + cols(OFFSET)
+        ),
+        "wcs": Table(
+            out_dir / TABLE_FILES["wcs"], ID + ["stage", "waveband"] + wcskeys
+        ),
+        "clump": Table(
+            out_dir / TABLE_FILES["clump"],
+            ID + ["stage", "waveband", "clump_index"] + clumpkeys,
+        ),
         "provenance": Table(
             out_dir / TABLE_FILES["provenance"],
-            ID + ["stage", "waveband", "result_path", "result_mtime_utc", "summary_available",
-                  "latents_available", "wcs_available"],
+            ID
+            + [
+                "stage",
+                "waveband",
+                "result_path",
+                "result_mtime_utc",
+                "summary_available",
+                "latents_available",
+                "wcs_available",
+            ],
         ),
-        "error": Table(out_dir / TABLE_FILES["error"], ["unique_identifier", "tile_id", "path", "error"]),
+        "error": Table(
+            out_dir / TABLE_FILES["error"],
+            ["unique_identifier", "tile_id", "path", "error"],
+        ),
     }
     objects = {
         r["Unique_Identifier"]: r
         for r in read_csv(objects_csv)
-        if r.get("Unique_Identifier") in manifest_by_uid or r.get("SWAP_Grade") in ("A", "B")
+        if r.get("Unique_Identifier") in manifest_by_uid
+        or r.get("SWAP_Grade") in ("A", "B")
     }
     # Parent A/B objects not included: no model, or a model that is not of the lens.
     parent_ab = {uid for uid, o in objects.items() if o.get("SWAP_Grade") in ("A", "B")}
@@ -321,7 +404,9 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
         order.setdefault(r["unique_identifier"], i)
         if r["include_in_catalogue"] == "True":
             order[r["unique_identifier"]] = i
-    unmodelled = sorted(uncovered, key=lambda r: order.get(r["unique_identifier"], math.inf))
+    unmodelled = sorted(
+        uncovered, key=lambda r: order.get(r["unique_identifier"], math.inf)
+    )
     stats = Counter()
     seen = set()
     expected_sources = Counter()
@@ -335,14 +420,24 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
         if uid not in manifest_by_uid or manifest_by_uid[uid]["tile"] != tile:
             raise SystemExit(f"{uid}/{tile}: not an included manifest row")
         if obj is None or obj["SWAP_Grade"] != m["grade"]:
-            raise SystemExit(f"{uid}: missing from the object catalogue or grade differs")
+            raise SystemExit(
+                f"{uid}: missing from the object catalogue or grade differs"
+            )
         seen.add(uid)
-        while unmodelled and order.get(unmodelled[0]["unique_identifier"], math.inf) < order[uid]:
+        while (
+            unmodelled
+            and order.get(unmodelled[0]["unique_identifier"], math.inf) < order[uid]
+        ):
             other = unmodelled.pop(0)["unique_identifier"]
             tables["master"].row(placeholder(other, objects[other]))
         master = dict(
-            unique_identifier=uid, tile_id=tile, grade=m["grade"], score=obj["SWAP_Score"],
-            RA_obj=obj["RA_obj"], DEC_obj=obj["DEC_obj"], cutout_batch=m["cutout_batch"],
+            unique_identifier=uid,
+            tile_id=tile,
+            grade=m["grade"],
+            score=obj["SWAP_Score"],
+            RA_obj=obj["RA_obj"],
+            DEC_obj=obj["DEC_obj"],
+            cutout_batch=m["cutout_batch"],
         )
         expected = set(d.get("expected_bands", []))
         expected_sources[d.get("expected_bands_source", "none")] += 1
@@ -350,7 +445,15 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
         photometry = {
             b
             for b, r in d["sed"].items()
-            if all(extract(r, FLUX).get(k, "") != "" for k in ("lens_flux", "lensed_source_flux", "source_flux", "magnification"))
+            if all(
+                extract(r, FLUX).get(k, "") != ""
+                for k in (
+                    "lens_flux",
+                    "lensed_source_flux",
+                    "source_flux",
+                    "magnification",
+                )
+            )
         }
         pix = d.get("vis_pix")
         lp = d.get("vis_lp")
@@ -387,14 +490,35 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
         stats["input_fits_missing"] += not d["input_fits"]
         for kind, r, mapping, prefix in [
             ("mass", pix, MASS, "mass_"),
-            ("lens", vis, {k: "galaxies.lens.bulge." + v for k, v in LIGHT.items()}, "lens_light_"),
-            ("source", vis, {k: "galaxies.source.bulge." + v for k, v in LIGHT.items()}, "source_light_"),
+            (
+                "lens",
+                vis,
+                {k: "galaxies.lens.bulge." + v for k, v in LIGHT.items()},
+                "lens_light_",
+            ),
+            (
+                "source",
+                vis,
+                {k: "galaxies.source.bulge." + v for k, v in LIGHT.items()},
+                "source_light_",
+            ),
         ]:
             values = extract(r, mapping)
             if values:
-                tables[kind].row(dict(unique_identifier=uid, tile_id=tile, id=r["id"], **values))
-                master.update({prefix + k: v for k, v in values.items() if prefix + k in masterfields})
-        results = [("initial_lens_model", "vis_lp", lp), ("initial_lens_model", "vis_pix", pix)]
+                tables[kind].row(
+                    dict(unique_identifier=uid, tile_id=tile, id=r["id"], **values)
+                )
+                master.update(
+                    {
+                        prefix + k: v
+                        for k, v in values.items()
+                        if prefix + k in masterfields
+                    }
+                )
+        results = [
+            ("initial_lens_model", "vis_lp", lp),
+            ("initial_lens_model", "vis_pix", pix),
+        ]
         results += [("sersic_lens_model", b, r) for b, r in d["sed"].items()]
         for stage, band, r in results:
             if not r:
@@ -402,8 +526,13 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
             ids = dict(unique_identifier=uid, tile_id=tile, id=r["id"])
             tables["provenance"].row(
                 dict(
-                    ids, stage=stage, waveband=band, result_path=r["path"],
-                    result_mtime_utc=datetime.datetime.fromtimestamp(r["mtime"], datetime.timezone.utc).isoformat(),
+                    ids,
+                    stage=stage,
+                    waveband=band,
+                    result_path=r["path"],
+                    result_mtime_utc=datetime.datetime.fromtimestamp(
+                        r["mtime"], datetime.timezone.utc
+                    ).isoformat(),
                     summary_available=bool(r.get("summary")),
                     latents_available=bool(r.get("latent")),
                     wcs_available=bool(r.get("wcs")),
@@ -411,17 +540,37 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
             )
             w = r.get("wcs", {})
             if w:
-                tables["wcs"].row(dict(ids, stage=stage, waveband=band, **{k: v for k, v in w.items() if k != "source_clumps"}))
+                tables["wcs"].row(
+                    dict(
+                        ids,
+                        stage=stage,
+                        waveband=band,
+                        **{k: v for k, v in w.items() if k != "source_clumps"},
+                    )
+                )
                 for i, c in enumerate(w.get("source_clumps", [])):
-                    tables["clump"].row(dict(ids, stage=stage, waveband=band, clump_index=i, **c))
+                    tables["clump"].row(
+                        dict(ids, stage=stage, waveband=band, clump_index=i, **c)
+                    )
             if stage == "sersic_lens_model":
                 values = extract(r, FLUX)
                 if values:
                     tables["flux"].row(
-                        dict(ids, waveband=band, crval_ra_deg=w.get("crval_ra_deg", ""),
-                             crval_dec_deg=w.get("crval_dec_deg", ""), **values)
+                        dict(
+                            ids,
+                            waveband=band,
+                            crval_ra_deg=w.get("crval_ra_deg", ""),
+                            crval_dec_deg=w.get("crval_dec_deg", ""),
+                            **values,
+                        )
                     )
-                    master.update({band + "_" + k: v for k, v in values.items() if band + "_" + k in masterfields})
+                    master.update(
+                        {
+                            band + "_" + k: v
+                            for k, v in values.items()
+                            if band + "_" + k in masterfields
+                        }
+                    )
                 values = extract(r, OFFSET)
                 if values:
                     tables["offset"].row(dict(ids, waveband=band, **values))
@@ -429,14 +578,22 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
             tables["error"].row(dict(unique_identifier=uid, tile_id=tile, **e))
         tables["master"].row(master)
     for r in unmodelled:
-        tables["master"].row(placeholder(r["unique_identifier"], objects[r["unique_identifier"]]))
+        tables["master"].row(
+            placeholder(r["unique_identifier"], objects[r["unique_identifier"]])
+        )
     for table in tables.values():
         table.close()
     if seen != set(manifest_by_uid):
-        raise SystemExit(f"collected {len(seen)} of the {len(manifest_by_uid)} included objects")
+        raise SystemExit(
+            f"collected {len(seen)} of the {len(manifest_by_uid)} included objects"
+        )
 
     with open(out_dir / excluded_name(len(uncovered)), "w", newline="") as stream:
-        writer = csv.DictWriter(stream, list(uncovered[0]) if uncovered else ["unique_identifier"], lineterminator="\n")
+        writer = csv.DictWriter(
+            stream,
+            list(uncovered[0]) if uncovered else ["unique_identifier"],
+            lineterminator="\n",
+        )
         writer.writeheader()
         writer.writerows(uncovered)
     with open(out_dir / "sample_manifest.csv", "w", newline="") as stream:
@@ -453,9 +610,13 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
     report["not_modelled_rows"] = len(excluded)
     report["master_rows"] = n_included + len(excluded)
     report["superseded_cutout_rows"] = sum(
-        superseded(o, manifest_by_uid[uid]) for uid, o in objects.items() if uid in manifest_by_uid
+        superseded(o, manifest_by_uid[uid])
+        for uid, o in objects.items()
+        if uid in manifest_by_uid
     )
-    report["remodelled_v5_rows"] = sum(r.get("v5_status") == "v5" for r in manifest_rows)
+    report["remodelled_v5_rows"] = sum(
+        r.get("v5_status") == "v5" for r in manifest_rows
+    )
     report["inspections_file"] = Path(inspections_csv).name
     report["inspections_sha256"] = file_sha256(inspections_csv)
     report["expected_bands_sources"] = dict(expected_sources)
@@ -468,26 +629,43 @@ def assemble(out_dir, manifest, objects_csv, uncovered_csv, force=False, log=pri
 
 def add_arguments(parser):
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
-    parser.add_argument("--objects", default=str(DEFAULT_OBJECTS),
-                        help="v5 object catalogue (Unique_Identifier, SWAP_Grade, SWAP_Score, RA_obj, DEC_obj, "
-                        "fits_to_use, fits_modelled_20261011)")
-    parser.add_argument("--uncovered", default=str(DEFAULT_UNCOVERED),
-                        help="parent A/B objects not included (catalogue/grades/dr1_sep1_uncovered_ab.csv)")
-    parser.add_argument("--inspections", default=str(DEFAULT_INSPECTIONS),
-                        help="visual-inspection export, one row per cutout (object_id) and one column per "
-                        "inspector (catalogue/inspection/final_classifications.csv)")
+    parser.add_argument(
+        "--objects",
+        default=str(DEFAULT_OBJECTS),
+        help="v5 object catalogue (Unique_Identifier, SWAP_Grade, SWAP_Score, RA_obj, DEC_obj, "
+        "fits_to_use, fits_modelled_20261011)",
+    )
+    parser.add_argument(
+        "--uncovered",
+        default=str(DEFAULT_UNCOVERED),
+        help="parent A/B objects not included (catalogue/grades/dr1_sep1_uncovered_ab.csv)",
+    )
+    parser.add_argument(
+        "--inspections",
+        default=str(DEFAULT_INSPECTIONS),
+        help="visual-inspection export, one row per cutout (object_id) and one column per "
+        "inspector (catalogue/inspection/final_classifications.csv)",
+    )
     parser.add_argument("--force", action="store_true")
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Assemble CSV snapshot tables from collected metadata.")
+    parser = argparse.ArgumentParser(
+        description="Assemble CSV snapshot tables from collected metadata."
+    )
     parser.add_argument("--out_dir", required=True)
     add_arguments(parser)
     args = parser.parse_args(argv)
     root = PROJECT_ROOT
     p = lambda x: Path(x) if Path(x).is_absolute() else root / x  # noqa: E731
-    assemble(p(args.out_dir), p(args.manifest), p(args.objects), p(args.uncovered), args.force,
-             inspections_csv=p(args.inspections))
+    assemble(
+        p(args.out_dir),
+        p(args.manifest),
+        p(args.objects),
+        p(args.uncovered),
+        args.force,
+        inspections_csv=p(args.inspections),
+    )
     return 0
 
 

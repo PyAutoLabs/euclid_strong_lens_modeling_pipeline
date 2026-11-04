@@ -34,7 +34,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 try:
     import project_paths  # noqa: E402
-except ImportError:  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
+except (
+    ImportError
+):  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
     from types import SimpleNamespace
 
     project_paths = SimpleNamespace(dataset_root=lambda: PROJECT_ROOT / "dataset")
@@ -115,10 +117,14 @@ def main() -> int:
         writer.writerows(rows)
 
     with open(out_dir / "sed_missing_lenses.txt", "w") as f:
-        f.write("# lens_name status missing_bands (lenses whose SED chain is not complete)\n")
+        f.write(
+            "# lens_name status missing_bands (lenses whose SED chain is not complete)\n"
+        )
         for row in rows:
             if row["status"] != "complete":
-                f.write(f"{row['lens_name']} {row['status']} {row['missing_bands'] or '-'}\n")
+                f.write(
+                    f"{row['lens_name']} {row['status']} {row['missing_bands'] or '-'}\n"
+                )
 
     counts = {}
     for row in rows:

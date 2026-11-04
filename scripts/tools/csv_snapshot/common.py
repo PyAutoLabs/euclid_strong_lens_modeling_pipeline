@@ -24,10 +24,14 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-DEFAULT_MANIFEST = PROJECT_ROOT / "catalogue" / "grades" / "dr1_sep1_consolidated_manifest.csv"
+DEFAULT_MANIFEST = (
+    PROJECT_ROOT / "catalogue" / "grades" / "dr1_sep1_consolidated_manifest.csv"
+)
 DEFAULT_OBJECTS = PROJECT_ROOT / "catalogue" / "DR1_full_Object_Catalogue_v5_fits.csv"
 DEFAULT_UNCOVERED = PROJECT_ROOT / "catalogue" / "grades" / "dr1_sep1_uncovered_ab.csv"
-DEFAULT_INSPECTIONS = PROJECT_ROOT / "catalogue" / "inspection" / "final_classifications.csv"
+DEFAULT_INSPECTIONS = (
+    PROJECT_ROOT / "catalogue" / "inspection" / "final_classifications.csv"
+)
 
 # Visual-inspection labels of final_classifications.csv -> master vote-count column
 # (the names of paper/plots/inspection_statistics.py and consensus_75.csv).
@@ -43,7 +47,19 @@ CONSENSUS_THRESHOLD = 75
 BUILD_DIR = "_build"
 SNAPSHOT_JSON = "snapshot.json"
 
-WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+WORDS = [
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+]
 
 
 def _clean(value):
@@ -53,7 +69,10 @@ def _clean(value):
 def read_csv(path):
     """Rows of a CSV as dicts, tolerating a BOM and CRLF line ends."""
     with open(path, newline="", encoding="utf-8-sig") as stream:
-        return [{_clean(k): _clean(v) for k, v in row.items()} for row in csv.DictReader(stream)]
+        return [
+            {_clean(k): _clean(v) for k, v in row.items()}
+            for row in csv.DictReader(stream)
+        ]
 
 
 def included_rows(manifest_path):
@@ -63,7 +82,9 @@ def included_rows(manifest_path):
     uids = [r["unique_identifier"] for r in rows]
     tiles = [r["tile"] for r in rows]
     if len(set(uids)) != len(uids) or len(set(tiles)) != len(tiles):
-        raise SystemExit(f"{manifest_path}: included rows repeat a unique_identifier or tile")
+        raise SystemExit(
+            f"{manifest_path}: included rows repeat a unique_identifier or tile"
+        )
     if not rows:
         raise SystemExit(f"{manifest_path}: no include_in_catalogue=True rows")
     return rows
@@ -72,7 +93,7 @@ def included_rows(manifest_path):
 def tile_key(tile):
     """A cutout name from ``Tile`` on, so ``15arcsec_near_RADEC_Tile...`` and
     ``Tile...`` spellings of one cutout compare equal."""
-    return tile[tile.index("Tile"):] if "Tile" in tile else tile
+    return tile[tile.index("Tile") :] if "Tile" in tile else tile
 
 
 def read_inspections(path):
@@ -85,7 +106,9 @@ def read_inspections(path):
         counts = Counter(v for v in row.values() if v)
         unknown = set(counts) - set(INSPECTION_LABELS)
         if unknown:
-            raise SystemExit(f"{path}: {tile} has unknown inspection labels {sorted(unknown)}")
+            raise SystemExit(
+                f"{path}: {tile} has unknown inspection labels {sorted(unknown)}"
+            )
         if tile_key(tile) in votes:
             raise SystemExit(f"{path}: {tile} appears twice")
         if counts:
@@ -148,7 +171,11 @@ def excluded_name(n):
 def git_revision(path=PROJECT_ROOT):
     try:
         return subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True, check=True
+            ["git", "rev-parse", "HEAD"],
+            cwd=path,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.strip()
     except Exception:
         return "unknown"

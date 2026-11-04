@@ -71,7 +71,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 try:
     import project_paths  # noqa: E402
-except ImportError:  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
+except (
+    ImportError
+):  # a mirror of scripts/ alone (the inspection bundle) has no project_paths.py
     from types import SimpleNamespace
 
     project_paths = SimpleNamespace(dataset_root=lambda: PROJECT_ROOT / "dataset")
@@ -257,7 +259,9 @@ def dedup_summary(catalogue_dir: Path):
         "rows": len(rows),
         "tiles_with_model_fits": sum(r["fits_name"] == "model.fits" for r in rows),
         "tiles_with_pre_psf_fits": sum(r["fits_name"] == "pre_psf.fits" for r in rows),
-        "files_rewritten": sum(r["duplicate_extnames_removed"] not in ("", "0") for r in rows),
+        "files_rewritten": sum(
+            r["duplicate_extnames_removed"] not in ("", "0") for r in rows
+        ),
         "hdu_count_distribution": {f"{k[0]}:{k[1]}": v for k, v in sorted(hdu.items())},
         "duplicates_removed_distribution": {
             f"{k[0]}:{k[1]}": v for k, v in sorted(removed.items())
@@ -309,7 +313,11 @@ def band_inventory(pairs, sed_output: Path, catalogue_dir: Path):
         expected = set(bands_from_fits(fits_path)) if fits_path.exists() else set()
         tile_root = sed_output / sample / tile
         model_root = tile_root / "sersic_lens_model"
-        band_dirs = [p for p in model_root.glob("*") if p.is_dir()] if model_root.is_dir() else []
+        band_dirs = (
+            [p for p in model_root.glob("*") if p.is_dir()]
+            if model_root.is_dir()
+            else []
+        )
         completed = {d.name for d in band_dirs if any(d.glob("*.zip"))}
         output_bands = {d.name for d in band_dirs}
         missing = expected - completed
@@ -422,7 +430,13 @@ def build_wcs(catalogue_dir: Path, build_dir: Path, samples, output_dir: str):
         command.append(f"--lens_mass={catalogue_dir / 'lens_mass.csv'}")
     log("wcs: " + " ".join(command))
     with (build_dir / "wcs_package.log").open("w") as stream:
-        subprocess.run(command, check=True, stdout=stream, stderr=subprocess.STDOUT, cwd=PROJECT_ROOT)
+        subprocess.run(
+            command,
+            check=True,
+            stdout=stream,
+            stderr=subprocess.STDOUT,
+            cwd=PROJECT_ROOT,
+        )
     for source, dest in (
         ("wcs.csv", "wcs.csv"),
         ("source_clumps.csv", "source_clumps.csv"),
@@ -448,7 +462,9 @@ def build_wcs(catalogue_dir: Path, build_dir: Path, samples, output_dir: str):
 
 def lens_tiles(catalogue_dir: Path):
     return sorted(
-        p.name for p in catalogue_dir.iterdir() if p.is_dir() and not p.name.startswith("_")
+        p.name
+        for p in catalogue_dir.iterdir()
+        if p.is_dir() and not p.name.startswith("_")
     )
 
 
@@ -483,7 +499,10 @@ def git_revision():
     try:
         return subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            cwd=PROJECT_ROOT, capture_output=True, text=True, check=True,
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.strip()
     except Exception:
         return "unknown"
@@ -518,7 +537,7 @@ def write_readme(catalogue_dir, tile_sample, samples, counts, archive):
         "source_sersic.csv": "source light Sersic (VIS), one row per lens",
         "magnitudes.csv": "lens / lensed-source fluxes, one row per lens x band",
         "witt_wynne.csv": "Witt-Wynne SIEP projection, one row per lens",
-        "astrometric_offsets.csv": "band-to-VIS grid offsets (prior +/-0.5\"), one row per lens x non-VIS band",
+        "astrometric_offsets.csv": 'band-to-VIS grid offsets (prior +/-0.5"), one row per lens x non-VIS band',
         "wcs.csv": "sky positions (lens light, source, lensed images), one row per lens x {vis_lp, vis_pix}",
         "source_clumps.csv": "vis_pix source clumps x their lensed images",
         "wcs_skipped.csv": "lenses with no wcs.csv rows, and why",
@@ -584,7 +603,10 @@ def write_zip(job):
     zip_path, catalogue_dir, relative_files = job
     return write_zip_files(
         zip_path,
-        [(catalogue_dir / relative, f"{catalogue_dir.name}/{relative}") for relative in relative_files],
+        [
+            (catalogue_dir / relative, f"{catalogue_dir.name}/{relative}")
+            for relative in relative_files
+        ],
     )
 
 
@@ -597,13 +619,23 @@ def verify_zip(job):
             raise RuntimeError(f"{zip_path}: CRC failure on {bad}")
         names = archive.namelist()
     tiles = sorted(
-        {n.split("/")[1] for n in names if n.count("/") >= 2 and n.startswith(f"{arc_root}/")}
+        {
+            n.split("/")[1]
+            for n in names
+            if n.count("/") >= 2 and n.startswith(f"{arc_root}/")
+        }
     )
     return zip_path.name, sha256(zip_path), tiles, len(names)
 
 
-def distribute(catalogue_dir: Path, dist_dir: Path, cap_gb: float, workers: int, tile_sample,
-               n_parts=None):
+def distribute(
+    catalogue_dir: Path,
+    dist_dir: Path,
+    cap_gb: float,
+    workers: int,
+    tile_sample,
+    n_parts=None,
+):
     dist_dir.mkdir(parents=True, exist_ok=True)
     parts = plan_parts(catalogue_dir, int(cap_gb * 1024**3), n_parts)
     if n_parts and len(parts) != n_parts:
@@ -615,7 +647,11 @@ def distribute(catalogue_dir: Path, dist_dir: Path, cap_gb: float, workers: int,
         files = []
         for tile in tiles:
             part_of[tile] = name
-            files += [f"{tile}/{p.name}" for p in sorted((catalogue_dir / tile).iterdir()) if p.is_file()]
+            files += [
+                f"{tile}/{p.name}"
+                for p in sorted((catalogue_dir / tile).iterdir())
+                if p.is_file()
+            ]
         jobs.append((dist_dir / name, catalogue_dir, files))
     rule = f"exactly {n_parts}" if n_parts else f"cap {cap_gb} GB"
     log(f"distribution: {len(parts)} part zips ({rule}), {workers} workers")
@@ -627,9 +663,15 @@ def distribute(catalogue_dir: Path, dist_dir: Path, cap_gb: float, workers: int,
         writer.writerow(["tile_id", "sample", "part_zip"])
         for tile in sorted(part_of):
             writer.writerow([tile, tile_sample.get(tile, ""), part_of[tile]])
-    shutil.copyfile(dist_dir / "parts_manifest.csv", catalogue_dir / "parts_manifest.csv")
+    shutil.copyfile(
+        dist_dir / "parts_manifest.csv", catalogue_dir / "parts_manifest.csv"
+    )
 
-    root_files = sorted(p.name for p in catalogue_dir.iterdir() if p.is_file() and not p.name.startswith("."))
+    root_files = sorted(
+        p.name
+        for p in catalogue_dir.iterdir()
+        if p.is_file() and not p.name.startswith(".")
+    )
     jobs.insert(0, (dist_dir / "catalogue_csvs.zip", catalogue_dir, root_files))
 
     with Pool(max(1, workers)) as pool:
@@ -647,7 +689,9 @@ def distribute(catalogue_dir: Path, dist_dir: Path, cap_gb: float, workers: int,
         for tile in tiles:
             seen[tile] += 1
             if part_of.get(tile) != name:
-                raise RuntimeError(f"{tile} found in {name}, manifest says {part_of.get(tile)}")
+                raise RuntimeError(
+                    f"{tile} found in {name}, manifest says {part_of.get(tile)}"
+                )
     lenses = set(lens_tiles(catalogue_dir))
     if set(seen) != lenses or any(v != 1 for v in seen.values()):
         raise RuntimeError(
@@ -688,7 +732,9 @@ def parse_args():
         "repeatable). Default: <catalogue>/_build/manifest.csv if the build copied one, "
         "else catalogue/grades/dr1_sep1_consolidated_manifest.csv.",
     )
-    parser.add_argument("--archive", default="0", help="'chunked' writes the distribution zips.")
+    parser.add_argument(
+        "--archive", default="0", help="'chunked' writes the distribution zips."
+    )
     parser.add_argument("--part_max_gb", type=float, default=10.0)
     parser.add_argument(
         "--n_parts",
@@ -697,7 +743,9 @@ def parse_args():
         help="Write EXACTLY this many part zips (contiguous, near-equal bytes); "
         "overrides --part_max_gb. 0 = use --part_max_gb.",
     )
-    parser.add_argument("--workers", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", 1)))
+    parser.add_argument(
+        "--workers", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
+    )
     parser.add_argument("--allow_partial", action="store_true")
     parser.add_argument("--skip_wcs", action="store_true")
     return parser.parse_args()
@@ -714,9 +762,13 @@ def main():
 
     n_chunks = len(list(build_dir.glob("chunk_[0-9]*.txt")))
     done = sorted(build_dir.glob("chunk_[0-9]*.done"))
-    log(f"{len(pairs)} requested tiles over {samples}; {len(done)}/{n_chunks} chunks done")
+    log(
+        f"{len(pairs)} requested tiles over {samples}; {len(done)}/{n_chunks} chunks done"
+    )
     if len(done) != n_chunks and not args.allow_partial:
-        raise SystemExit("not every chunk finished (no .done marker); --allow_partial to merge anyway")
+        raise SystemExit(
+            "not every chunk finished (no .done marker); --allow_partial to merge anyway"
+        )
     tiles_requested = [tile for _s, tile in pairs]
     if len(set(tiles_requested)) != len(tiles_requested):
         raise SystemExit("tiles.txt repeats a tile id")
@@ -738,15 +790,26 @@ def main():
 
     copied = build_dir / "manifest.csv"
     grades = args.grades or [
-        str(copied if copied.exists() else PROJECT_ROOT / "catalogue/grades/dr1_sep1_consolidated_manifest.csv")
+        str(
+            copied
+            if copied.exists()
+            else PROJECT_ROOT / "catalogue/grades/dr1_sep1_consolidated_manifest.csv"
+        )
     ]
     write_grades(tile_sample, grades, catalogue_dir)
 
     if not args.skip_wcs:
         build_wcs(catalogue_dir, build_dir, samples, args.output_dir)
 
-    for name in ("wcs.csv", "source_clumps.csv", "wcs_skipped.csv", "grades.csv",
-                 "band_inventory.csv", "unresolved_manifest.csv", "excluded_tiles.csv"):
+    for name in (
+        "wcs.csv",
+        "source_clumps.csv",
+        "wcs_skipped.csv",
+        "grades.csv",
+        "band_inventory.csv",
+        "unresolved_manifest.csv",
+        "excluded_tiles.csv",
+    ):
         path = catalogue_dir / name
         if path.exists():
             with path.open(newline="") as stream:

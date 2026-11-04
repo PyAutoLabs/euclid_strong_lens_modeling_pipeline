@@ -63,7 +63,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import util
 
-
 DEFAULT_SAMPLE = "q1_walsmley"
 DEFAULT_DATASET = "102018665_NEG570040238507752998"
 
