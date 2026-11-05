@@ -65,6 +65,13 @@ class _EmptyRow:
     it reads the four kwargs dicts (PyAutoFit#1598): empty, every argument
     misses cleanly and the non-strict column logs one warning and emits its
     columns with empty values, which is exactly the miss this stub wants.
+
+    Since the results library's honest exports (PyAutoFit results-library
+    phase 3), ``Column.value`` also classifies the path against
+    ``parameter_paths`` and records why a value is missing in ``reasons``,
+    naming ``missing_latent_summary`` when ``latent_summary`` is ``None``. Empty
+    and ``None`` keep every lookup a miss; ``reasons`` is per instance so the
+    appended reasons never leak between rows.
     """
 
     median_pdf_sample_kwargs: dict = {}
@@ -72,6 +79,11 @@ class _EmptyRow:
     values_at_sigma_1_kwargs: dict = {}
     values_at_sigma_3_kwargs: dict = {}
     known_paths: frozenset = frozenset()
+    parameter_paths: frozenset = frozenset()
+    latent_summary = None
+
+    def __init__(self):
+        self.reasons: list = []
 
 
 def _column_names_from(name, value_type_names):
