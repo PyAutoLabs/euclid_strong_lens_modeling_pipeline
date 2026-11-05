@@ -1,0 +1,85 @@
+#!/bin/bash -l
+# Sky orientation phase 2d (#115): package the DR1 v5 release with the north-up PNGs.
+#   1. scripts/tools/north_up_catalogue_tree.py: CAT hard-linked to CAT_NORTHUP, with the
+#      render_north_up.py PNGs from RENDER swapped in (fit-frame PNG kept where none was drawn).
+#   2. package_release.py csv + full tiers from CAT_NORTHUP -> OUT (same manifest, CSV snapshot,
+#      exclusion list and n_parts as the sky-frame release; nothing existing is overwritten).
+#   3. Every member of OUT is compared with BASELINE by sha256: only release PNGs (and the
+#      tier documents) may differ.
+#   hpc/sync submit cpu submit_north_up_release --export=ALL,RENDER=inspect/north_up_full_20261105
+#SBATCH -J north_up_release
+#SBATCH -n 1
+#SBATCH --cpus-per-task=20
+#SBATCH --mem=64gb
+#SBATCH --partition=ral
+# NEVER add gpu here: CPU arrays on the gpu partition fill both A100 nodes' CPUs and idle all 8 GPUs.
+#SBATCH -t 12:00:00
+#SBATCH -o output/north_up_release.%A.out
+#SBATCH -e error/north_up_release.%A.err
+
+CODE="${CODE:-$(cd "${SLURM_SUBMIT_DIR:-.}/../.." && pwd)}"  # hpc/sync submits from hpc/batch_cpu
+PROJECT="${PROJECT:-/mnt/ral/jnightin/active/euclid_dr1}"
+export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
+export RELEASE_PROJECT_ROOT="$PROJECT"  # snapshot.json paths relative to the project
+source "$PROJECT/activate.sh"
+set -euo pipefail
+export TMPDIR="$CODE/.tmp_${SLURM_JOB_ID:-$$}"; mkdir -p "$TMPDIR"; trap 'rm -rf "$TMPDIR"' EXIT
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+
+: "${RENDER:?set RENDER}"
+CAT=${CAT:-inspect/dr1_catalogue_v5}
+CAT_NORTHUP=${CAT_NORTHUP:-inspect/dr1_catalogue_v5_northup}
+CSV=${CSV:-inspect/dr1_catalogue_v5_csv_skyframe}
+OUT=${OUT:-inspect/dr1_catalogue_v5_release_northup}
+BASELINE=${BASELINE:-inspect/dr1_catalogue_v5_release_skyframe}
+cd "$PROJECT"
+[[ -e "$OUT" ]] && { echo "$OUT exists: refusing to overwrite"; exit 1; }
+date; cat "$CODE/CODE_COMMIT" 2>/dev/null | tail -2 || true
+
+echo "==> [1] north-up catalogue tree"
+if [[ "${SKIP_TREE:-0}" == 1 ]]; then echo "SKIP_TREE=1: reusing $CAT_NORTHUP"; else
+python3 "$CODE/scripts/tools/north_up_catalogue_tree.py" \
+    --catalogue_dir="$CAT" --render_dir="$RENDER" --out_dir="$CAT_NORTHUP"
+fi
+
+echo "==> [2] release tiers csv + full"
+python3 "$CODE/scripts/tools/package_release.py" \
+    --catalogue_dir="$PROJECT/$CAT_NORTHUP" \
+    --dataset_dir="$PROJECT/dataset/dr1_sep1" \
+    --manifest="$PROJECT/$CAT/_build/manifest.csv" \
+    --csv_dir="$PROJECT/$CSV" \
+    --out_dir="$PROJECT/$OUT" \
+    --tier=csv,full \
+    --n_parts=20 \
+    --workers="${SLURM_CPUS_PER_TASK:-2}" \
+    --excluded="$PROJECT/inspect/dr1_catalogue_v5_release_excluded.csv" \
+    --absent_out="$PROJECT/${OUT}_absent_tiles.csv"
+
+echo "==> [3] only PNGs differ from $BASELINE"
+python3 - "$BASELINE" "$OUT" <<'PY'
+import csv, io, sys, zipfile
+from collections import Counter
+from pathlib import Path
+
+def members(release):
+    z = zipfile.ZipFile(Path(release) / "full" / "catalogue_csvs.zip")
+    name = next(n for n in z.namelist() if n.count("/") == 1 and n.endswith("/file_manifest.csv"))
+    rows = csv.DictReader(io.TextIOWrapper(z.open(name), newline=""))
+    return {r["member"].split("/", 1)[1]: r["sha256"] for r in rows}
+
+old, new = members(sys.argv[1]), members(sys.argv[2])
+changed = Counter()
+bad = []
+for path in sorted(set(old) | set(new)):
+    if old.get(path) == new.get(path):
+        continue
+    kind = path.rsplit(".", 1)[-1]
+    changed[kind] += 1
+    if kind != "png" and path.split("/")[-1] not in ("snapshot.json", "parts_manifest.csv", "README.md", "KNOWN_ISSUES.md"):
+        bad.append(path)
+print(f"members {len(old)} -> {len(new)}; changed by type: {dict(changed)}")
+for path in bad[:20]:
+    print("UNEXPECTED CHANGE:", path)
+sys.exit(1 if bad or set(old) != set(new) else 0)
+PY
+date; echo NORTH_UP_RELEASE_DONE
