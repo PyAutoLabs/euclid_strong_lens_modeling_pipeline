@@ -58,7 +58,7 @@ def assert_mirrored(fit, mirrored):
     )
     np.testing.assert_allclose(mirrored.chi_squared, fit.chi_squared, rtol=1e-9)
     np.testing.assert_allclose(mirrored.figure_of_merit, fit.figure_of_merit,
-                               rtol=render_north_up.FOM_RTOL)
+                               rtol=1e-6)
 
 
 def test__light_profile_fit__mirrors_exactly():
