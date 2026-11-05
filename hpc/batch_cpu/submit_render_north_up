@@ -32,12 +32,14 @@ TASK=${SLURM_ARRAY_TASK_ID:-0}; COUNT=${SLURM_ARRAY_TASK_COUNT:-1}
 echo "code=$CODE project=$PROJECT task=$TASK/$COUNT"; date
 cat "$CODE/CODE_COMMIT" 2>/dev/null || true
 cd "$PROJECT"
-python3 "$CODE/scripts/tools/render_north_up.py" \
+# RENDER_SCRIPT / WITNESS_PREFIX let a fix-up pass run beside a live array without touching its
+# code or its witness files.
+python3 "${RENDER_SCRIPT:-$CODE/scripts/tools/render_north_up.py}" \
     --output_root=output/dr1_sep1 \
     --sed_root=output_sed/dr1_sep1 \
     --dataset_root=dataset/dr1_sep1 \
     --out_dir="$OUT" \
     --tiles_file="$TILES_FILE" \
     --chunk="$TASK/$COUNT" \
-    --witness_csv="$OUT/witness_${TASK}.csv"
+    --witness_csv="$OUT/${WITNESS_PREFIX:-witness}_${TASK}.csv"
 date; echo RENDER_NORTH_UP_DONE
