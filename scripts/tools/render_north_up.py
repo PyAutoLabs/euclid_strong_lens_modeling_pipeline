@@ -33,7 +33,7 @@ Products per lens (``<out_dir>/<tile>/``):
 - ``fit_multi_wavelength.png``: data, lens light model, lens light subtracted and source
   model for every band of the SED chain, bands increasing in wavelength left to right.
 
-``<out_dir>/witness.csv`` holds one row per fit.
+``<out_dir>/witness.csv`` (or ``--witness_csv``) holds one row per fit.
 
 Usage:
 
@@ -466,6 +466,9 @@ def main():
     parser.add_argument("--out_dir", required=True)
     parser.add_argument("--tiles", default="", help="comma-separated tile names")
     parser.add_argument("--tiles_file", default=None, help="one tile name per line")
+    parser.add_argument("--chunk", default=None,
+                        help="i/n: render only the i-th (0-based) of n equal slices of the tiles (SLURM arrays)")
+    parser.add_argument("--witness_csv", default=None, help="default <out_dir>/witness.csv")
     args = parser.parse_args()
 
     tiles = [t for t in args.tiles.split(",") if t]
@@ -473,10 +476,13 @@ def main():
         tiles += [line.strip() for line in Path(args.tiles_file).read_text().splitlines() if line.strip()]
     if not tiles:
         parser.error("no tiles given")
+    if args.chunk:
+        index, total = (int(v) for v in args.chunk.split("/"))
+        tiles = tiles[index::total]
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    witness_path = out_dir / "witness.csv"
+    witness_path = Path(args.witness_csv) if args.witness_csv else out_dir / "witness.csv"
     new = not witness_path.exists()
     with open(witness_path, "a", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=WITNESS_COLUMNS)

@@ -1,0 +1,43 @@
+#!/bin/bash -l
+# Sky orientation phase 2d (#115): north-up, east-left re-render of the per-lens release PNGs
+# from finished result zips (scripts/tools/render_north_up.py). No non-linear search runs.
+# TILES_FILE lists the lenses; each array task renders slice $SLURM_ARRAY_TASK_ID of
+# $SLURM_ARRAY_TASK_COUNT and writes its own witness CSV. OUT is never a release folder.
+#   hpc/sync submit cpu submit_render_north_up --array=0-4 \
+#       --export=ALL,TILES_FILE=inspect/north_up_pilot_20261105/tiles.txt,OUT=inspect/north_up_pilot_20261105
+#SBATCH -J render_north_up
+#SBATCH -n 1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=8gb
+#SBATCH --partition=ral
+# NEVER add gpu here: CPU arrays on the gpu partition fill both A100 nodes' CPUs and idle all 8 GPUs.
+#SBATCH -t 06:00:00
+#SBATCH -o output/render_north_up.%A_%a.out
+#SBATCH -e error/render_north_up.%A_%a.err
+
+CODE="${CODE:-$(cd "${SLURM_SUBMIT_DIR:-.}/../.." && pwd)}"  # hpc/sync submits from hpc/batch_cpu
+PROJECT="${PROJECT:-/mnt/ral/jnightin/active/euclid_dr1}"
+export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
+source "$PROJECT/activate.sh"
+set -euo pipefail
+export JAX_PLATFORM_NAME=cpu JAX_PLATFORMS=cpu
+export TMPDIR="$CODE/.tmp_${SLURM_JOB_ID:-$$}_${SLURM_ARRAY_TASK_ID:-0}"
+export NUMBA_CACHE_DIR="$TMPDIR/numba" MPLCONFIGDIR="$TMPDIR/mpl"
+mkdir -p "$TMPDIR"; trap 'rm -rf "$TMPDIR"' EXIT
+export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2
+export PYTHONPATH="$CODE:${PYTHONPATH:-}"
+
+: "${TILES_FILE:?set TILES_FILE}" "${OUT:?set OUT}"
+TASK=${SLURM_ARRAY_TASK_ID:-0}; COUNT=${SLURM_ARRAY_TASK_COUNT:-1}
+echo "code=$CODE project=$PROJECT task=$TASK/$COUNT"; date
+cat "$CODE/CODE_COMMIT" 2>/dev/null || true
+cd "$PROJECT"
+python3 "$CODE/scripts/tools/render_north_up.py" \
+    --output_root=output/dr1_sep1 \
+    --sed_root=output_sed/dr1_sep1 \
+    --dataset_root=dataset/dr1_sep1 \
+    --out_dir="$OUT" \
+    --tiles_file="$TILES_FILE" \
+    --chunk="$TASK/$COUNT" \
+    --witness_csv="$OUT/witness_${TASK}.csv"
+date; echo RENDER_NORTH_UP_DONE
