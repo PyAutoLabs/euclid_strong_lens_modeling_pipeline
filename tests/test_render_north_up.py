@@ -104,3 +104,19 @@ def test__pixelized_fit__mirrors_with_adapt_images_and_mesh_grid():
         np.asarray(fit.inversion.reconstruction),
         rtol=1e-6, atol=1e-6 * np.max(np.abs(fit.inversion.reconstruction)),
     )
+
+
+def test__witness__a_singular_mirrored_log_determinant_is_judged_on_the_images():
+    lens, source = galaxies_from()
+    fit = al.FitImaging(dataset=dataset_from(lens, source), tracer=al.Tracer(galaxies=[lens, source]))
+    mirrored = render_north_up.mirrored_fit_from(fit)
+
+    class SingularFigureOfMerit:
+        def __getattr__(self, name):
+            if name == "figure_of_merit":
+                raise np.linalg.LinAlgError("Matrix is not positive definite")
+            return getattr(mirrored, name)
+
+    row = render_north_up.witness_from("tile", "vis_pix", fit, SingularFigureOfMerit(), fit.figure_of_merit)
+    assert row["status"] == "pass_no_fom"
+    assert np.isnan(row["mirrored_figure_of_merit"])

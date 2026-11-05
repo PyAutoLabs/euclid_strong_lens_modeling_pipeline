@@ -210,13 +210,21 @@ def relative_difference(a, b):
 
 
 def witness_from(tile, stage, fit, mirrored, stored_log_likelihood):
+    # The mirrored Delaunay regularization matrix can come out numerically singular (co-circular
+    # mesh points triangulate differently), so its log-determinant -- used only by the figure of
+    # merit, not by any drawn image -- fails to factorize. The figure is then judged on the model
+    # image, chi-squared and reconstruction alone, and the row says so ("pass_no_fom").
+    try:
+        mirrored_figure_of_merit = mirrored.figure_of_merit
+    except np.linalg.LinAlgError:
+        mirrored_figure_of_merit = float("nan")
     row = {
         "tile": tile,
         "stage": stage,
         "native_figure_of_merit": fit.figure_of_merit,
-        "mirrored_figure_of_merit": mirrored.figure_of_merit,
+        "mirrored_figure_of_merit": mirrored_figure_of_merit,
         "stored_log_likelihood": stored_log_likelihood,
-        "fom_rel_diff": abs(mirrored.figure_of_merit - fit.figure_of_merit) / abs(fit.figure_of_merit),
+        "fom_rel_diff": abs(mirrored_figure_of_merit - fit.figure_of_merit) / abs(fit.figure_of_merit),
         "model_image_rel_diff": relative_difference(
             np.flipud(np.asarray(fit.model_data.native)), mirrored.model_data.native
         ),
@@ -232,9 +240,11 @@ def witness_from(tile, stage, fit, mirrored, stored_log_likelihood):
         row["model_image_rel_diff"] <= (MODEL_IMAGE_RTOL if vis else BAND_RTOL)
         and row["chi_squared_rel_diff"] <= (CHI_SQUARED_RTOL if vis else BAND_RTOL)
         and row["reconstruction_rel_diff"] <= (RECONSTRUCTION_RTOL if vis else BAND_RTOL)
-        and row["fom_rel_diff"] <= FOM_RTOL
     )
-    row["status"] = "pass" if passed else "FAIL"
+    if np.isnan(mirrored_figure_of_merit):
+        row["status"] = "pass_no_fom" if passed else "FAIL"
+    else:
+        row["status"] = "pass" if passed and row["fom_rel_diff"] <= FOM_RTOL else "FAIL"
     return row
 
 
@@ -438,7 +448,7 @@ def render_tile(tile, args, writer):
             writer.writerow({"tile": tile, "stage": stage, "status": f"error: {type(exc).__name__}"})
             return None
         writer.writerow(row)
-        return mirrored if row["status"] == "pass" else None
+        return mirrored if row["status"] in ("pass", "pass_no_fom") else None
 
     def loaded(root, stage):
         # A stored result the current model cannot rebuild is recorded, not fatal for the lens.
@@ -448,13 +458,21 @@ def render_tile(tile, args, writer):
             writer.writerow({"tile": tile, "stage": stage, "status": f"load_error: {type(exc).__name__}"})
             return {}
 
+    def drawn(stage, draw, *a):
+        # A figure that fails to draw is recorded and skipped; the lens's other figures go on.
+        try:
+            draw(*a)
+            return True
+        except Exception as exc:
+            writer.writerow({"tile": tile, "stage": stage, "status": f"draw_error: {type(exc).__name__}"})
+            return False
+
     fits = loaded(Path(args.output_root), "initial_lens_model")
     vis_lp_mirrored = None
     for search, target in (("vis_lp", "vis_lp_fit.png"), ("vis_pix", "vis_pix_fit.png")):
         if ("initial_lens_model", search) in fits:
             mirrored = checked(search, *fits[("initial_lens_model", search)])
-            if mirrored is not None:
-                save_subplot_fit(mirrored, out / target)
+            if mirrored is not None and drawn(search, save_subplot_fit, mirrored, out / target):
                 if search == "vis_lp":
                     vis_lp_mirrored = mirrored
 
@@ -483,7 +501,7 @@ def render_tile(tile, args, writer):
                 continue
             band_fits[band] = mirrored
             if band == "vis":
-                save_subplot_fit(mirrored, out / "fit_sersic.png")
+                drawn("sersic_vis", save_subplot_fit, mirrored, out / "fit_sersic.png")
         # All bands or none: a band failing its witness must not silently drop out of the figure.
         if band_fits and not failed:
             save_multi_wavelength(band_fits, out / "fit_multi_wavelength.png")
