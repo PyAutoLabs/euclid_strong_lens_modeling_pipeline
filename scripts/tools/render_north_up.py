@@ -14,12 +14,16 @@ For every fit it:
    goes through ``sky_frame.plus_y_north_from``. The fit is then solved again (inversion
    included), so critical curves, caustics and source planes come out in the mirrored frame;
 3. checks the mirror (the witness): the mirrored model image must equal the flipped native one,
-   with the chi-squared and the pixelized reconstruction unchanged. VIS fits mirror to ~1e-11; the
-   NISP and DECam band fits only to ~1e-5, so all three checks get ``BAND_RTOL`` for them (accepted by the human on the
-   2026-11-05 pilot as visually exact). The figure of merit must agree to ``FOM_RTOL``: the
-   log-determinant of a Delaunay regularization matrix is conditioning limited (up to 5e-4 on the
-   pilot), which also separates a native rebuild from the stored value. ``witness.csv`` keeps
-   the measured differences either way;
+   with the chi-squared and the pixelized reconstruction unchanged. The VIS lens-model fits mirror
+   to ~1e-11; the Sersic fits (VIS and the NISP/DECam bands) only to ~1e-5, so all three checks
+   get ``BAND_RTOL`` for them (accepted by the human on the 2026-11-05 pilot as visually exact).
+   Pixels that are NaN in both images are ignored. The figure of merit must agree to
+   ``FOM_RTOL``: the log-determinant of a Delaunay regularization matrix is conditioning limited
+   (up to 5e-4 on the pilot), which also separates a native rebuild from the stored value. For
+   ~2% of lenses the pixelized fit does not survive the mirror (a different solution, or an
+   inversion that will not solve); those fail or are recorded as ``error`` and are not drawn, and
+   the release keeps their fit-frame PNG (human, 2026-11-05). ``witness.csv`` keeps the measured
+   differences either way;
 4. draws the figure with the library plotters, so +y on every axis now means north, and adds
    an N/E compass.
 
@@ -90,7 +94,8 @@ CHI_SQUARED_RTOL = 1e-9
 RECONSTRUCTION_RTOL = 1e-6
 BAND_RTOL = 1e-4
 FOM_RTOL = 1e-3
-VIS_STAGES = ("vis_lp", "vis_pix", "sersic_vis")
+# The Sersic VIS fit mirrors only to ~1e-5 like the bands (full run, 2026-11-05), so it is not here.
+VIS_STAGES = ("vis_lp", "vis_pix")
 
 # Effective wavelengths (nm), for ordering the multi-wavelength panels.
 BAND_WAVELENGTH = {
@@ -194,7 +199,12 @@ def mirrored_fit_from(fit):
 
 
 def relative_difference(a, b):
+    """Max |a - b| over max |a|, ignoring pixels that are NaN in both (some band images carry NaNs)."""
     a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    both_nan = np.isnan(a) & np.isnan(b)
+    if both_nan.all():
+        return 0.0
+    a, b = a[~both_nan], b[~both_nan]
     scale = np.max(np.abs(a)) or 1.0
     return float(np.max(np.abs(a - b)) / scale)
 
@@ -210,7 +220,7 @@ def witness_from(tile, stage, fit, mirrored, stored_log_likelihood):
         "model_image_rel_diff": relative_difference(
             np.flipud(np.asarray(fit.model_data.native)), mirrored.model_data.native
         ),
-        "chi_squared_rel_diff": abs(mirrored.chi_squared - fit.chi_squared) / abs(fit.chi_squared),
+        "chi_squared_rel_diff": relative_difference(fit.chi_squared, mirrored.chi_squared),
         "reconstruction_rel_diff": (
             relative_difference(fit.inversion.reconstruction, mirrored.inversion.reconstruction)
             if fit.inversion is not None
@@ -419,8 +429,14 @@ def render_tile(tile, args, writer):
     dataset_dir = Path(args.dataset_root) / tile
 
     def checked(stage, fit, stored):
-        mirrored = mirrored_fit_from(fit)
-        row = witness_from(tile, stage, fit, mirrored, stored)
+        # An inversion that fails to solve (e.g. a matrix that is not positive definite) loses
+        # this figure only; the lens's other figures are still drawn.
+        try:
+            mirrored = mirrored_fit_from(fit)
+            row = witness_from(tile, stage, fit, mirrored, stored)
+        except Exception as exc:
+            writer.writerow({"tile": tile, "stage": stage, "status": f"error: {type(exc).__name__}"})
+            return None
         writer.writerow(row)
         return mirrored if row["status"] == "pass" else None
 
