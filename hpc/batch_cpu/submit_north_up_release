@@ -3,7 +3,8 @@
 #   1. scripts/tools/north_up_catalogue_tree.py: CAT hard-linked to CAT_NORTHUP, with the
 #      render_north_up.py PNGs from RENDER swapped in (fit-frame PNG kept where none was drawn).
 #   2. package_release.py csv + full tiers from CAT_NORTHUP -> OUT (same manifest, CSV snapshot,
-#      exclusion list and n_parts as the sky-frame release; nothing existing is overwritten).
+#      exclusion list, n_parts and release name as the sky-frame release — the name would
+#      otherwise follow the tree's folder name; nothing existing is overwritten).
 #   3. Every member of OUT is compared with BASELINE by sha256: only release PNGs (and the
 #      tier documents) may differ, PNGs may be added (a north-up figure where the release had
 #      none), and nothing may be removed.
@@ -52,6 +53,7 @@ python3 "$CODE/scripts/tools/package_release.py" \
     --out_dir="$PROJECT/$OUT" \
     --tier=csv,full \
     --n_parts=20 \
+    --release_name="${RELEASE_NAME:-dr1_catalogue_v5}" \
     --workers="${SLURM_CPUS_PER_TASK:-2}" \
     --excluded="$PROJECT/inspect/dr1_catalogue_v5_release_excluded.csv" \
     --absent_out="$PROJECT/${OUT}_absent_tiles.csv"
