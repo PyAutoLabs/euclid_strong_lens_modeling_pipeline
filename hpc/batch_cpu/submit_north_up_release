@@ -5,7 +5,8 @@
 #   2. package_release.py csv + full tiers from CAT_NORTHUP -> OUT (same manifest, CSV snapshot,
 #      exclusion list and n_parts as the sky-frame release; nothing existing is overwritten).
 #   3. Every member of OUT is compared with BASELINE by sha256: only release PNGs (and the
-#      tier documents) may differ.
+#      tier documents) may differ, PNGs may be added (a north-up figure where the release had
+#      none), and nothing may be removed.
 #   hpc/sync submit cpu submit_north_up_release --export=ALL,RENDER=inspect/north_up_full_20261105
 #SBATCH -J north_up_release
 #SBATCH -n 1
@@ -75,11 +76,16 @@ for path in sorted(set(old) | set(new)):
         continue
     kind = path.rsplit(".", 1)[-1]
     changed[kind] += 1
-    if kind != "png" and path.split("/")[-1] not in ("snapshot.json", "parts_manifest.csv", "README.md", "KNOWN_ISSUES.md"):
-        bad.append(path)
-print(f"members {len(old)} -> {len(new)}; changed by type: {dict(changed)}")
+    if path not in new:
+        bad.append(f"removed {path}")
+    elif kind != "png" and path.split("/")[-1] not in (
+        "snapshot.json", "parts_manifest.csv", "missing_files.csv", "README.md", "KNOWN_ISSUES.md"
+    ):
+        bad.append(f"changed {path}")
+added = sum(1 for path in new if path not in old)
+print(f"members {len(old)} -> {len(new)} ({added} added); changed or added by type: {dict(changed)}")
 for path in bad[:20]:
     print("UNEXPECTED CHANGE:", path)
-sys.exit(1 if bad or set(old) != set(new) else 0)
+sys.exit(1 if bad else 0)
 PY
 date; echo NORTH_UP_RELEASE_DONE
