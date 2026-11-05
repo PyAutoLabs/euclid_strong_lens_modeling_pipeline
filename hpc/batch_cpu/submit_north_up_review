@@ -24,5 +24,13 @@ cd "$PROJECT"
 python3 "$CODE/scripts/tools/north_up_review_page.py" \
     --render_dir="$OUT" --current_dir="${CURRENT:-inspect/dr1_catalogue_v5}" --out_dir="$OUT/review"
 cat "$OUT"/witness_*.csv | awk -F, 'NR==1 || $1!="tile"' > "$OUT/witness.csv"
-tar -cf "$OUT/review.tar" -C "$OUT" review witness.csv selection.csv
+# Compute nodes have no tar binary: use Python's.
+python3 - "$OUT" <<'PY'
+import sys, tarfile
+from pathlib import Path
+out = Path(sys.argv[1])
+with tarfile.open(out / "review.tar", "w") as tar:
+    for name in ("review", "witness.csv", "selection.csv"):
+        tar.add(out / name, arcname=name)
+PY
 ls -l "$OUT/review.tar"; echo NORTH_UP_REVIEW_DONE

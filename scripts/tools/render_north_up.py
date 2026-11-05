@@ -15,7 +15,7 @@ For every fit it:
    included), so critical curves, caustics and source planes come out in the mirrored frame;
 3. checks the mirror (the witness): the mirrored model image must equal the flipped native one,
    with the chi-squared and the pixelized reconstruction unchanged. VIS fits mirror to ~1e-11; the
-   NISP and DECam band fits only to ~1e-5, so they get ``BAND_RTOL`` (accepted by the human on the
+   NISP and DECam band fits only to ~1e-5, so all three checks get ``BAND_RTOL`` for them (accepted by the human on the
    2026-11-05 pilot as visually exact). The figure of merit must agree to ``FOM_RTOL``: the
    log-determinant of a Delaunay regularization matrix is conditioning limited (up to 5e-4 on the
    pilot), which also separates a native rebuild from the stored value. ``witness.csv`` keeps
@@ -221,7 +221,7 @@ def witness_from(tile, stage, fit, mirrored, stored_log_likelihood):
     passed = (
         row["model_image_rel_diff"] <= (MODEL_IMAGE_RTOL if vis else BAND_RTOL)
         and row["chi_squared_rel_diff"] <= (CHI_SQUARED_RTOL if vis else BAND_RTOL)
-        and row["reconstruction_rel_diff"] <= RECONSTRUCTION_RTOL
+        and row["reconstruction_rel_diff"] <= (RECONSTRUCTION_RTOL if vis else BAND_RTOL)
         and row["fom_rel_diff"] <= FOM_RTOL
     )
     row["status"] = "pass" if passed else "FAIL"
