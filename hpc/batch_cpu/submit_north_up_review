@@ -1,0 +1,36 @@
+#!/bin/bash -l
+# Sky orientation phase 2d (#115): review page for a north-up re-render — current release PNG
+# beside the north-up one for every lens in OUT (scripts/tools/north_up_review_page.py), plus a
+# tarball of the page to copy off the cluster. Submit after submit_render_north_up:
+#   hpc/sync submit cpu submit_north_up_review --dependency=afterany:<render job> \
+#       --export=ALL,OUT=inspect/north_up_pilot_20261105
+#SBATCH -J north_up_review
+#SBATCH -n 1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=4gb
+#SBATCH --partition=ral
+# NEVER add gpu here: CPU arrays on the gpu partition fill both A100 nodes' CPUs and idle all 8 GPUs.
+#SBATCH -t 02:00:00
+#SBATCH -o output/north_up_review.%A.out
+#SBATCH -e error/north_up_review.%A.err
+
+CODE="${CODE:-$(cd "${SLURM_SUBMIT_DIR:-.}/../.." && pwd)}"  # hpc/sync submits from hpc/batch_cpu
+PROJECT="${PROJECT:-/mnt/ral/jnightin/active/euclid_dr1}"
+export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
+source "$PROJECT/activate.sh"
+set -euo pipefail
+: "${OUT:?set OUT}"
+cd "$PROJECT"
+python3 "$CODE/scripts/tools/north_up_review_page.py" \
+    --render_dir="$OUT" --current_dir="${CURRENT:-inspect/dr1_catalogue_v5}" --out_dir="$OUT/review"
+cat "$OUT"/witness_*.csv | awk -F, 'NR==1 || $1!="tile"' > "$OUT/witness.csv"
+# Compute nodes have no tar binary: use Python's.
+python3 - "$OUT" <<'PY'
+import sys, tarfile
+from pathlib import Path
+out = Path(sys.argv[1])
+with tarfile.open(out / "review.tar", "w") as tar:
+    for name in ("review", "witness.csv", "selection.csv"):
+        tar.add(out / name, arcname=name)
+PY
+ls -l "$OUT/review.tar"; echo NORTH_UP_REVIEW_DONE
