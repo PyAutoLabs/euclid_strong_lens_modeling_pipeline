@@ -1,0 +1,104 @@
+#!/bin/bash -l
+# Sky orientation phase 2b (#115): final DR1 v5 release documents and integrity check.
+#   1. scripts/tools/relink_release.py re-packages SRC's documents with
+#      catalogue/KNOWN_ISSUES_DR1.md prepended to every KNOWN_ISSUES.md; the part zips are
+#      hard-linked from SRC, not rewritten.
+#   2. OUT is compared with SRC member by member: only the tier documents may differ.
+#   3. Every file of OUT is hashed against its SHA256SUMS (both tiers).
+#   4. With DELETE_SUPERSEDED=1 and 1-3 clean, the superseded builds listed in SUPERSEDED are
+#      removed (OUT keeps its own hard links to the part zips).
+#   hpc/sync submit cpu submit_north_up_docs --export=ALL,SRC=inspect/<previous build>
+#SBATCH -J north_up_docs
+#SBATCH -n 1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=16gb
+#SBATCH --partition=ral
+# NEVER add gpu here: CPU arrays on the gpu partition fill both A100 nodes' CPUs and idle all 8 GPUs.
+#SBATCH -t 08:00:00
+#SBATCH -o output/north_up_docs.%A.out
+#SBATCH -e error/north_up_docs.%A.err
+
+CODE="${CODE:-$(cd "${SLURM_SUBMIT_DIR:-.}/../.." && pwd)}"  # hpc/sync submits from hpc/batch_cpu
+PROJECT="${PROJECT:-/mnt/ral/jnightin/active/euclid_dr1}"
+export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
+export RELEASE_PROJECT_ROOT="$PROJECT"  # snapshot.json paths relative to the project
+source "$PROJECT/activate.sh"
+set -euo pipefail
+export TMPDIR="$CODE/.tmp_${SLURM_JOB_ID:-$$}"; mkdir -p "$TMPDIR"; trap 'rm -rf "$TMPDIR"' EXIT
+
+: "${SRC:?set SRC (the build whose part zips are reused)}"
+CAT=${CAT:-inspect/dr1_catalogue_v5}
+CAT_NORTHUP=${CAT_NORTHUP:-inspect/dr1_catalogue_v5_northup}
+CSV=${CSV:-inspect/dr1_catalogue_v5_csv_skyframe}
+OUT=${OUT:-inspect/dr1_catalogue_v5_release_northup}
+cd "$PROJECT"
+[[ -e "$OUT" ]] && { echo "$OUT exists: refusing to overwrite"; exit 1; }
+date; tail -2 "$CODE/CODE_COMMIT" 2>/dev/null || true
+
+echo "==> [1] documents re-packaged from $SRC"
+SRC_RELEASE="$PROJECT/$SRC" python3 "$CODE/scripts/tools/relink_release.py" \
+    --catalogue_dir="$PROJECT/$CAT_NORTHUP" \
+    --dataset_dir="$PROJECT/dataset/dr1_sep1" \
+    --manifest="$PROJECT/$CAT/_build/manifest.csv" \
+    --csv_dir="$PROJECT/$CSV" \
+    --out_dir="$PROJECT/$OUT" \
+    --tier=csv,full \
+    --n_parts=20 \
+    --release_name="${RELEASE_NAME:-dr1_catalogue_v5}" \
+    --known_issues="$CODE/catalogue/KNOWN_ISSUES_DR1.md" \
+    --workers="${SLURM_CPUS_PER_TASK:-2}" \
+    --excluded="$PROJECT/inspect/dr1_catalogue_v5_release_excluded.csv" \
+    --absent_out="$PROJECT/${OUT}_absent_tiles.csv"
+
+echo "==> [2] only documents differ from $SRC; [3] every file matches SHA256SUMS"
+python3 - "$SRC" "$OUT" "${SLURM_CPUS_PER_TASK:-2}" <<'PY'
+import csv, hashlib, io, sys, zipfile
+from multiprocessing import Pool
+from pathlib import Path
+
+DOCS = {"KNOWN_ISSUES.md", "snapshot.json", "file_manifest.csv"}
+
+def members(release, tier):
+    z = zipfile.ZipFile(Path(release) / tier / "catalogue_csvs.zip")
+    name = next(n for n in z.namelist() if n.count("/") == 1 and n.endswith("/file_manifest.csv"))
+    rows = csv.DictReader(io.TextIOWrapper(z.open(name), newline=""))
+    return {r["member"].split("/", 1)[1]: r["sha256"] for r in rows}
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 24), b""):
+            digest.update(block)
+    return path, digest.hexdigest()
+
+src, out, workers = sys.argv[1], Path(sys.argv[2]), int(sys.argv[3])
+bad = 0
+for tier in ("csv", "full"):
+    old, new = members(src, tier), members(out, tier)
+    changed = sorted(p for p in set(old) | set(new) if old.get(p) != new.get(p))
+    unexpected = [p for p in changed if p.split("/")[-1] not in DOCS]
+    print(f"{tier}: {len(new)} members, changed {changed}")
+    for p in unexpected:
+        print(f"UNEXPECTED CHANGE {tier}: {p}"); bad += 1
+
+    expected = {}
+    for line in (out / tier / "SHA256SUMS").read_text().splitlines():
+        digest, name = line.split(maxsplit=1)
+        expected[out / tier / name.lstrip("*")] = digest
+    with Pool(workers) as pool:
+        for path, digest in pool.imap_unordered(sha256, sorted(expected)):
+            ok = digest == expected[path]
+            print(f"{path.relative_to(out)}: {'OK' if ok else 'FAILED'}", flush=True)
+            bad += not ok
+sys.exit(1 if bad else 0)
+PY
+
+if [[ "${DELETE_SUPERSEDED:-0}" == 1 ]]; then
+    echo "==> [4] removing superseded builds: ${SUPERSEDED:-}"
+    for path in ${SUPERSEDED:-}; do
+        [[ "$path" == inspect/* && -e "$path" ]] || { echo "skip $path"; continue; }
+        du -sh "$path" 2>/dev/null || true
+        rm -rf -- "$path" && echo "removed $path"
+    done
+fi
+date; echo NORTH_UP_DOCS_DONE
