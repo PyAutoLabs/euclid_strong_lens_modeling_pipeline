@@ -2,6 +2,22 @@
 
 Changes that affect how the released files are read. The most recent is first.
 
+## DR1 v1.0: north-up figures (2026-11-05)
+
+- **Per-lens PNGs are redrawn north up, east left.** This covers `vis_lp_fit.png`,
+  `vis_pix_fit.png`, `fit_sersic.png`, `vis_lp_image_with_positions.png`, `rgb.png`,
+  `segmentation.png` and `fit_multi_wavelength.png`. Each was redrawn from the stored best-fit
+  model, with the image, critical curves, caustics, positions and source plane mirrored
+  together. Axis labels increase to the north and west, and each figure has a compass. No model
+  was refitted. Each redrawn fit was checked against the original; the details are in
+  `docs/sky_orientation/phase2d.md` in the pipeline repository.
+- 165 figures of 157 lenses could not be redrawn and keep the pipeline frame (north down). They
+  are listed in `KNOWN_ISSUES.md`.
+- `vis_lp_image_with_positions.png` is now included for 2,137 more lenses: every lens with a
+  `positions.json`.
+- Only PNGs changed. Every JSON, FITS and CSV table is byte-identical to the sky-orientation
+  build of 2026-10-31.
+
 ## DR1 v1.0: sky orientation (2026-10-31)
 
 The pipeline loads each cut-out FITS without flipping its rows. For the north-up DR1 cut-outs
