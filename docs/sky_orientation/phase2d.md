@@ -30,8 +30,8 @@ and `catalogue/KNOWN_ISSUES_DR1.md`.
    - A mirrored log-determinant that fails to factorize enters no drawn image. Such a fit is
      judged on the images alone and recorded as `pass_no_fom`.
    - Pixels that are NaN in both images are ignored.
-4. It draws the figures with the library plotters, adding an N/E compass. A fit that fails the
-   check is not drawn.
+4. It draws the figures with the library plotters. Only the RGB panel of `rgb.png` gets an N/E
+   compass (white, top-right; human, 2026-11-09). A fit that fails the check is not drawn.
 
 `scripts/tools/north_up_catalogue_tree.py` hard-links the built catalogue tree and swaps the
 north-up PNGs in. Where none was drawn, it keeps the original PNG, as the human chose on

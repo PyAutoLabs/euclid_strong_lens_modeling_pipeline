@@ -54,6 +54,7 @@ python3 "$CODE/scripts/tools/package_release.py" \
     --tier=csv,full \
     --n_parts=20 \
     --release_name="${RELEASE_NAME:-dr1_catalogue_v5}" \
+    --known_issues="${KNOWN_ISSUES:-$CODE/catalogue/KNOWN_ISSUES_DR1.md}" \
     --workers="${SLURM_CPUS_PER_TASK:-2}" \
     --excluded="$PROJECT/inspect/dr1_catalogue_v5_release_excluded.csv" \
     --absent_out="$PROJECT/${OUT}_absent_tiles.csv"

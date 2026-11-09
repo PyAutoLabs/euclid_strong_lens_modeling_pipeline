@@ -1,8 +1,9 @@
 ## Orientation and coordinate frames
 
 - **Per-lens figures are north up, east left.** Every per-lens PNG was redrawn from the stored
-  best-fit model with north up and east left. Each figure has a compass, and its axis labels
-  (arcsec) increase to the north and west. The figures were redrawn, not flipped as pixels, so
+  best-fit model with north up and east left. The RGB panel of `rgb.png` has an N/E compass, and
+  every figure's axis labels (arcsec) increase to the north and west. The figures were redrawn,
+  not flipped as pixels, so
   critical curves, caustics, positions and source planes are mirrored with the images. No model
   was refitted. Each redrawn fit was checked against the original: the model image, chi-squared
   and source reconstruction agree to within 1e-4 (VIS lens models within 1e-8).
@@ -17,7 +18,7 @@
 ### Figures still in the pipeline frame (north down)
 
 For 157 lenses, one or more figures could not be redrawn north up and keep the original
-pipeline-frame (north-down) version, with no compass. In each case the mirrored fit did not
+pipeline-frame (north-down) version. In each case the mirrored fit did not
 match the original within tolerance, or its pixelized source could not be solved again, so the
 figure was not redrawn rather than redrawn wrongly:
 

@@ -8,7 +8,7 @@ Changes that affect how the released files are read. The most recent is first.
   `vis_pix_fit.png`, `fit_sersic.png`, `vis_lp_image_with_positions.png`, `rgb.png`,
   `segmentation.png` and `fit_multi_wavelength.png`. Each was redrawn from the stored best-fit
   model, with the image, critical curves, caustics, positions and source plane mirrored
-  together. Axis labels increase to the north and west, and each figure has a compass. No model
+  together. Axis labels increase to the north and west, and the RGB panel of `rgb.png` has an N/E compass. No model
   was refitted. Each redrawn fit was checked against the original; the details are in
   `docs/sky_orientation/phase2d.md` in the pipeline repository.
 - 165 figures of 157 lenses could not be redrawn and keep the pipeline frame (north down). They
