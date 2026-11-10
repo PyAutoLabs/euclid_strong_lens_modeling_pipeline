@@ -46,22 +46,26 @@ north-up PNGs in. Where none was drawn, it keeps the original PNG, as the human 
   - 15 paper lenses;
   - 25 random lenses;
   - the 5 largest |γ₂| and the 5 largest |e₁|, the components that flip sign.
-- **Full run, 15,007 lenses** (RAL 414229, fix-up 414321, rescue 414366):
+- **Full run, 15,007 lenses.** The first run (RAL 414229, fix-up 414321, rescue 414366) was
+  repeated with the RGB-panel compass as RAL 414683; this table is from the repeat:
 
   | figure | north up | pipeline frame |
   |---|---:|---:|
   | `vis_lp_fit`, `rgb`, `segmentation` | 15,007 | 0 |
-  | `vis_pix_fit` | 14,893 | 91 |
+  | `vis_pix_fit` | 14,857 | 127 |
   | `fit_sersic` | 14,902 | 8 |
   | `fit_multi_wavelength` | 14,844 | 66 |
 
 - **What the fallbacks are.**
-  - Of the `vis_pix` fallbacks, 45 inversions do not solve after the mirror. For the others,
+  - Of the `vis_pix` fallbacks, 60 inversions do not solve after the mirror. For the others,
     the mirrored source solution differs: on co-circular mesh points the Delaunay
     triangulation is not mirror-symmetric.
   - Diagnostic job 414365 found that every original rebuild works, and that the failures sit
     only in the regularization log-determinant.
   - The band fallbacks differ by 1e-4 to 1e-2.
-- **Release check.** The release (RAL 414376) was compared with the sky-frame release by the
-  sha256 of every member. Only PNGs changed or were added (104,304); the documents aside, every
+  - The `vis_pix` fallback set is not exactly repeatable: the same lenses gave 91 fallbacks on
+    2026-11-05 and 127 on 2026-11-09, because the borderline triangulations differ between runs.
+    `KNOWN_ISSUES_DR1.md` lists the run that was released.
+- **Release check.** The release was compared with the sky-frame release by the
+  sha256 of every member. Only PNGs changed or were added; the documents aside, every
   JSON, FITS and CSV table is byte-identical.
