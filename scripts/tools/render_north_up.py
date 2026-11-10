@@ -24,8 +24,8 @@ For every fit it:
    inversion that will not solve); those fail or are recorded as ``error`` and are not drawn, and
    the release keeps their fit-frame PNG (human, 2026-11-05). ``witness.csv`` keeps the measured
    differences either way;
-4. draws the figure with the library plotters, so +y on every axis now means north, and adds
-   an N/E compass.
+4. draws the figure with the library plotters, so +y on every axis now means north. Only the RGB
+   panel of ``rgb.png`` carries an N/E compass, in white, in its top-right corner.
 
 A fit that fails the witness is not drawn. Existing PNGs are never pixel-flipped and nothing is
 written outside ``--out_dir``.
@@ -253,36 +253,21 @@ def witness_from(tile, stage, fit, mirrored, stored_log_likelihood):
 # ---------------------------------------------------------------------------
 
 
-COMPASS_INCHES = 0.6
+def add_compass(ax):
+    """A white N/E compass (north up, east left) in the top-right corner of one image panel.
 
-
-def add_compass(fig):
-    """An N/E compass (north up, east left) in a top margin made for it, so it covers no panel."""
-    margin = COMPASS_INCHES / fig.get_figheight()
-    fig.subplots_adjust(top=fig.subplotpars.top - margin)
-    height = 0.9 * margin
-    width = height * fig.get_figheight() / fig.get_figwidth()
-    ax = fig.add_axes([0.005, 1.0 - height - 0.005, width, height])
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.axis("off")
-    arrow = dict(arrowstyle="->", lw=1.5, color="black")
-    ax.annotate("", xy=(0.75, 0.95), xytext=(0.75, 0.2), arrowprops=arrow)
-    ax.annotate("", xy=(0.05, 0.2), xytext=(0.75, 0.2), arrowprops=arrow)
-    ax.text(0.95, 0.95, "N", ha="left", va="top", fontsize=14, fontweight="bold")
-    ax.text(0.05, 0.3, "E", ha="center", va="bottom", fontsize=14, fontweight="bold")
-
-
-_library_save_figure = fit_imaging_plots.save_figure
-
-
-def _save_figure_with_compass(fig, *args, **kwargs):
-    add_compass(fig)
-    return _library_save_figure(fig, *args, **kwargs)
-
-
-# subplot_fit saves through this module-level name; wrap it so its figure gets the compass.
-fit_imaging_plots.save_figure = _save_figure_with_compass
+    Only the RGB panel of rgb.png carries it (human, 2026-11-09); every figure is north up,
+    east left, so one compass in the colour image is enough."""
+    arrow = dict(arrowstyle="-|>", lw=2.0, color="white", mutation_scale=14)
+    corner, length = (0.92, 0.74), 0.17
+    north = (corner[0], corner[1] + length)
+    east = (corner[0] - length, corner[1])
+    for tip in (north, east):
+        ax.annotate("", xy=tip, xytext=corner, xycoords="axes fraction", textcoords="axes fraction",
+                    arrowprops=arrow)
+    label = dict(xycoords="axes fraction", color="white", fontsize=13, fontweight="bold")
+    ax.annotate("N", xy=(north[0], north[1] + 0.015), ha="center", va="bottom", **label)
+    ax.annotate("E", xy=(east[0] - 0.015, east[1]), ha="right", va="center", **label)
 
 
 def save_subplot_fit(fit, target: Path, title_prefix="VIS"):
@@ -295,7 +280,6 @@ def save_subplot_fit(fit, target: Path, title_prefix="VIS"):
 def save_single(target: Path, draw, figsize=(7, 7)):
     fig, ax = plt.subplots(figsize=figsize)
     draw(ax)
-    add_compass(fig)
     fig.savefig(target, bbox_inches="tight")
     plt.close(fig)
 
@@ -330,13 +314,12 @@ def save_rgb(rgb_path: Path, mask, target: Path):
     fig, axes = plt.subplots(1, 2, figsize=(14, 7))
     plot_array(array=al.Array2DRGB(values=image, mask=full), ax=axes[0], title="RGB")
     plot_array(array=al.Array2DRGB(values=image, mask=circle), ax=axes[1], title="RGB Masked")
-    add_compass(fig)
+    add_compass(axes[0])
     fig.savefig(target, bbox_inches="tight")
     plt.close(fig)
 
 
 def save_segmentation(dataset_dir: Path, tile: str, rgb_path, positions_native, target: Path):
-    from matplotlib.figure import Figure
     from preprocess.segmentation import save_diagnostic_png
 
     info = json.loads((dataset_dir / "info.json").read_text())
@@ -350,22 +333,6 @@ def save_segmentation(dataset_dir: Path, tile: str, rgb_path, positions_native, 
     zeros = np.zeros_like(vis)
     rgb = np.array(Image.open(rgb_path)) if rgb_path is not None else np.zeros(vis.shape + (3,))
     cy, cx = info["mask_centre"]
-
-    # save_diagnostic_png saves its own figure: add the compass on the way out.
-    library_savefig = Figure.savefig
-
-    def savefig_with_compass(fig, *a, **k):
-        add_compass(fig)
-        return library_savefig(fig, *a, **k)
-
-    Figure.savefig = savefig_with_compass
-    try:
-        _save_segmentation(save_diagnostic_png, read, vis, zeros, rgb, info, cy, cx, positions_native, target)
-    finally:
-        Figure.savefig = library_savefig
-
-
-def _save_segmentation(save_diagnostic_png, read, vis, zeros, rgb, info, cy, cx, positions_native, target):
     save_diagnostic_png(
         rgb_image=rgb,
         vis_image=vis,
@@ -401,7 +368,6 @@ def save_multi_wavelength(band_fits, target: Path):
         for row, (title, panel) in enumerate(zip(rows, panels)):
             plot_array(ax=axes[row, column], title=f"{band.upper()} {title}", **panel)
     fig.tight_layout()
-    add_compass(fig)
     fig.savefig(target, bbox_inches="tight")
     plt.close(fig)
 
