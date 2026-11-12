@@ -342,6 +342,11 @@ def north_up_rgb_path(dataset_dir: Path):
     return None
 
 
+# The colour images are 100 x 100 pixels drawn some 5x larger: smooth them like an image viewer
+# would (human, 2026-11-12) instead of matplotlib's default hard-edged pixels for that zoom.
+RGB_INTERPOLATION = "lanczos"
+
+
 def save_rgb(rgb_path: Path, mask, target: Path):
     image = np.array(Image.open(rgb_path))
     shape = image.shape[:2]
@@ -355,13 +360,14 @@ def save_rgb(rgb_path: Path, mask, target: Path):
             radius=mask.circular_radius,
         )
     )
-    fig, axes = plt.subplots(1, 2, figsize=(14, 7))
-    plot_array(array=al.Array2DRGB(values=image, mask=full), ax=axes[0], title="RGB")
-    plot_array(
-        array=al.Array2DRGB(values=image, mask=circle), ax=axes[1], title="RGB Masked"
-    )
-    add_compass(axes[0])
-    fig.savefig(target, bbox_inches="tight")
+    with matplotlib.rc_context({"image.interpolation": RGB_INTERPOLATION}):
+        fig, axes = plt.subplots(1, 2, figsize=(14, 7))
+        plot_array(array=al.Array2DRGB(values=image, mask=full), ax=axes[0], title="RGB")
+        plot_array(
+            array=al.Array2DRGB(values=image, mask=circle), ax=axes[1], title="RGB Masked"
+        )
+        add_compass(axes[0])
+        fig.savefig(target, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -482,6 +488,43 @@ def positions_from(dataset_dir: Path):
     return np.asarray(values, dtype=float)
 
 
+def rgb_mask_from(output_root: Path, tile: str):
+    """The north-up VIS mask of the lens's latest completed vis_lp fit, read straight from its zip
+    (``image/dataset.fits``, HDU ``MASK``), so ``rgb.png`` can be redrawn without rebuilding the fit."""
+    import io
+    import zipfile
+
+    zips = sorted((output_root / tile / "initial_lens_model" / "vis_lp").glob("*.zip"),
+                  key=lambda z: z.stat().st_mtime, reverse=True)
+    for path in zips:
+        with zipfile.ZipFile(path) as archive:
+            names = set(archive.namelist())
+            if ".completed" not in names or "image/dataset.fits" not in names:
+                continue
+            with pyfits.open(io.BytesIO(archive.read("image/dataset.fits"))) as hdus:
+                hdu = hdus["MASK"]
+                mask = al.Mask2D(
+                    mask=np.asarray(hdu.data) > 0.5,
+                    pixel_scales=(hdu.header["PIXSCAY"], hdu.header["PIXSCAX"]),
+                    origin=(hdu.header["ORIGINY"], hdu.header["ORIGINX"]),
+                )
+            return flip_mask(mask)
+    return None
+
+
+def render_rgb_only(tile, args):
+    """Redraw only ``rgb.png`` (``--only rgb``): the colour image needs no fit, just its mask."""
+    dataset_dir = Path(args.dataset_root) / tile
+    rgb_path = north_up_rgb_path(dataset_dir)
+    mask = rgb_mask_from(Path(args.output_root), tile)
+    if rgb_path is None or mask is None:
+        raise RuntimeError(f"no {'north-up RGB' if rgb_path is None else 'completed vis_lp fit'}")
+    out = Path(args.out_dir) / tile
+    out.mkdir(parents=True, exist_ok=True)
+    save_rgb(rgb_path, mask, out / "rgb.png")
+    plt.close("all")
+
+
 def render_tile(tile, args, writer):
     out = Path(args.out_dir) / tile
     out.mkdir(parents=True, exist_ok=True)
@@ -588,6 +631,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--output_root", required=True, help="e.g. output/dr1_sep1")
     parser.add_argument("--sed_root", default=None, help="e.g. output_sed/dr1_sep1")
+    parser.add_argument("--only", choices=["rgb"], default=None,
+                        help="redraw only this figure (rgb: rgb.png from the dataset RGB and the fit's mask)")
     parser.add_argument("--dataset_root", required=True, help="e.g. dataset/dr1_sep1")
     parser.add_argument("--out_dir", required=True)
     parser.add_argument("--tiles", default="", help="comma-separated tile names")
@@ -628,7 +673,10 @@ def main():
         for i, tile in enumerate(tiles, 1):
             start = time.time()
             try:
-                render_tile(tile, args, writer)
+                if args.only == "rgb":
+                    render_rgb_only(tile, args)
+                else:
+                    render_tile(tile, args, writer)
                 print(
                     f"[{i}/{len(tiles)}] {tile}: done in {time.time() - start:.0f}s",
                     flush=True,

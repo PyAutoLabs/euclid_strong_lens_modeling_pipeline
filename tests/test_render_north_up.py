@@ -120,3 +120,27 @@ def test__witness__a_singular_mirrored_log_determinant_is_judged_on_the_images()
     row = render_north_up.witness_from("tile", "vis_pix", fit, SingularFigureOfMerit(), fit.figure_of_merit)
     assert row["status"] == "pass_no_fom"
     assert np.isnan(row["mirrored_figure_of_merit"])
+
+
+def test__rgb_mask_from__reads_the_stored_mask_and_flips_it_north_up(tmp_path):
+    import io
+    import zipfile
+
+    from astropy.io import fits
+
+    mask = np.ones((10, 10))
+    mask[1:4, 2:5] = 0.0  # an unmasked patch near the top (row 0 side) of the fitted frame
+    hdu = fits.ImageHDU(mask, name="MASK")
+    hdu.header.update(PIXSCAY=0.1, PIXSCAX=0.1, ORIGINY=0.0, ORIGINX=0.0)
+    buffer = io.BytesIO()
+    fits.HDUList([fits.PrimaryHDU(), hdu]).writeto(buffer)
+    folder = tmp_path / "TileX" / "initial_lens_model" / "vis_lp"
+    folder.mkdir(parents=True)
+    with zipfile.ZipFile(folder / "fit.zip", "w") as archive:
+        archive.writestr(".completed", "")
+        archive.writestr("image/dataset.fits", buffer.getvalue())
+
+    north_up = render_north_up.rgb_mask_from(tmp_path, "TileX")
+
+    np.testing.assert_array_equal(np.asarray(north_up), np.flipud(mask > 0.5))
+    assert render_north_up.rgb_mask_from(tmp_path, "TileMissing") is None
