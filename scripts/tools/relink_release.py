@@ -8,6 +8,7 @@ tier documents change: ``snapshot.json`` paths (2026-11-03) or ``KNOWN_ISSUES.md
 
 Usage: SRC_RELEASE=<earlier out_dir> python scripts/tools/relink_release.py <package_release args>
 """
+
 import csv
 import io
 import os
@@ -23,10 +24,16 @@ SRC = Path(os.environ["SRC_RELEASE"])
 
 def old_rows(tier):
     archive = zipfile.ZipFile(SRC / tier / "catalogue_csvs.zip")
-    name = next(n for n in archive.namelist() if n.count("/") == 1 and n.endswith("/file_manifest.csv"))
+    name = next(
+        n
+        for n in archive.namelist()
+        if n.count("/") == 1 and n.endswith("/file_manifest.csv")
+    )
     rows = {}
     for r in csv.DictReader(io.TextIOWrapper(archive.open(name), newline="")):
-        rows.setdefault(r["zip"], []).append((r["member"], int(r["bytes"]), r["sha256"]))
+        rows.setdefault(r["zip"], []).append(
+            (r["member"], int(r["bytes"]), r["sha256"])
+        )
     return rows
 
 
@@ -39,7 +46,9 @@ def write_part(job):
     rows = ROWS[zip_path.parent.name][zip_path.name]
     planned = {f"{arc_root}/{arc}" for _kind, _source, arc, _size in members}
     if planned != {m for m, _s, _h in rows}:
-        raise RuntimeError(f"{zip_path.name}: earlier build's members differ from the plan")
+        raise RuntimeError(
+            f"{zip_path.name}: earlier build's members differ from the plan"
+        )
     os.link(SRC / zip_path.parent.name / zip_path.name, zip_path)
     return zip_path.name, rows
 

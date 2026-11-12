@@ -57,7 +57,9 @@ def build(catalogue_dir: Path, render_dir: Path, out_dir: Path):
     with open(report_path, "w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["tile", "product", "source"])
-        for tile_dir in sorted(p for p in out_dir.iterdir() if p.is_dir() and not p.name.startswith("_")):
+        for tile_dir in sorted(
+            p for p in out_dir.iterdir() if p.is_dir() and not p.name.startswith("_")
+        ):
             for product in NORTH_UP_PNGS:
                 target = tile_dir / product
                 north_up = render_dir / tile_dir.name / product

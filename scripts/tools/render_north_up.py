@@ -69,7 +69,9 @@ try:  # autoconf was renamed autonerves (2026-10)
 except ImportError:
     from autoconf import conf
 
-conf.instance.push(new_path=str(PROJECT_ROOT / "config"), output_path=str(PROJECT_ROOT / "output"))
+conf.instance.push(
+    new_path=str(PROJECT_ROOT / "config"), output_path=str(PROJECT_ROOT / "output")
+)
 
 import matplotlib
 
@@ -99,13 +101,26 @@ VIS_STAGES = ("vis_lp", "vis_pix")
 
 # Effective wavelengths (nm), for ordering the multi-wavelength panels.
 BAND_WAVELENGTH = {
-    "decam_g": 482, "decam_r": 642, "decam_i": 784, "vis": 715,
-    "decam_z": 926, "nir_y": 1033, "nir_j": 1259, "nir_h": 1686,
+    "decam_g": 482,
+    "decam_r": 642,
+    "decam_i": 784,
+    "vis": 715,
+    "decam_z": 926,
+    "nir_y": 1033,
+    "nir_j": 1259,
+    "nir_h": 1686,
 }
 
 WITNESS_COLUMNS = [
-    "tile", "stage", "status", "native_figure_of_merit", "mirrored_figure_of_merit",
-    "stored_log_likelihood", "fom_rel_diff", "model_image_rel_diff", "chi_squared_rel_diff",
+    "tile",
+    "stage",
+    "status",
+    "native_figure_of_merit",
+    "mirrored_figure_of_merit",
+    "stored_log_likelihood",
+    "fom_rel_diff",
+    "model_image_rel_diff",
+    "chi_squared_rel_diff",
     "reconstruction_rel_diff",
 ]
 
@@ -136,12 +151,15 @@ def mirrored_fit_from(fit):
     dataset = fit.dataset
     mask = flip_mask(dataset.mask)
     unmasked = aa.Mask2D.all_false(
-        shape_native=mask.shape_native, pixel_scales=mask.pixel_scales, origin=mask.origin
+        shape_native=mask.shape_native,
+        pixel_scales=mask.pixel_scales,
+        origin=mask.origin,
     )
     kernel = dataset.psf.kernel
     psf = aa.Convolver(
         kernel=aa.Array2D.no_mask(
-            values=np.flipud(np.asarray(kernel.native)), pixel_scales=kernel.pixel_scales
+            values=np.flipud(np.asarray(kernel.native)),
+            pixel_scales=kernel.pixel_scales,
         )
     )
     mirrored_dataset = aa.Imaging(
@@ -149,7 +167,9 @@ def mirrored_fit_from(fit):
         noise_map=flip_array(dataset.noise_map, unmasked),
         psf=psf,
         over_sample_size_lp=flip_array(dataset.over_sample_size_lp, unmasked),
-        over_sample_size_pixelization=flip_array(dataset.over_sample_size_pixelization, unmasked),
+        over_sample_size_pixelization=flip_array(
+            dataset.over_sample_size_pixelization, unmasked
+        ),
         convolve_over_sample_size_lp=dataset.convolve_over_sample_size_lp,
         convolve_over_sample_size_pixelization=dataset.convolve_over_sample_size_pixelization,
         check_noise_map=False,
@@ -163,7 +183,9 @@ def mirrored_fit_from(fit):
         by_id = {int(galaxy.id): galaxy for galaxy in tracer.galaxies}
 
         def by_galaxy(mapping, function):
-            return {by_id.get(int(g.id), g): function(v) for g, v in (mapping or {}).items()}
+            return {
+                by_id.get(int(g.id), g): function(v) for g, v in (mapping or {}).items()
+            }
 
         def by_name(mapping, function):
             return {k: function(v) for k, v in (mapping or {}).items()}
@@ -224,13 +246,18 @@ def witness_from(tile, stage, fit, mirrored, stored_log_likelihood):
         "native_figure_of_merit": fit.figure_of_merit,
         "mirrored_figure_of_merit": mirrored_figure_of_merit,
         "stored_log_likelihood": stored_log_likelihood,
-        "fom_rel_diff": abs(mirrored_figure_of_merit - fit.figure_of_merit) / abs(fit.figure_of_merit),
+        "fom_rel_diff": abs(mirrored_figure_of_merit - fit.figure_of_merit)
+        / abs(fit.figure_of_merit),
         "model_image_rel_diff": relative_difference(
             np.flipud(np.asarray(fit.model_data.native)), mirrored.model_data.native
         ),
-        "chi_squared_rel_diff": relative_difference(fit.chi_squared, mirrored.chi_squared),
+        "chi_squared_rel_diff": relative_difference(
+            fit.chi_squared, mirrored.chi_squared
+        ),
         "reconstruction_rel_diff": (
-            relative_difference(fit.inversion.reconstruction, mirrored.inversion.reconstruction)
+            relative_difference(
+                fit.inversion.reconstruction, mirrored.inversion.reconstruction
+            )
             if fit.inversion is not None
             else 0.0
         ),
@@ -239,7 +266,8 @@ def witness_from(tile, stage, fit, mirrored, stored_log_likelihood):
     passed = (
         row["model_image_rel_diff"] <= (MODEL_IMAGE_RTOL if vis else BAND_RTOL)
         and row["chi_squared_rel_diff"] <= (CHI_SQUARED_RTOL if vis else BAND_RTOL)
-        and row["reconstruction_rel_diff"] <= (RECONSTRUCTION_RTOL if vis else BAND_RTOL)
+        and row["reconstruction_rel_diff"]
+        <= (RECONSTRUCTION_RTOL if vis else BAND_RTOL)
     )
     if np.isnan(mirrored_figure_of_merit):
         row["status"] = "pass_no_fom" if passed else "FAIL"
@@ -263,16 +291,27 @@ def add_compass(ax):
     north = (corner[0], corner[1] + length)
     east = (corner[0] - length, corner[1])
     for tip in (north, east):
-        ax.annotate("", xy=tip, xytext=corner, xycoords="axes fraction", textcoords="axes fraction",
-                    arrowprops=arrow)
-    label = dict(xycoords="axes fraction", color="white", fontsize=13, fontweight="bold")
+        ax.annotate(
+            "",
+            xy=tip,
+            xytext=corner,
+            xycoords="axes fraction",
+            textcoords="axes fraction",
+            arrowprops=arrow,
+        )
+    label = dict(
+        xycoords="axes fraction", color="white", fontsize=13, fontweight="bold"
+    )
     ax.annotate("N", xy=(north[0], north[1] + 0.015), ha="center", va="bottom", **label)
     ax.annotate("E", xy=(east[0] - 0.015, east[1]), ha="right", va="center", **label)
 
 
 def save_subplot_fit(fit, target: Path, title_prefix="VIS"):
     fit_imaging_plots.subplot_fit(
-        fit=fit, output_path=str(target.parent), output_format="png", title_prefix=title_prefix
+        fit=fit,
+        output_path=str(target.parent),
+        output_format="png",
+        title_prefix=title_prefix,
     )
     (target.parent / "fit.png").replace(target)
 
@@ -288,7 +327,10 @@ def save_image_with_positions(mirrored, positions, target: Path):
     save_single(
         target,
         lambda ax: plot_array(
-            array=mirrored.data, ax=ax, title="Image With Positions", positions=[positions]
+            array=mirrored.data,
+            ax=ax,
+            title="Image With Positions",
+            positions=[positions],
         ),
     )
 
@@ -308,18 +350,24 @@ def save_rgb(rgb_path: Path, mask, target: Path):
         mask
         if shape == mask.shape_native
         else al.Mask2D.circular(
-            shape_native=shape, pixel_scales=mask.pixel_scales, radius=mask.circular_radius
+            shape_native=shape,
+            pixel_scales=mask.pixel_scales,
+            radius=mask.circular_radius,
         )
     )
     fig, axes = plt.subplots(1, 2, figsize=(14, 7))
     plot_array(array=al.Array2DRGB(values=image, mask=full), ax=axes[0], title="RGB")
-    plot_array(array=al.Array2DRGB(values=image, mask=circle), ax=axes[1], title="RGB Masked")
+    plot_array(
+        array=al.Array2DRGB(values=image, mask=circle), ax=axes[1], title="RGB Masked"
+    )
     add_compass(axes[0])
     fig.savefig(target, bbox_inches="tight")
     plt.close(fig)
 
 
-def save_segmentation(dataset_dir: Path, tile: str, rgb_path, positions_native, target: Path):
+def save_segmentation(
+    dataset_dir: Path, tile: str, rgb_path, positions_native, target: Path
+):
     from preprocess.segmentation import save_diagnostic_png
 
     info = json.loads((dataset_dir / "info.json").read_text())
@@ -327,20 +375,42 @@ def save_segmentation(dataset_dir: Path, tile: str, rgb_path, positions_native, 
 
     def read(name):
         path = seg / name
-        return np.flipud(pyfits.getdata(path).astype(np.float32)) if path.exists() else None
+        return (
+            np.flipud(pyfits.getdata(path).astype(np.float32))
+            if path.exists()
+            else None
+        )
 
     vis = np.flipud(pyfits.getdata(dataset_dir / f"{tile}.fits").astype(np.float32))
     zeros = np.zeros_like(vis)
-    rgb = np.array(Image.open(rgb_path)) if rgb_path is not None else np.zeros(vis.shape + (3,))
+    rgb = (
+        np.array(Image.open(rgb_path))
+        if rgb_path is not None
+        else np.zeros(vis.shape + (3,))
+    )
     cy, cx = info["mask_centre"]
     save_diagnostic_png(
         rgb_image=rgb,
         vis_image=vis,
-        source_flux=read("source_flux.fits") if read("source_flux.fits") is not None else zeros,
-        artefact_flux=read("artefact_flux.fits") if read("artefact_flux.fits") is not None else zeros,
-        artefact_binary=read("artefact_binary.fits") if read("artefact_binary.fits") is not None else zeros,
-        lens_flux=read("lens_flux.fits") if read("lens_flux.fits") is not None else zeros,
-        lens_binary=read("lens_binary.fits") if read("lens_binary.fits") is not None else zeros,
+        source_flux=(
+            read("source_flux.fits") if read("source_flux.fits") is not None else zeros
+        ),
+        artefact_flux=(
+            read("artefact_flux.fits")
+            if read("artefact_flux.fits") is not None
+            else zeros
+        ),
+        artefact_binary=(
+            read("artefact_binary.fits")
+            if read("artefact_binary.fits") is not None
+            else zeros
+        ),
+        lens_flux=(
+            read("lens_flux.fits") if read("lens_flux.fits") is not None else zeros
+        ),
+        lens_binary=(
+            read("lens_binary.fits") if read("lens_binary.fits") is not None else zeros
+        ),
         pixel_scale=info["pixel_scale"],
         mask_centre=[-cy, cx],
         mask_radius=info["mask_radius"],
@@ -353,7 +423,12 @@ def save_multi_wavelength(band_fits, target: Path):
     """One column per band (increasing wavelength), one row per panel, as multi_wavelength.py."""
     bands = sorted(band_fits, key=lambda b: BAND_WAVELENGTH.get(b, 10_000))
     rows = ("Data", "Lens Light", "Subtracted", "Source Model")
-    fig, axes = plt.subplots(len(rows), len(bands), figsize=(4.5 * len(bands), 4.5 * len(rows)), squeeze=False)
+    fig, axes = plt.subplots(
+        len(rows),
+        len(bands),
+        figsize=(4.5 * len(bands), 4.5 * len(rows)),
+        squeeze=False,
+    )
     for column, band in enumerate(bands):
         fit = band_fits[band]
         last = len(fit.tracer.planes) - 1
@@ -362,7 +437,11 @@ def save_multi_wavelength(band_fits, target: Path):
         panels = (
             dict(array=fit.data),
             dict(array=planes[0]),
-            dict(array=fit.subtracted_images_of_planes_list[last], vmin=0.0 if source_vmax is not None else None, vmax=source_vmax),
+            dict(
+                array=fit.subtracted_images_of_planes_list[last],
+                vmin=0.0 if source_vmax is not None else None,
+                vmax=source_vmax,
+            ),
             dict(array=planes[last], vmax=source_vmax),
         )
         for row, (title, panel) in enumerate(zip(rows, panels)):
@@ -381,11 +460,15 @@ def stored_fits(root: Path, tile: str):
     """``{search name: (native FitImaging, stored max log likelihood)}``, latest result per band."""
     if not (root / tile).is_dir():
         return {}
-    agg = Aggregator.from_directory(directory=root / tile, completed_only=True, unzip_temporary=True)
+    agg = Aggregator.from_directory(
+        directory=root / tile, completed_only=True, unzip_temporary=True
+    )
     agg = latest_result_per_lens_band(agg, sample_root=root)
     out = {}
     fit_agg = al.agg.FitImagingAgg(aggregator=agg)
-    for entry, fit_list, samples in zip(agg, fit_agg.max_log_likelihood_gen_from(), agg.values("samples_summary")):
+    for entry, fit_list, samples in zip(
+        agg, fit_agg.max_log_likelihood_gen_from(), agg.values("samples_summary")
+    ):
         key = (str(Path(entry.directory).parent.parent.name), entry.search.name)
         out[key] = (fit_list[0], samples.max_log_likelihood_sample.log_likelihood)
     return out
@@ -411,7 +494,9 @@ def render_tile(tile, args, writer):
             mirrored = mirrored_fit_from(fit)
             row = witness_from(tile, stage, fit, mirrored, stored)
         except Exception as exc:
-            writer.writerow({"tile": tile, "stage": stage, "status": f"error: {type(exc).__name__}"})
+            writer.writerow(
+                {"tile": tile, "stage": stage, "status": f"error: {type(exc).__name__}"}
+            )
             return None
         writer.writerow(row)
         return mirrored if row["status"] in ("pass", "pass_no_fom") else None
@@ -421,7 +506,13 @@ def render_tile(tile, args, writer):
         try:
             return stored_fits(root, tile)
         except Exception as exc:
-            writer.writerow({"tile": tile, "stage": stage, "status": f"load_error: {type(exc).__name__}"})
+            writer.writerow(
+                {
+                    "tile": tile,
+                    "stage": stage,
+                    "status": f"load_error: {type(exc).__name__}",
+                }
+            )
             return {}
 
     def drawn(stage, draw, *a):
@@ -430,22 +521,35 @@ def render_tile(tile, args, writer):
             draw(*a)
             return True
         except Exception as exc:
-            writer.writerow({"tile": tile, "stage": stage, "status": f"draw_error: {type(exc).__name__}"})
+            writer.writerow(
+                {
+                    "tile": tile,
+                    "stage": stage,
+                    "status": f"draw_error: {type(exc).__name__}",
+                }
+            )
             return False
 
     fits = loaded(Path(args.output_root), "initial_lens_model")
     vis_lp_mirrored = None
-    for search, target in (("vis_lp", "vis_lp_fit.png"), ("vis_pix", "vis_pix_fit.png")):
+    for search, target in (
+        ("vis_lp", "vis_lp_fit.png"),
+        ("vis_pix", "vis_pix_fit.png"),
+    ):
         if ("initial_lens_model", search) in fits:
             mirrored = checked(search, *fits[("initial_lens_model", search)])
-            if mirrored is not None and drawn(search, save_subplot_fit, mirrored, out / target):
+            if mirrored is not None and drawn(
+                search, save_subplot_fit, mirrored, out / target
+            ):
                 if search == "vis_lp":
                     vis_lp_mirrored = mirrored
 
     positions = positions_from(dataset_dir)
     if vis_lp_mirrored is not None and positions is not None:
         save_image_with_positions(
-            vis_lp_mirrored, positions * np.array([-1.0, 1.0]), out / "vis_lp_image_with_positions.png"
+            vis_lp_mirrored,
+            positions * np.array([-1.0, 1.0]),
+            out / "vis_lp_image_with_positions.png",
         )
 
     rgb_path = north_up_rgb_path(dataset_dir)
@@ -453,7 +557,13 @@ def render_tile(tile, args, writer):
         save_rgb(rgb_path, vis_lp_mirrored.dataset.mask, out / "rgb.png")
 
     if (dataset_dir / "info.json").exists():
-        save_segmentation(dataset_dir, tile, rgb_path, positions if positions is not None else [], out / "segmentation.png")
+        save_segmentation(
+            dataset_dir,
+            tile,
+            rgb_path,
+            positions if positions is not None else [],
+            out / "segmentation.png",
+        )
 
     if args.sed_root:
         sed = loaded(Path(args.sed_root), "sersic_lens_model")
@@ -482,14 +592,23 @@ def main():
     parser.add_argument("--out_dir", required=True)
     parser.add_argument("--tiles", default="", help="comma-separated tile names")
     parser.add_argument("--tiles_file", default=None, help="one tile name per line")
-    parser.add_argument("--chunk", default=None,
-                        help="i/n: render only the i-th (0-based) of n equal slices of the tiles (SLURM arrays)")
-    parser.add_argument("--witness_csv", default=None, help="default <out_dir>/witness.csv")
+    parser.add_argument(
+        "--chunk",
+        default=None,
+        help="i/n: render only the i-th (0-based) of n equal slices of the tiles (SLURM arrays)",
+    )
+    parser.add_argument(
+        "--witness_csv", default=None, help="default <out_dir>/witness.csv"
+    )
     args = parser.parse_args()
 
     tiles = [t for t in args.tiles.split(",") if t]
     if args.tiles_file:
-        tiles += [line.strip() for line in Path(args.tiles_file).read_text().splitlines() if line.strip()]
+        tiles += [
+            line.strip()
+            for line in Path(args.tiles_file).read_text().splitlines()
+            if line.strip()
+        ]
     if not tiles:
         parser.error("no tiles given")
     if args.chunk:
@@ -498,7 +617,9 @@ def main():
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    witness_path = Path(args.witness_csv) if args.witness_csv else out_dir / "witness.csv"
+    witness_path = (
+        Path(args.witness_csv) if args.witness_csv else out_dir / "witness.csv"
+    )
     new = not witness_path.exists()
     with open(witness_path, "a", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=WITNESS_COLUMNS)
@@ -508,9 +629,15 @@ def main():
             start = time.time()
             try:
                 render_tile(tile, args, writer)
-                print(f"[{i}/{len(tiles)}] {tile}: done in {time.time() - start:.0f}s", flush=True)
+                print(
+                    f"[{i}/{len(tiles)}] {tile}: done in {time.time() - start:.0f}s",
+                    flush=True,
+                )
             except Exception as exc:  # one bad lens must not stop the pilot
-                print(f"[{i}/{len(tiles)}] {tile}: ERROR {type(exc).__name__}: {exc}", flush=True)
+                print(
+                    f"[{i}/{len(tiles)}] {tile}: ERROR {type(exc).__name__}: {exc}",
+                    flush=True,
+                )
             handle.flush()
 
 
