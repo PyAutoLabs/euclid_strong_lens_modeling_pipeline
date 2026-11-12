@@ -14,9 +14,16 @@ The clip cannot be applied to the simulator's *input*: the negatives are made by
 convolution, not carried into it. ``simulated_image_from`` therefore runs the convolution
 itself, clips, and hands the already-convolved image back.
 
-What these tests pin: the round-off no longer raises, the library genuinely does raise without
-the clip (so the guard is load-bearing rather than decorative), a genuinely negative image is
-*not* quietly zeroed, and a clean image comes out bit-identical to the unguarded path.
+PyAutoArray #687 (2026-11) fixed the root cause upstream: the simulator now draws Poisson noise
+only when it is used, so with noise off a round-off negative passes through instead of raising.
+The pipeline keeps its own clip (which also zeroes those pixels) for
+stacks older than that fix (the RAL stack can lag ``main``); on a current library it is a
+harmless no-op.
+
+What these tests pin: the round-off no longer raises through the pipeline, the current library
+no longer raises on its own either (the upstream fix this repository now relies on), a genuinely
+negative image is *not* quietly zeroed, and a clean image comes out bit-identical to the
+unguarded path.
 
 The PSF here is a delta kernel, so "convolution" is the identity and the negative pixel under
 test is exactly the one that reaches the Poisson draw.
@@ -79,17 +86,20 @@ def test_a_round_off_negative_no_longer_raises():
     assert result[5, 5] == pytest.approx(1.0)
 
 
-def test_the_library_really_does_raise_without_the_clip():
+def test_the_library_no_longer_raises_without_the_clip():
     """
-    The control. Without this the test above would pass just as well against a library that had
-    never had the bug, and the guard would be unfalsifiable decoration.
+    The upstream fix (PyAutoArray #687): with Poisson noise off, the unguarded library path no
+    longer draws noise, so a round-off negative passes through unchanged instead of raising.
+    This replaced a control asserting the library *did* raise, which went red once the library
+    was fixed. If it fails, the library has regressed and the pipeline clip is load-bearing again.
     """
-    with pytest.raises(ValueError, match="lam"):
-        delta_simulator().via_image_from(
-            image=al.Array2D.no_mask(
-                values=image_with(ROUND_OFF), pixel_scales=PIXEL_SCALE
-            )
-        )
+    result = delta_simulator().via_image_from(
+        image=al.Array2D.no_mask(values=image_with(ROUND_OFF), pixel_scales=PIXEL_SCALE)
+    )
+    data = np.asarray(result.data.native, dtype=np.float64)
+
+    assert data[0, 0] == ROUND_OFF
+    assert data[5, 5] == pytest.approx(1.0)
 
 
 def test_a_genuinely_negative_image_is_not_clipped_away():
