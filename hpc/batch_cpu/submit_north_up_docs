@@ -56,7 +56,7 @@ import csv, hashlib, io, sys, zipfile
 from multiprocessing import Pool
 from pathlib import Path
 
-DOCS = {"KNOWN_ISSUES.md", "snapshot.json", "file_manifest.csv"}
+DOCS = {"KNOWN_ISSUES.md", "snapshot.json", "file_manifest.csv", "README.txt"}
 
 def members(release, tier):
     z = zipfile.ZipFile(Path(release) / tier / "catalogue_csvs.zip")
