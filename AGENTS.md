@@ -1,10 +1,10 @@
 # Euclid Strong Lens Modeling Pipeline — Agent Guidance
 
-Agent-agnostic instructions for this repository (Claude Code loads them via the
-`@AGENTS.md` import in `CLAUDE.md`). It runs the Euclid strong lens modeling
-pipeline built on **PyAutoLens**: automated lens models (SIE + shear mass, MGE
-light) fitted to Euclid VIS imaging. `scripts/initial_lens_model.py` is the entry
-point; the other `scripts/` pipelines chain off it for pixelized sources, Sersic
+Read this file directly for the canonical, agent-agnostic instructions for this
+repository. The Euclid strong lens modeling pipeline uses **PyAutoLens** to fit
+automated lens models (SIE + shear mass, MGE light) to Euclid VIS imaging.
+`scripts/initial_lens_model.py` is the entry point. The other `scripts/`
+pipelines chain off it for pixelized sources, Sersic
 photometry and multi-band SED fits, and `catalogue/` turns finished fits into the
 per-lens inspection bundle. `start_here.py` in the root is a **thin shim** over
 `scripts/initial_lens_model.fit` — read and edit the script, not the shim.
