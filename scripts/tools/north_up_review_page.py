@@ -39,22 +39,33 @@ def scaled(path: Path):
     if not path.exists():
         return None
     image = Image.open(path).convert("RGB")
-    return image.resize((COLUMN_WIDTH, round(image.height * COLUMN_WIDTH / image.width)))
+    return image.resize(
+        (COLUMN_WIDTH, round(image.height * COLUMN_WIDTH / image.width))
+    )
 
 
 def sheet_for(tile: str, render_dir: Path, current_dir: Path, target: Path):
     rows = []
     for product in PRODUCTS:
-        old, new = scaled(current_dir / tile / product), scaled(render_dir / tile / product)
+        old, new = scaled(current_dir / tile / product), scaled(
+            render_dir / tile / product
+        )
         if old is None and new is None:
             continue
         height = max(im.height for im in (old, new) if im is not None)
         row = Image.new("RGB", (2 * COLUMN_WIDTH, height + LABEL_HEIGHT), "white")
         draw = ImageDraw.Draw(row)
         for column, (image, label) in enumerate(
-            ((old, f"{product}: current release (fit frame, north down)"), (new, f"{product}: north up, east left"))
+            (
+                (old, f"{product}: current release (fit frame, north down)"),
+                (new, f"{product}: north up, east left"),
+            )
         ):
-            draw.text((column * COLUMN_WIDTH + 8, 8), label if image is not None else f"{label}: MISSING", fill="black")
+            draw.text(
+                (column * COLUMN_WIDTH + 8, 8),
+                label if image is not None else f"{label}: MISSING",
+                fill="black",
+            )
             if image is not None:
                 row.paste(image, (column * COLUMN_WIDTH, LABEL_HEIGHT))
         rows.append(row)
@@ -75,7 +86,11 @@ def main():
     parser.add_argument("--current_dir", required=True)
     parser.add_argument("--out_dir", required=True)
     args = parser.parse_args()
-    render_dir, current_dir, out_dir = Path(args.render_dir), Path(args.current_dir), Path(args.out_dir)
+    render_dir, current_dir, out_dir = (
+        Path(args.render_dir),
+        Path(args.current_dir),
+        Path(args.out_dir),
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
 
     reasons = {}
@@ -87,12 +102,16 @@ def main():
         for row in csv.DictReader(open(path)):
             witness.setdefault(row["tile"], Counter())[row["status"]] += 1
 
-    tiles = sorted(p.name for p in render_dir.iterdir() if p.is_dir() and p.name != out_dir.name)
+    tiles = sorted(
+        p.name for p in render_dir.iterdir() if p.is_dir() and p.name != out_dir.name
+    )
     items = []
     for tile in tiles:
         name = f"{tile}.jpg"
         if sheet_for(tile, render_dir, current_dir, out_dir / name):
-            summary = ", ".join(f"{n} {s}" for s, n in sorted(witness.get(tile, {}).items()))
+            summary = ", ".join(
+                f"{n} {s}" for s, n in sorted(witness.get(tile, {}).items())
+            )
             items.append(
                 f'<li><a href="{html.escape(name)}">{html.escape(tile)}</a> '
                 f"&mdash; {html.escape(reasons.get(tile, ''))} &mdash; witness: {html.escape(summary)}</li>"
