@@ -173,7 +173,7 @@ def readme_text(snap, stats, n, master_file, excluded_file, excluded_rows, parit
         )
     else:
         parity_text = ""
-    title = "Euclid DR1: CSV-only collaborator snapshot"
+    title = "Euclid DR1 strong-lens catalogue: CSV tables"
     return f"""{title}
 {'=' * len(title)}
 
@@ -181,8 +181,9 @@ Snapshot cutoff: {snap['cutoff_utc']}
 Membership: exactly {n:,} distinct Grade A/B objects of the lens-finding catalogue
 v5 (Holloway, 19 Oct 2026), from the consolidated manifest: the {stats['parent_ab_count']:,}
 v5 A/B objects minus {number_word(n_excl)} without a usable model (listed below).
-This is an interim modelling snapshot, not a fully completed or scientifically
-validated model catalogue. No candidate is removed for a missing fit or band.
+This is the DR1 lens-model catalogue. Every model was inspected by eye (the
+inspection_* columns), and known limitations are listed in KNOWN_ISSUES.md.
+No candidate is removed for a missing fit or band.
 
 Start with {master_file}: one row per parent v5 A/B object ({n + n_excl:,}): the
 {n:,} modelled candidates plus {number_word(n_excl)} placeholder row{"s" if n_excl != 1 else ""} (inspection_status
