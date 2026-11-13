@@ -7,8 +7,8 @@ tags: [euclid, dr1, dr1_sep1, catalogue, release, ral, cleanup, submitted]
 # 2026-10-15 evening
 
 ## Moves
-- Local project is now `Science/active/euclid_dr1`; `hpc/sync.conf` has `HPC_BASE=/mnt/ral/jnightin/active`.
-- RAL project is `/mnt/ral/jnightin/active/euclid_dr1`; the old path `/mnt/ral/jnightin/euclid_dr1` is a
+- Local project is now `Science/complete/euclid_dr1`; `hpc/sync.conf` has `HPC_BASE=/mnt/ral/jnightin/active`.
+- RAL project is `/mnt/ral/jnightin/complete/euclid_dr1`; the old path `/mnt/ral/jnightin/euclid_dr1` is a
   symlink to it, kept because about 80 batch scripts and the run manifests hardcode it.
 - Mind policy page `policy/hpc_ral.md` records this (commit 443f268c).
 

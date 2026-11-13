@@ -16,7 +16,7 @@
 #SBATCH -e error/render_north_up.%A_%a.err
 
 CODE="${CODE:-$(cd "${SLURM_SUBMIT_DIR:-.}/../.." && pwd)}"  # hpc/sync submits from hpc/batch_cpu
-PROJECT="${PROJECT:-/mnt/ral/jnightin/active/euclid_dr1}"
+PROJECT="${PROJECT:-/mnt/ral/jnightin/complete/euclid_dr1}"
 export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
 source "$PROJECT/activate.sh"
 set -euo pipefail

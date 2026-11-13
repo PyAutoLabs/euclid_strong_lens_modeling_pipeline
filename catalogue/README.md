@@ -189,7 +189,7 @@ distribution zips (`catalogue_csvs.zip`, size-capped `catalogue_part_NN.zip`,
 
 ```bash
 ssh euclid_jump
-bash /mnt/ral/jnightin/active/euclid_dr1/hpc/batch_cpu/submit_catalogue_chunked.sh \
+bash /mnt/ral/jnightin/complete/euclid_dr1/hpc/batch_cpu/submit_catalogue_chunked.sh \
     CATALOGUE=dr1_catalogue_<date> N=6 ARCHIVE=chunked PART_MAX_GB=10
 ```
 
@@ -272,7 +272,7 @@ End to end on RAL:
 
 ```bash
 ssh euclid_jump
-cd /mnt/ral/jnightin/active/euclid_dr1
+cd /mnt/ral/jnightin/complete/euclid_dr1
 # 1. build + merge, tile list from the manifest (sample dr1_sep1)
 bash hpc/batch_cpu/submit_catalogue_chunked.sh CATALOGUE=dr1_catalogue_<date> \
     MANIFEST=catalogue/grades/dr1_sep1_consolidated_manifest.csv N=6 [EXCLUDED_FILE=<csv>]
