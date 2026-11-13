@@ -37,7 +37,7 @@
 
 set -euo pipefail
 
-PROJECT_PATH=${PROJECT_PATH:-/mnt/ral/jnightin/active/euclid_dr1}
+PROJECT_PATH=${PROJECT_PATH:-/mnt/ral/jnightin/complete/euclid_dr1}
 CATALOGUE=${CATALOGUE:?CATALOGUE is required}
 SAMPLE=dr1_sep1
 MANIFEST=catalogue/grades/dr1_sep1_consolidated_manifest.csv

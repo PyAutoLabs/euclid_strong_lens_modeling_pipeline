@@ -19,7 +19,7 @@
 #SBATCH -e error/north_up_docs.%A.err
 
 CODE="${CODE:-$(cd "${SLURM_SUBMIT_DIR:-.}/../.." && pwd)}"  # hpc/sync submits from hpc/batch_cpu
-PROJECT="${PROJECT:-/mnt/ral/jnightin/active/euclid_dr1}"
+PROJECT="${PROJECT:-/mnt/ral/jnightin/complete/euclid_dr1}"
 export PYAUTO_HPC_BASE="${PYAUTO_HPC_BASE:-/mnt/ral/jnightin/PyAuto}"
 export RELEASE_PROJECT_ROOT="$PROJECT"  # snapshot.json paths relative to the project
 source "$PROJECT/activate.sh"

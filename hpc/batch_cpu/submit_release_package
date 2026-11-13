@@ -16,7 +16,7 @@
 # products describe the same fits.
 #
 # USAGE (on RAL, from the project root)
-#   cd /mnt/ral/jnightin/active/euclid_dr1/hpc/batch_cpu
+#   cd /mnt/ral/jnightin/complete/euclid_dr1/hpc/batch_cpu
 #   sbatch --export=ALL,CATALOGUE=dr1_catalogue_<date>,PARTS=10 submit_release_package
 #   # or after the merge job:  sbatch --dependency=afterok:<merge id> --export=ALL,CATALOGUE=... submit_release_package
 #
