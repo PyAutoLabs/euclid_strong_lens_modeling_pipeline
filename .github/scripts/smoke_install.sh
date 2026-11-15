@@ -10,16 +10,18 @@ pip install ./PyAutoNerves ./PyAutoFit ./PyAutoArray ./PyAutoGalaxy ./PyAutoLens
 # NOTE: no jax pin here, deliberately. One lived on this line until it was
 # found to be vestigial: #82 added `jax<0.7 jaxlib<0.7` solely to keep
 # `tensorflow-probability==0.25.0` importable, and #184 removed that
-# dependency when the stack moved to tfp-nightly. jax's supported range is
+# dependency when the stack moved to tfp-nightly (itself since dropped,
+# PyAutoArray#694). jax's supported range is
 # owned by autonerves' base dependencies (jax>=0.12.0,<0.13, PyAutoNerves#215)
 # and is installed by the line above -- do not restate it here, it drifts.
 # The assertion at the end of this script checks the resolved version.
 pip install "./PyAutoArray[optional]" "./PyAutoGalaxy[optional]" "./PyAutoLens[optional]"
-# NOTE: do NOT `pip install tensorflow-probability==0.25.0` here. The stable
-# release crashes at import under the resolved modern JAX
-# (`jax.interpreters.xla.pytype_aval_mappings` was removed), which broke the
-# JAX Matern-kernel (delaunay_mge) likelihood path. The working modified-Bessel
-# dependency is `tfp-nightly`, pinned by `PyAutoArray[optional]` above.
+# NOTE: tensorflow-probability is no longer a dependency at all. The JAX
+# Matern-kernel path's modified-Bessel `bessel_kve` is vendored in PyAutoArray
+# (autoarray/inversion/regularization/bessel.py, PyAutoArray#694), replacing
+# the former `tfp-nightly` pin. Do NOT `pip install tensorflow-probability`
+# here: the stable 0.25.0 release crashes at import under modern JAX
+# (`jax.interpreters.xla.pytype_aval_mappings` was removed) and nothing needs it.
 # The [optional] re-resolution above can upgrade autonerves to the
 # stale PyPI release (setuptools_scm reports the local copy as
 # 1.0.dev0 from the shallow checkout). Pin the local source one
