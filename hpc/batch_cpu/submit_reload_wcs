@@ -13,7 +13,8 @@
 #   and pixelized-clump fields the pipeline now records there.
 #
 # WHY IT IS SAFE TO RUN BOTH STAGES IN ONE PROCESS HERE
-#   The two-stage split in `submit_initial_lens_model_two_stage` exists to keep
+#   The two-stage split (the campaign's vis_lp / vis_pix stages, formerly
+#   `submit_initial_lens_model_two_stage`) exists to keep
 #   a forked Nautilus pool away from a JAX-initialised interpreter. Nothing is
 #   sampled in this pass and `--number_of_cores=1` forks no pool, so the
 #   process boundary buys nothing and one interpreter is cheaper.
@@ -50,7 +51,7 @@
 # Set here rather than in the submitting shell, because this project is driven
 # through `hpc/sync submit`, which runs `ssh <host> "cd hpc/batch_cpu && sbatch
 # <script>"` and so carries no exports from the local machine, and the RAL
-# login profile sets neither. See submit_initial_lens_model_two_stage.
+# login profile sets neither. See hpc/batch_cpu/stage.
 # -----------------------------------------------------------------------------
 export PROJECT_PATH=/mnt/ral/jnightin/complete/euclid_dr1
 export PYAUTO_HPC_BASE=/mnt/ral/jnightin/PyAuto
@@ -67,8 +68,8 @@ sample=dr1_sep1
 # -----------------------------------------------------------------------------
 # Dataset list
 #
-# Identical to submit_initial_lens_model_two_stage, and in the same order, so
-# the array indices mean the same lens in both scripts. Index 1 is listed but
+# Identical to the retired submit_initial_lens_model_two_stage (git history), and
+# in the same order, so the array indices mean the same lens in both scripts. Index 1 is listed but
 # never launched (see the --array directive above).
 # -----------------------------------------------------------------------------
 datasets=(

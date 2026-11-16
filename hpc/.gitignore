@@ -1,2 +1,8 @@
 sync.conf
 !.gitignore
+
+# The campaign manifest is built per campaign (hpc/tools/build_campaign_manifest.py)
+# from the dataset folder; the campaign's digest, lists and logs are pulled into
+# hpc/campaign/<name>/ by `hpc/sync status|plan|pilot|resubmit|report`.
+campaign/dr1_manifest.txt
+campaign/*/

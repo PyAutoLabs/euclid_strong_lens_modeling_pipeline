@@ -20,10 +20,10 @@
 #
 # WHEN TO USE THE CPU SCRIPTS INSTEAD
 #   When no GPU partition is available to you, or when the GPU queue is long
-#   enough that CPU nodes get you results sooner. `hpc/batch_cpu/` holds those
-#   routes; start from `submit_initial_lens_model_two_stage`, and read its
-#   header for why the CPU path has to split the two stages across two
-#   processes and this one does not.
+#   enough that CPU nodes get you results sooner. The CPU route is the campaign,
+#   `hpc/campaign/dr1.yaml` (see hpc/README.md), which runs the two stages as
+#   separate processes; `hpc/batch_cpu/submit_initial_lens_model`'s header says
+#   why the CPU path needs that split and this one does not.
 #   The CPU scripts stay on the CPU partition (`ral`): never resubmit them to
 #   `gpu` or `ral,gpu` to jump the queue (see hpc/README.md, partition names).
 

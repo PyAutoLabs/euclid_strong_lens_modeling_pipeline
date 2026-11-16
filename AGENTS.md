@@ -196,19 +196,23 @@ overwrite the committed dataset (`--force-dataset-dir` overrides that).
 
 ## HPC
 
-`hpc/` holds the `batch_gpu/` / `batch_cpu/` SLURM submit scripts (with their
-`output/` and `error/` logs) and the `sync` script (`push | pull | sync | status`
-plus `submit`, `push-submit`, `jobs`, `tail`, `logs`, `wait-and-pull` and more
-(`hpc/sync help`)). Route choice, the `--stage` argument, the per-stage
-environment blocks, the measured process-boundary test and the full `hpc/sync`
-verb list are in `hpc/README.md`; the three cluster `config/general.yaml` keys
-below are also repeated there.
+`hpc/` holds the DR1 campaign (`hpc/campaign/dr1.yaml`: the vis_lp, vis_pix and
+SED stages, run per lens by `hpc/batch_cpu/stage` through `python -m
+autofit.campaign`), the `batch_gpu/` / `batch_cpu/` SLURM scripts (with their
+`output/` and `error/` logs) and the `sync` script (`push | pull | sync | status`,
+the campaign verbs `plan | pilot | act | resubmit | report`, plus `submit`,
+`jobs`, `tail`, `logs` and more (`hpc/sync help`)). The campaign flow, route
+choice, the `--stage` argument and the full `hpc/sync` verb list are in
+`hpc/README.md`; the three cluster `config/general.yaml` keys below are also
+repeated there. Never submit to the cluster without the human's yes, and never
+put CPU work on the `gpu` partition.
 
 The shipped `config/` is deliberately **laptop-friendly**. Three
 `config/general.yaml` keys were different in the DR1 science runs — cluster
 choices rather than sensible public defaults, so change them in your cluster
-checkout (there is no override mechanism) and leave the repository defaults
-alone: `output.samples_to_csv` → `false` (at 20,000 tiles a `samples.csv` per
+checkout and leave the repository defaults alone (the campaign layers
+`hpc/config/` over `config/` through `PYAUTO_CONFIG_OVERLAY`, which today sets
+only `numba.cache`): `output.samples_to_csv` → `false` (at 20,000 tiles a `samples.csv` per
 search is a lot of disk; local users want them), `hpc.hpc_mode` → `true` (drops
 GUI visualization and screen logging — pair with
 `hpc.iterations_per_quick_update`, repo `10000`, science runs `100000`), and

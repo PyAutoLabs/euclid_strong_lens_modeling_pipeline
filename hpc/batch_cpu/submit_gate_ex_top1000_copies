@@ -1,6 +1,7 @@
 #!/bin/bash -l
 #
-# Gate for submit_initial_lens_model_vis_lp_ex_top1000 (2026-10-07).
+# Gate for submit_initial_lens_model_vis_lp_ex_top1000 (2026-10-07; that script is
+# retired, its work is now the vis_lp stage of hpc/campaign/dr1.yaml).
 #
 # hpc/tools/consolidate_dr1_sep1.py is still copying the 1,000 ex-top1000 tiles
 # from archive_top1000_20260925/ into dataset/dr1_sep1/ when the vis_lp array is

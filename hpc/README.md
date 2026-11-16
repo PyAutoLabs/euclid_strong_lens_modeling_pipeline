@@ -1,59 +1,163 @@
 # Running the pipeline on a cluster
 
-This directory holds everything needed to run `scripts/initial_lens_model.py` (and the
-other fitting pipelines) under SLURM: example submission scripts for a CPU route and a
-GPU route in `batch_cpu/` and `batch_gpu/`, and the `sync` script that moves code,
-datasets, logs and results between your machine and the cluster.
+This folder runs the pipeline under SLURM. For the DR1 sample it is one file,
+`campaign/dr1.yaml`, which says what to fit, with what resources and in what order.
+You drive it from your own machine with `hpc/sync`, which moves code and results and
+runs the campaign commands on the cluster for you.
 
-The initial lens model has both routes and the GPU one is the faster per lens. The
-SED chain runs on **CPU by default** (`batch_cpu/submit_sersic_waveband`), with the
-GPU script kept as an option; see the route table below.
+Two rules hold for every run:
 
-Read this page once to pick a route. Everything else about the fits themselves is in
-`start_here.py`; the submission scripts only decide *where* and *how* that script runs.
+- **Nothing is submitted without the human's yes.** `plan` and `pilot` only propose;
+  `act submit` is the one command that starts jobs.
+- **CPU work never goes on the `gpu` partition.** Not `gpu`, `ral,gpu` or `gpu,ral`,
+  even when `ral` is busy. The campaign refuses such a request before it reaches
+  SLURM.
 
-## Which route?
+## Getting started
+
+Set up `hpc/sync` once (see [Setting up the cluster](#setting-up-the-cluster)), then,
+from the project root:
+
+1. **Build the manifest**, the list of lenses to fit, one `<sample> <dataset>` per line:
+
+   ```bash
+   python hpc/tools/build_campaign_manifest.py --sample dr1_sep1_rest
+   ```
+
+   It writes `hpc/campaign/dr1_manifest.txt` (not committed). A lens's line number is
+   its index in every stage, so do not reorder the file once the campaign has started.
+   `--exclude-file` leaves out lenses that are already done.
+
+2. **Push** the code, the campaign and the manifest:
+
+   ```bash
+   hpc/sync push --no-data
+   ```
+
+3. **Plan.** This proposes resources, wall times and an ETA for each stage from earlier
+   runs. It submits nothing:
+
+   ```bash
+   hpc/sync plan hpc/campaign/dr1.yaml
+   ```
+
+4. **Pick a pilot**, a small spread-out slice of the manifest to run first. It submits
+   nothing either:
+
+   ```bash
+   hpc/sync pilot hpc/campaign/dr1.yaml
+   ```
+
+5. **Ask the human.** Show them the plan and the pilot. Go on only on their yes.
+
+6. **Submit the pilot**, all three stages for the pilot's lenses:
+
+   ```bash
+   hpc/sync act submit hpc/campaign/dr1.yaml --indices <the pilot's indices>
+   ```
+
+   Add `--dry-run` first to print the batch scripts without submitting them.
+
+7. **Watch it.** `status` collects the campaign on the cluster and prints a short
+   digest: done, running, failed by cause, and anything that needs a decision.
+
+   ```bash
+   hpc/sync status hpc/campaign/dr1.yaml
+   ```
+
+   SED fits write to `output_sed/`, which `status` does not scan yet. For SED it
+   sees only the stage's own record and the scheduler state, so an SED failure shows
+   as a plain `failed` without the fit's own cause. Read the task's log for the cause.
+
+8. **Resubmit failures.** `resubmit` writes a proposal sized from the failed tasks'
+   own measurements (a longer wall time for timeouts, more memory for out-of-memory).
+   It submits nothing. Once the human approves it, `act resubmit` submits it:
+
+   ```bash
+   hpc/sync resubmit hpc/campaign/dr1.yaml --stage vis_lp --class timeout
+   hpc/sync act resubmit hpc/campaign/dr1.yaml resubmit_vis_lp_timeout.json
+   ```
+
+9. **Run the rest** with `act submit` over the remaining indices (or no `--indices`
+   for the whole manifest), again only on the human's yes.
+
+10. **Report.** At the end, `report` writes the compute used, energy and carbon, the
+    failure census and a paragraph for a paper:
+
+    ```bash
+    hpc/sync report hpc/campaign/dr1.yaml
+    ```
+
+Every `act` (submit, resubmit, hold, release, throttle, update-pending, cancel) is
+logged on the cluster in `campaign/euclid_dr1/actions.log`. The digest, lists and
+proposals are pulled into `hpc/campaign/euclid_dr1/` (gitignored). Pull the fits
+themselves with `hpc/sync pull`.
+
+## The DR1 stages
+
+| Stage | Runs | Starts when | Resources | Before the fit |
+|---|---|---|---|---|
+| `vis_lp` | `scripts/initial_lens_model.py --stage=vis_lp`, JAX on the CPU | at once | 4 CPUs, 12 GB, 18 h, `ral`, up to 100 at a time | nothing |
+| `vis_pix` | `scripts/initial_lens_model.py --stage=vis_pix --use_cpu`, Numba sparse route, 8 pool processes, BLAS pinned to 1 thread | that lens's `vis_lp` has succeeded | 8 CPUs, 16 GB, 24 h, `ral`, up to 60 | checks there is exactly one `vis_lp` zip |
+| `sed` | `scripts/sersic_lens_model_waveband.py` into `output_sed/`, JAX on the CPU | that lens's `vis_pix` has succeeded | 8 CPUs, 16 GB, 3 h, `ral`, up to 40 | copies the `vis_lp` zip into `output_sed/` |
+
+Each stage runs `hpc/batch_cpu/stage` once per lens. It reads the lens's manifest line,
+writes a task record the campaign reads back, and runs the script. A failed check
+before the fit marks the task `missing_seed`: resubmit `vis_lp` for that lens first.
+SED only needs the `vis_lp` result; it waits on `vis_pix` so the two 8-CPU stages of
+one lens do not compete for nodes. The SED wall time is short on purpose: its slow
+tail is a hang in one band's search, and longer walls only burned node-hours.
+
+Lens *i* of a stage waits only on lens *i* of the stage before (SLURM `aftercorr`),
+so the stages overlap. The old chain scripts recorded that `aftercorr` never fired on
+RAL's SLURM (22.05.9). Check it on the first pilot: a `vis_pix` task should leave
+`PENDING (Dependency)` soon after its `vis_lp` task completes.
+
+Each run also sets `PYAUTO_CONFIG_OVERLAY=hpc/config`, which layers `hpc/config/` over
+`config/`. Today it only turns off Numba's disk cache, which is unreliable on the NFS
+project directory with many jobs writing at once.
+
+The campaign does not yet check each stage's result zip itself. A fit's zip is named
+after its search identifier (`vis_lp/<hash>.zip`) and the campaign checks one fixed
+path, so the checks are written out but commented in `campaign/dr1.yaml` until it can
+match a pattern.
+
+## Other routes and tools
+
+The campaign is the route for the DR1 sample. The scripts in `batch_gpu/` and
+`batch_cpu/` remain for smaller jobs and for the work around the fits.
 
 | Your situation | Route | Script | What one job does |
 |---|---|---|---|
-| A small subset of lenses (up to a few hundred) and a GPU node is available | **GPU** (recommended) | `batch_gpu/submit_initial_lens_model` | Both stages, `vis_lp` then `vis_pix`, in one process under JAX. Measured on one A100 80GB PCIe with the committed config: 1 h 14 min to 1 h 44 min per lens across two runs on two different nodes (`vis_lp` 30-38 min, `vis_pix` 42-64 min). |
-| A large sample and many CPU cores, or no GPU | **Two-stage CPU** | `batch_cpu/submit_initial_lens_model_two_stage` | One submission; `vis_lp` under JAX on the CPU backend, then `vis_pix` with the Numba sparse operator and a process pool, as two consecutive Python processes. Measured on 8 cores with the committed config: 3 h 17 min per lens (26 min `vis_lp`, 2 h 51 min `vis_pix`). |
-| As above, but you want different walltime, memory or core counts per stage, or to re-run one stage alone | **Two-stage CPU, two jobs** | `batch_cpu/submit_initial_lens_model_vis_lp` then `batch_cpu/submit_initial_lens_model_vis_pix` | The same two stages as two array jobs. Submit the second once the first has finished. |
+| A small subset of lenses (up to a few hundred) and a GPU node is available | **GPU** | `batch_gpu/submit_initial_lens_model` | Both stages, `vis_lp` then `vis_pix`, in one process under JAX. Measured on one A100 80GB PCIe with the committed config: 1 h 14 min to 1 h 44 min per lens across two runs on two different nodes (`vis_lp` 30-38 min, `vis_pix` 42-64 min). |
 | A cluster where JAX is unavailable or broken | **Numba only** | `batch_cpu/submit_initial_lens_model` | Both stages in one process with JAX disabled. The `vis_lp` stage is markedly slower this way. |
-| The VIS fits are done and you want the multi-band SED chain (Sersic VIS fit + every other waveband) | **SED chain, CPU** (default) | `batch_cpu/submit_sersic_waveband` | `vis_lp` (short-circuited from its cached zip) then the VIS Sersic fit then one Sersic fit per non-VIS band, in one process with JAX pinned to the CPU backend. 8 cores, 64 GB, 12 h, partition `ral`, writes to `output_sed/` via `PYAUTO_OUTPUT_DIR`. |
-| As above, but a GPU node is free and the sample is small | **SED chain, GPU** (optional) | `batch_gpu/submit_sersic_waveband` | The identical chain on a GPU node. Both SED analyses are `use_jax=True`, so the only difference from the CPU default is which backend the same JAX likelihood runs on. |
-| The fits are finished and you want the catalogue built where the results already live | **Catalogue build** | `batch_cpu/submit_build_inspection_bundle` | No fitting: runs `scripts/build_inspection_bundle.sh` over an existing results tree and writes `inspect/<sample>[_<run_tag>]/`. 4 cores, 8 GB, 6 h, partition `ral`. `SAMPLE`, `RUN_TAG`, `OUTPUT_DIR` and `SED_OUTPUT_DIR` are `--export` overrides, passed through `hpc/sync submit` — e.g. `hpc/sync submit cpu submit_build_inspection_bundle --export=ALL,SAMPLE=dr1_sep1`. |
-| Before submitting `vis_lp` for a batch of tiles | **Positions gate** | `batch_cpu/submit_positions_gate` | No fitting of imaging: runs `scripts/tools/positions_gate.py --root dataset/<batch>` (0.15" central cut, SIE + shear quick fit, one-image outlier drop, per-tile threshold) and writes `positions_meta.json` per tile plus `positions_review.csv` / `positions_submit.txt` per batch. 16 cores (process pool), 4 GB, 4 h, partition `ral`; `INCLUDE_REVIEW=1` / `FORCE=1` are `--export` overrides. See [`../scripts/README.md`](../scripts/README.md). |
+| One lens, by hand | **Template** | `batch_cpu/template` | Both stages in one Numba-only process; copy it and edit the lens. |
+| The SED chain on a free GPU node, small sample | **SED chain, GPU** | `batch_gpu/submit_sersic_waveband` | The same chain as the `sed` stage, on a GPU. Both SED analyses are `use_jax=True`, so only the backend differs. |
+| Before building a manifest for new tiles | **Positions gate** | `batch_cpu/submit_positions_gate` | Runs `scripts/tools/positions_gate.py` per batch and writes `positions_meta.json` per tile. See [`../scripts/README.md`](../scripts/README.md). |
+| The fits are finished and you want the catalogue | **Catalogue build** | `batch_cpu/submit_build_inspection_bundle`, or `submit_catalogue_chunked.sh` for DR1 | No fitting: builds `inspect/<sample>/` beside the results. `hpc/sync submit cpu submit_build_inspection_bundle --export=ALL,SAMPLE=dr1_sep1`. |
+| Release work | **Release tools** | `submit_magnitudes`, `submit_structure_astrometry`, `submit_release_package`, `submit_v1_1_release_chain`, `submit_north_up_*`, `submit_render_north_up`, `submit_reload_wcs`, `submit_reload_coolest` | One-off producers and passes over finished results; each script's header says what it does. |
 
-Both figures come from the acceptance runs recorded below, with the committed,
+`hpc/sync submit cpu <script>` submits any of them; anything after the script name goes
+to `sbatch` (for example `--export=ALL,SAMPLE=...`). `hpc/template.py` is a starting
+point for a new pipeline script with the same command-line interface as the stage
+scripts.
+
+The GPU route is the fastest per lens. The CPU route exists because a cluster with
+hundreds of CPU cores and few GPUs fits a large sample faster in aggregate: the
+`vis_lp` MGE fit suits JAX on the CPU backend, while the pixelized `vis_pix` fit, with
+JAX switched off, is fastest with the Numba sparse operator and a forked process pool
+across many cores. That operator is the CPU route's tool and is applied only under
+`--use_cpu`; the GPU route fits the plain dataset with JAX's own linear algebra. Under
+JAX the `--number_of_cores` argument is ignored, because PyAutoFit routes a JAX
+likelihood to its serial path and lets JAX vectorise instead.
+
+The GPU timings come from the acceptance runs below, with the committed,
 laptop-friendly `config/`. The "around 10 minutes per lens" quoted in the
-repository's `README.md` and `start_here.py` is the DR1 science-run figure,
-measured under that run's own configuration (`hpc.hpc_mode: true`, a much larger
-`hpc.iterations_per_quick_update`, and its own sampler settings); it has not been
-reproduced with the committed config, and the quick-update overhead alone does
-not account for the gap. Treat the measured numbers above as the ones you will
-see out of the box.
-
-The GPU range above is node-to-node spread, not a setting you can choose. The two
-runs used different A100 nodes, and the `vis_lp` stage — whose code and iteration
-count were identical in both — was 25% slower on the second, which accounts for
-most of the difference. The discrepancy against the science figure is still open
-and tracked as
+repository's `README.md` and `start_here.py` is the DR1 science-run figure, measured
+under that run's own configuration; it has not been reproduced with the committed
+config. The GPU range is node-to-node spread, not a setting you can choose, and the
+gap to the science figure is tracked as
 `PyAutoMind/draft/bug/euclid/gpu_per_lens_time_vs_documented_10_min.md`.
-
-The GPU route is the simplest and, per lens, by far the fastest. The two-stage CPU route
-exists because a cluster with hundreds of CPU cores and few GPUs can fit a large sample
-faster in aggregate: the `vis_lp` MGE fit is a good fit for JAX on the CPU backend, while
-the pixelized `vis_pix` fit, with JAX switched off, is fastest with the Numba sparse
-operator and a forked process pool across many cores. That operator is the CPU route's
-tool and is applied only under `--use_cpu`; the GPU route applies no sparse operator at
-all and fits the plain dataset with JAX's own linear algebra. Under JAX the
-`--number_of_cores` argument is ignored, because PyAutoFit routes a JAX likelihood
-to its serial path and lets JAX vectorise instead.
-
-Every script fits the committed example dataset by default (`sample=q1_walsmley`,
-one entry in its `datasets` list, `--array=0-0`). To fit your own lenses, add their
-dataset directory names to the list and widen `--array` to match.
 
 ## The `--stage` argument
 
@@ -66,6 +170,7 @@ dataset directory names to the list and widen `--array` to match.
   silently starting `vis_lp` from scratch (which could also collide with a `vis_lp`
   job still running on the same lens).
 - `--stage all` runs both, which is what the GPU route and the Numba-only route use.
+  The campaign runs `vis_lp` and `vis_pix` as separate stages.
 
 `--skip_pix` still works as a deprecated alias of `--stage vis_lp`.
 
@@ -76,12 +181,12 @@ backend pinned (`JAX_PLATFORMS=cpu`, so it never grabs a GPU that was not alloca
 and every linear-algebra library given the full core count, because its parallelism
 is threads. `vis_pix` wants every thread count pinned to `1`, because its parallelism
 is `--number_of_cores` pool processes and giving each worker a full set of BLAS
-threads oversubscribes the node. The scripts set these per stage; the two-job scripts
-carry one block each, and the single-submission script applies each block with `env`
-on its own command line so nothing leaks between the stages.
+threads oversubscribes the node. The campaign sets these per stage:
+`hpc/batch_cpu/stage` pins every thread count to the allocated CPUs, and the `vis_pix`
+stage sets `BLAS_THREADS=1` (which also caps Numba's own threads).
 
-The SED chain has no such split, which is why `batch_cpu/submit_sersic_waveband` is a
-single process with a single environment block. Both of its stages —
+The SED chain has no such split, which is why the `sed` stage is a single process
+with a single environment. Both of its stages —
 `scripts/sersic_lens_model.py` and `scripts/lens_model_waveband.py` — build their
 analysis with `use_jax=True`, so the whole chain is one JAX likelihood with the CPU
 backend pinned, exactly like `vis_lp` above: no Numba stage, no pool, no fork boundary
@@ -109,8 +214,8 @@ The cluster rows add a 16-worker pool under real cgroup limits, which the laptop
 run could not exercise. What remains untested is production sampler size (`n_live`
 750 and 300, against 50 in the control) and multi-hour wall times: every leg above
 ran a small fit. Until a production-size run passes, keep the process boundary. It
-costs nothing with the single-submission script, which already gives you one
-submission and one place in the queue. The single-process route is filed as a
+costs little with the campaign, which submits both stages at once and chains them
+lens by lens. The single-process route is filed as a
 follow-up rather than abandoned
 (`PyAutoMind/draft/feature/euclid/single_process_cpu_route_jax_vis_lp_numba_vis_pix.md`).
 `forkserver` and `spawn` are not an option: PyAutoFit pins the `fork` start method
@@ -142,7 +247,7 @@ RAL cluster on 2026-09-03:
 |---|---|---|---|---|---|---|
 | GPU | `batch_gpu/submit_initial_lens_model` | A100 80GB PCIe (`euclid-ral-gpu-2`), 1 core | 30.2 min | 42.4 min | 1 h 14 min | COMPLETED |
 | GPU, re-run after the sparse-operator fix | `batch_gpu/submit_initial_lens_model` | A100 80GB PCIe (`euclid-ral-gpu-1`), 1 core | 37.7 min | 63.8 min | 1 h 44 min | COMPLETED |
-| Two-stage CPU | `batch_cpu/submit_initial_lens_model_two_stage` | 8 cores, 8 pool workers | 25.5 min | 2 h 51 min | 3 h 17 min | COMPLETED |
+| Two-stage CPU | `batch_cpu/submit_initial_lens_model_two_stage` (retired; now the campaign's `vis_lp` and `vis_pix` stages) | 8 cores, 8 pool workers | 25.5 min | 2 h 51 min | 3 h 17 min | COMPLETED |
 
 The second GPU row is the same lens re-run after `scripts/initial_lens_model.py`
 stopped applying the Numba sparse operator on the JAX path (it is the CPU route's
@@ -189,50 +294,58 @@ shell profile.
 
 ## Setting up the cluster
 
-1. **The environment.** Every submit script runs `source $PROJECT_PATH/activate.sh`.
-   That file activates a local `.venv` if one exists, otherwise a shared PyAuto
-   install named by `PYAUTO_HPC_BASE` (a directory holding a `PyAuto/` virtualenv
-   beside editable checkouts of the PyAuto libraries). Export it in your cluster
-   shell profile, or edit the default in `activate.sh`.
-2. **The project path.** Export `PROJECT_PATH` to the project's root on the cluster
-   before submitting; the scripts read it and it is the same location as
-   `$HPC_BASE/$PROJECT_NAME` in `sync.conf`.
-3. **The partition names.** Every `batch_cpu/` script uses `--partition=ral` and the
-   `batch_gpu/` scripts use `--partition=gpu`, because RAL — the cluster the DR1
-   catalogue is built on — names its CPU partition `ral` (it has no `cpu` partition).
-   Rename them to your cluster's partitions, or override on the command line:
-   `sbatch --partition=<name> hpc/batch_cpu/submit_initial_lens_model_two_stage`.
-   **Never put a CPU script on `gpu`** — not `gpu`, `ral,gpu` or `gpu,ral`, even when
-   `ral` is drained or busy (human rule, 2026-09-30: `ral,gpu` CPU arrays took all 124
-   CPUs on both A100 nodes and idled all 8 GPUs for hours). The only exemption is a
-   small CPU timing leg without `--gres` (≤8 CPUs/task, throttle ≤`%2`, no pending
-   gres/gpu jobs in `squeue -p gpu -t PD`). A partition name is not a device: check
-   `gres/gpu` in `scontrol show job <id>` before calling a job a GPU run.
-4. **Submit from the script's directory**, or via `hpc/sync submit`. The `-o` / `-e`
-   directives are relative paths into `output/` and `error/` beside the script, and
-   SLURM will not create them for you.
-5. **Config for large runs.** The committed `config/` is laptop-friendly. Three
-   `config/general.yaml` keys were set differently for the DR1 science runs and are
-   worth changing in your cluster checkout (there is no override mechanism):
+1. **`hpc/sync`.** `cp hpc/sync.conf.example hpc/sync.conf` and fill in your SSH alias,
+   the storage path and the project name (`sync.conf` is gitignored). For the DR1
+   campaign on RAL, `HPC_BASE=/mnt/ral/jnightin/complete` and `PROJECT_NAME=euclid_dr1`,
+   so that `$HPC_BASE/$PROJECT_NAME` is the campaign's `project_root`. `hpc/sync check`
+   tests the connection.
+2. **The environment.** Every job runs `source activate.sh`. That file activates a local
+   `.venv` if one exists, otherwise the PyAuto install named by `PYAUTO_HPC_BASE` (a
+   directory holding a `PyAuto/` virtualenv beside editable checkouts of the PyAuto
+   libraries). The campaign sets `PYAUTO_HPC_BASE` in each stage's `env`. Use your own
+   install, never a shared one other people's runs depend on. The campaign commands
+   run `python -m autofit.campaign` on the login node through the same `activate.sh`
+   (override with `HPC_ENV` and `HPC_PYTHON` in `sync.conf`).
+3. **Temp files and caches.** RAL compute nodes have a small local disk.
+   `cache_root` in `campaign/dr1.yaml` sends `TMPDIR` and the tool caches to the
+   project filesystem instead.
+4. **The partition names.** The campaign and every `batch_cpu/` script use
+   `--partition=ral`; the `batch_gpu/` scripts use `--partition=gpu`, because RAL names
+   its CPU partition `ral` (it has no `cpu` partition). On another cluster, change the
+   partitions in `campaign/dr1.yaml` and the scripts. **Never put CPU work on `gpu`**
+   (human rule, 2026-09-30: `ral,gpu` CPU arrays took all 124 CPUs on both A100 nodes
+   and idled all 8 GPUs for hours). The only exemption is a small CPU timing leg
+   without `--gres` (at most 8 CPUs per task, throttle at most `%2`, no pending GPU jobs
+   in `squeue -p gpu -t PD`). A partition name is not a device: check `gres/gpu` in
+   `scontrol show job <id>` before calling a job a GPU run.
+5. **Submit the hand-written scripts from their own directory**, or via
+   `hpc/sync submit`. Their `-o` / `-e` directives are relative paths into `output/`
+   and `error/` beside the script, and SLURM will not create them for you. The
+   campaign writes its logs to `hpc/batch_cpu/output/` itself.
+6. **Config for large runs.** The committed `config/` is laptop-friendly. Three
+   `config/general.yaml` keys were set differently for the DR1 science runs:
    `output.samples_to_csv: false` (one `samples.csv` per search adds up over
    thousands of lenses), `hpc.hpc_mode: true` (no GUI visualisation or screen
    logging; pair it with a larger `hpc.iterations_per_quick_update`), and
-   `numba.cache: false` (Numba's on-disk cache is unreliable on NFS).
+   `numba.cache: false` (Numba's on-disk cache is unreliable on NFS). The campaign
+   sets the last one through `hpc/config/`; put the others there too if you want
+   them on the cluster only.
 
 ## Moving things with `sync`
 
-`cp hpc/sync.conf.example hpc/sync.conf` and fill in your SSH alias, the storage
-path and the project name (`sync.conf` is gitignored). Then, from the project root:
+From the project root:
 
 | Command | What it does |
 |---|---|
 | `hpc/sync push` / `push --no-data` | Upload code and config, with or without `dataset/`. |
+| `hpc/sync plan` / `pilot` / `status` / `resubmit` / `report` `hpc/campaign/dr1.yaml` | The campaign commands above. None of them submits anything. |
+| `hpc/sync act submit hpc/campaign/dr1.yaml [--stage S] [--indices SPEC] [--dry-run]` | Submit campaign stages. The only command that starts campaign jobs. |
+| `hpc/sync act <hold\|release\|throttle\|update-pending\|cancel> euclid_dr1 <job> ...` | Change queued campaign jobs, logged in `actions.log`. |
 | `hpc/sync submit cpu <script>` / `submit gpu <script>` | `sbatch` one of the scripts in `batch_cpu/` or `batch_gpu/`, from its own directory. |
-| `hpc/sync push-submit cpu <script>` | Push, then submit. |
 | `hpc/sync jobs` / `sacct` / `cancel <id>` | Queue, history, cancel. |
 | `hpc/sync tail cpu` / `tail gpu` | Stream the live SLURM logs. |
 | `hpc/sync logs` | Download only the SLURM logs (fast, use mid-run). |
-| `hpc/sync pull [dir ...]` | Download the logs, then `output/` and the other result trees; name roots (`pull inspect`) to fetch only those. |
+| `hpc/sync pull [dir ...]` | Download the logs, then `output/`, `output_sed/` and `inspect/`; name roots (`pull inspect`) to fetch only those. |
 | `hpc/sync wait-and-pull [secs]` | Poll until no jobs remain, then pull. |
 | `hpc/sync status` / `check` / `du` | Dry-run transfer, connection test, remote disk usage. |
 
