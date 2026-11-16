@@ -93,7 +93,8 @@ def test_stages_chain_per_lens():
 
     assert campaign.stages["vis_lp"].after == {}
     assert campaign.stages["vis_pix"].after == {"vis_lp": "aftercorr"}
-    assert campaign.stages["sed"].after == {"vis_pix": "aftercorr"}
+    # SED reads only the vis_lp seed, so it chains on vis_lp, not vis_pix (#134).
+    assert campaign.stages["sed"].after == {"vis_lp": "aftercorr"}
 
 
 def test_stage_resources_and_environment():
@@ -144,13 +145,13 @@ def test_dry_run_renders_safe_batch_scripts(campaign):
     vis_lp, vis_pix, sed = (entry["script"] for entry in entries)
     assert "--dependency" not in vis_lp
     assert "#SBATCH --dependency=aftercorr:<vis_lp@0>" in vis_pix
-    assert "#SBATCH --dependency=aftercorr:<vis_pix@0>" in sed
+    assert "#SBATCH --dependency=aftercorr:<vis_lp@0>" in sed
     assert "export BLAS_THREADS=1" in vis_pix
     assert "export STAGE_ARGS='--stage=vis_lp --number_of_cores=4'" in vis_lp
     assert "export PYAUTO_OUTPUT_DIR=output_sed" in sed
 
 
-def test_fake_scheduler_submit_chains_each_stage_on_the_one_before(campaign):
+def test_fake_scheduler_submit_chains_vis_pix_and_sed_on_vis_lp(campaign):
     from autofit.campaign.scheduler.fake import FakeScheduler
     from autofit.campaign.submit import read_ledger, submit
 
@@ -161,7 +162,7 @@ def test_fake_scheduler_submit_chains_each_stage_on_the_one_before(campaign):
     requests = scheduler.requests
     assert requests[jobs["vis_lp"]].after == {}
     assert requests[jobs["vis_pix"]].after == {jobs["vis_lp"]: "aftercorr"}
-    assert requests[jobs["sed"]].after == {jobs["vis_pix"]: "aftercorr"}
+    assert requests[jobs["sed"]].after == {jobs["vis_lp"]: "aftercorr"}
     for request in requests.values():
         assert request.resources.partition == "ral"
         assert request.indices == [0, 1, 2]
@@ -190,6 +191,25 @@ def test_status_digest_fits_in_two_kilobytes(campaign):
     # vis_pix and sed of lens 1 never ran: their aftercorr dependency was not met.
     assert states[("vis_pix", 0)] == "completed"
     assert states[("vis_pix", 1)] != "completed"
+    assert states[("sed", 0)] == "completed"
+    assert states[("sed", 1)] != "completed"
+
+
+def test_failed_vis_pix_does_not_block_sed(campaign):
+    from autofit.campaign.collector import collect
+    from autofit.campaign.scheduler.fake import FakeScheduler
+    from autofit.campaign.submit import submit
+
+    scheduler = FakeScheduler(
+        outcomes={("vis_pix", 1): {"scheduler_state": "FAILED"}}, site=campaign.site
+    )
+    submit(campaign, scheduler)
+    scheduler.run()
+    collect(campaign, scheduler)
+
+    states = {(o["stage"], o["index"]): o["state"] for o in map(json.loads, (campaign.directory / "tasks.jsonl").read_text().splitlines())}
+    assert states[("vis_pix", 1)] != "completed"
+    assert states[("sed", 1)] == "completed"
 
 
 # ---------------------------------------------------------------------------
