@@ -99,13 +99,13 @@ themselves with `hpc/sync pull`.
 |---|---|---|---|---|
 | `vis_lp` | `scripts/initial_lens_model.py --stage=vis_lp`, JAX on the CPU | at once | 4 CPUs, 12 GB, 18 h, `ral`, up to 100 at a time | nothing |
 | `vis_pix` | `scripts/initial_lens_model.py --stage=vis_pix --use_cpu`, Numba sparse route, 8 pool processes, BLAS pinned to 1 thread | that lens's `vis_lp` has succeeded | 8 CPUs, 16 GB, 24 h, `ral`, up to 60 | checks there is exactly one `vis_lp` zip |
-| `sed` | `scripts/sersic_lens_model_waveband.py` into `output_sed/`, JAX on the CPU | that lens's `vis_pix` has succeeded | 8 CPUs, 16 GB, 3 h, `ral`, up to 40 | copies the `vis_lp` zip into `output_sed/` |
+| `sed` | `scripts/sersic_lens_model_waveband.py` into `output_sed/`, JAX on the CPU | that lens's `vis_lp` has succeeded | 8 CPUs, 16 GB, 3 h, `ral`, up to 40 | copies the `vis_lp` zip into `output_sed/` |
 
 Each stage runs `hpc/batch_cpu/stage` once per lens. It reads the lens's manifest line,
 writes a task record the campaign reads back, and runs the script. A failed check
 before the fit marks the task `missing_seed`: resubmit `vis_lp` for that lens first.
-SED only needs the `vis_lp` result; it waits on `vis_pix` so the two 8-CPU stages of
-one lens do not compete for nodes. The SED wall time is short on purpose: its slow
+SED only needs the `vis_lp` result, so it chains on `vis_lp` alone and runs alongside
+`vis_pix`: a lens whose `vis_pix` fails still gets its SED fit. The SED wall time is short on purpose: its slow
 tail is a hang in one band's search, and longer walls only burned node-hours.
 
 Lens *i* of a stage waits only on lens *i* of the stage before (SLURM `aftercorr`),

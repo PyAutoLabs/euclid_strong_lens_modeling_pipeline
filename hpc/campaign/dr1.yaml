@@ -12,6 +12,9 @@
 #   sed      the SED chain: VIS Sersic fit, then one Sersic fit per NIR / DECam band,
 #            into its own tree (output_sed/). Starts from a copy of vis_lp's result.
 #
+# vis_pix and sed both chain on vis_lp only, so they run side by side: a failed vis_pix
+# does not cost a lens its SED fit.
+#
 # The manifest, hpc/campaign/dr1_manifest.txt, has one lens per line, "<sample>
 # <dataset>". Its 0-based line number is the lens's campaign index, the same in every
 # stage. Build it with hpc/tools/build_campaign_manifest.py; it is not committed.
@@ -20,8 +23,8 @@
 # line and calls scripts/<STAGE_SCRIPT> --sample=... --dataset=... <STAGE_ARGS>.
 # STAGE_ARGS is passed as written, so its --number_of_cores must match `cpus`.
 #
-# Chaining is per lens (`aftercorr`): lens i of vis_pix starts when lens i of vis_lp
-# has succeeded, not when the whole vis_lp array has. RAL warning: the old chain
+# Chaining is per lens (`aftercorr`): lens i of vis_pix (and of sed) starts when lens i
+# of vis_lp has succeeded, not when the whole vis_lp array has. RAL warning: the old chain
 # driver found `aftercorr` never fired on RAL's slurmctld (22.05.9; completed task
 # records are purged after MinJobAge). The first 10-lens run must check that vis_pix
 # tasks leave PENDING(Dependency) when their vis_lp tasks finish.
@@ -94,10 +97,11 @@ stages:
       keys: {dataset_type: imaging, variant: delaunay, instrument: euclid}
 
   sed:
-    # SED's only data dependency is the vis_lp seed (copied by STAGE_SETUP); it does not
-    # read vis_pix. It waits on vis_pix so the declared chain is vis_lp -> vis_pix -> sed
-    # and the two 8-CPU stages of one lens do not compete for nodes.
-    after: {vis_pix: aftercorr}
+    # SED's only data input is the vis_lp seed (copied by STAGE_SETUP); it never reads
+    # vis_pix, so it chains on vis_lp alone and runs alongside vis_pix (decision
+    # 2026-11-16, #134). Waiting on vis_pix cost a lens its SED fit whenever vis_pix
+    # failed, and held SED behind the 24 h pixelized stage.
+    after: {vis_lp: aftercorr}   # lens i starts when vis_lp lens i has succeeded
     script: hpc/batch_cpu/stage
     env:
       STAGE_SCRIPT: sersic_lens_model_waveband.py
