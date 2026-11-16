@@ -91,6 +91,11 @@ def fit_sersic(
         new_path=project_root / "config",
         output_path=project_root / os.environ.get("PYAUTO_OUTPUT_DIR", "output"),
     )
+    if os.environ.get("PYAUTO_CONFIG_OVERLAY"):
+        conf.instance.push(
+            new_path=project_root / os.environ["PYAUTO_CONFIG_OVERLAY"],
+            output_path=project_root / os.environ.get("PYAUTO_OUTPUT_DIR", "output"),
+        )
 
     import numpy as np
     import autofit as af
@@ -254,8 +259,8 @@ def fit_sersic(
     Nautilus settles this twelve-parameter space with a much smaller live-point set
     than the ``vis_lp`` fit needs (``n_live=100`` against 750), and ``n_like_max``
     caps a runaway fit. ``batch_size`` controls how many models are evaluated
-    simultaneously on the JAX backend (CPU by default on RAL, via
-    ``hpc/batch_cpu/submit_sersic_waveband``; GPU optional); JAX is always on for
+    simultaneously on the JAX backend (CPU by default on RAL, via the ``sed``
+    stage of ``hpc/campaign/dr1.yaml``; GPU optional); JAX is always on for
     this search.
     """
     analysis = util.AnalysisImaging(

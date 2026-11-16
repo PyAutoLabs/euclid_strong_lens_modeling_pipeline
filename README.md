@@ -21,9 +21,10 @@ If you install **PyAutoLens** without a proper GPU setup, a warning will be disp
 ## Running On A Cluster
 
 `hpc/README.md` covers SLURM submission: a one-job GPU route recommended for a small
-subset of lenses, and a two-stage CPU route (`vis_lp` under JAX on CPU, then `vis_pix`
-with Numba and a process pool) for large samples on many cores, with example scripts
-under `hpc/batch_gpu/` and `hpc/batch_cpu/` and the `hpc/sync` transfer/submit tool.
+subset of lenses, and, for large samples on many CPU cores, the DR1 campaign
+`hpc/campaign/dr1.yaml` (`vis_lp` under JAX on CPU, then `vis_pix` with Numba and a
+process pool, then the SED chain, chained lens by lens), driven with the `hpc/sync`
+transfer/submit tool.
 
 ## Getting Started
 

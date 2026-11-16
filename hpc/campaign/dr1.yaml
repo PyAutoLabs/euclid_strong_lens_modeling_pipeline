@@ -1,0 +1,111 @@
+# dr1.yaml — the Euclid DR1 lens models on RAL, as one campaign.
+# ─────────────────────────────────────────────────────────────────────────────
+# This file declares the three DR1 stages, what each one needs and how they chain.
+# `python -m autofit.campaign` reads it on the cluster; you drive it from the laptop
+# with `hpc/sync` (plan, pilot, act submit, status, resubmit, report). The walk-through
+# is hpc/README.md.
+#
+# The stages, per lens:
+#   vis_lp   light-profile (MGE) fit of the VIS image, JAX on the CPU.
+#   vis_pix  pixelized-source (Delaunay) fit, Numba sparse CPU route, one Nautilus
+#            process per core with BLAS pinned to one thread. Loads vis_lp's result.
+#   sed      the SED chain: VIS Sersic fit, then one Sersic fit per NIR / DECam band,
+#            into its own tree (output_sed/). Starts from a copy of vis_lp's result.
+#
+# The manifest, hpc/campaign/dr1_manifest.txt, has one lens per line, "<sample>
+# <dataset>". Its 0-based line number is the lens's campaign index, the same in every
+# stage. Build it with hpc/tools/build_campaign_manifest.py; it is not committed.
+#
+# Each stage runs hpc/batch_cpu/stage for every index. The stage reads the manifest
+# line and calls scripts/<STAGE_SCRIPT> --sample=... --dataset=... <STAGE_ARGS>.
+# STAGE_ARGS is passed as written, so its --number_of_cores must match `cpus`.
+#
+# Chaining is per lens (`aftercorr`): lens i of vis_pix starts when lens i of vis_lp
+# has succeeded, not when the whole vis_lp array has. RAL warning: the old chain
+# driver found `aftercorr` never fired on RAL's slurmctld (22.05.9; completed task
+# records are purged after MinJobAge). The first 10-lens run must check that vis_pix
+# tasks leave PENDING(Dependency) when their vis_lp tasks finish.
+#
+# Two hard rules: nothing is submitted without the human's yes, and CPU work never
+# goes on the `gpu` partition (not `gpu`, `ral,gpu` or `gpu,ral`). The campaign
+# lint refuses a GPU partition for any stage here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+campaign: euclid_dr1
+# This project's path on RAL. hpc/sync.conf must point at the same place:
+# HPC_BASE=/mnt/ral/jnightin/complete, PROJECT_NAME=euclid_dr1.
+project_root: /mnt/ral/jnightin/complete/euclid_dr1
+manifest: hpc/campaign/dr1_manifest.txt
+manifest_fields: [sample, dataset]
+chunk: 1000            # lenses per array; RAL's MaxArraySize is 1001
+site: ral              # PyAutoNerves site file: partitions, limits, power and carbon
+scheduler: slurm
+status_root: output    # where fits write <output_path>.status.json
+log_dir: hpc/batch_cpu/output
+# Temp files and tool caches go here, not to the compute nodes' small local disk.
+cache_root: /mnt/ral/jnightin
+
+# Success checks. Each stage should declare a zip-completeness check, e.g. for vis_lp
+#   success: {zip_complete: "output/{sample}/{dataset}/initial_lens_model/vis_lp",
+#             members: [files/samples_summary.json]}
+# but they are left out for now. A fit's zip is named after its search identifier,
+# output/<sample>/<dataset>/initial_lens_model/vis_lp/<hash>.zip, and autofit.campaign
+# checks one fixed path (<zip_complete>.zip), so every finished task would be flagged
+# as failing its check. Until zip_complete accepts a pattern, the per-lens checks are
+# the STAGE_SETUP guards below (vis_pix and sed need exactly one vis_lp zip, else the
+# task fails as missing_seed) and the fits' own status records.
+
+stages:
+  vis_lp:
+    script: hpc/batch_cpu/stage
+    env:
+      STAGE_SCRIPT: initial_lens_model.py
+      STAGE_ARGS: --stage=vis_lp --number_of_cores=4
+      PYAUTO_HPC_BASE: /mnt/ral/jnightin/PyAuto
+      PYAUTO_CONFIG_OVERLAY: hpc/config     # numba.cache: false (NFS, many writers)
+    # 4,982 v2-grade lenses: elapsed p50 2.1 h, p99 5.4 h; MaxRSS max 4.1 GB.
+    resources: {cpus: 4, mem_mb: 12288, time: "18:00:00",
+                partition: ral, throttle: 100, nice: 1000}
+    retry: {timeout: {time: "p95+25%", max: 1}, oom: {mem: "peak*1.5", max: 1}}
+    evidence:
+      keys: {dataset_type: imaging, variant: mge, instrument: euclid}
+
+  vis_pix:
+    after: {vis_lp: aftercorr}   # lens i starts when vis_lp lens i has succeeded
+    script: hpc/batch_cpu/stage
+    env:
+      STAGE_SCRIPT: initial_lens_model.py
+      STAGE_ARGS: --stage=vis_pix --use_cpu --number_of_cores=8 --iterations_per_quick_update=1000
+      BLAS_THREADS: 1                       # one thread per Nautilus worker process
+      STAGE_SETUP: hpc/batch_cpu/vis_pix_seed.sh
+      PYAUTO_HPC_BASE: /mnt/ral/jnightin/PyAuto
+      PYAUTO_CONFIG_OVERLAY: hpc/config
+    # MaxRSS p99 10.9 GB, max 11.5 GB over 2,004 tasks; the evidence range is 16-20 GB,
+    # 16 GB is its lower end. 24 h is headroom: the sparse route cut the old p99 of 16.8 h.
+    resources: {cpus: 8, mem_mb: 16384, time: "24:00:00",
+                partition: ral, throttle: 60, nice: 1000}
+    retry: {timeout: {time: "p95+25%", max: 1}, oom: {mem: "peak*1.5", max: 1}}
+    evidence:
+      keys: {dataset_type: imaging, variant: delaunay, instrument: euclid}
+
+  sed:
+    # SED's only data dependency is the vis_lp seed (copied by STAGE_SETUP); it does not
+    # read vis_pix. It waits on vis_pix so the declared chain is vis_lp -> vis_pix -> sed
+    # and the two 8-CPU stages of one lens do not compete for nodes.
+    after: {vis_pix: aftercorr}
+    script: hpc/batch_cpu/stage
+    env:
+      STAGE_SCRIPT: sersic_lens_model_waveband.py
+      STAGE_ARGS: --number_of_cores=8
+      PYAUTO_OUTPUT_DIR: output_sed
+      STAGE_SETUP: hpc/batch_cpu/sed_seed.sh
+      PYAUTO_HPC_BASE: /mnt/ral/jnightin/PyAuto
+      PYAUTO_CONFIG_OVERLAY: hpc/config
+    # p50 0.24 h, p90 0.65 h, p99 2.66 h; MaxRSS ~3 GB. 3 h on purpose: the tail is a
+    # hang in one band's search, and re-runs at 18 h timed out again (45 of 46), so a
+    # longer wall only burns node-hours. Hence no timeout retry.
+    resources: {cpus: 8, mem_mb: 16384, time: "03:00:00",
+                partition: ral, throttle: 40, nice: 1000}
+    retry: {timeout: none, oom: {mem: "peak*1.5", max: 1}}
+    evidence:
+      keys: {dataset_type: imaging, variant: sersic, instrument: euclid}

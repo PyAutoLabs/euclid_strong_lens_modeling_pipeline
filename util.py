@@ -2,7 +2,20 @@ from astropy.io import fits
 from dataclasses import dataclass
 import json
 import numpy as np
+import os
 from pathlib import Path
+
+# PYAUTO_CONFIG_OVERLAY (set by the HPC campaign, hpc/campaign/dr1.yaml) names a config
+# directory, relative to the project root, layered over config/. It is pushed here,
+# before autolens is imported, because some keys are fixed at import: autoarray reads
+# numba.cache when it is first imported. The stage scripts push it again after their
+# own config push, so it also wins for every key read later. Unset, nothing changes.
+if os.environ.get("PYAUTO_CONFIG_OVERLAY"):
+    from autonerves import conf as _overlay_conf
+
+    _overlay_conf.instance.push(
+        new_path=Path(__file__).parent / os.environ["PYAUTO_CONFIG_OVERLAY"]
+    )
 
 import project_paths
 from scripts.tools import sky_frame

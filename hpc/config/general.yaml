@@ -1,0 +1,3 @@
+# Cluster overlay over config/ (PYAUTO_CONFIG_OVERLAY=hpc/config): the project dir is on NFS with many writers, where Numba's disk cache is unreliable.
+numba:
+  cache: false

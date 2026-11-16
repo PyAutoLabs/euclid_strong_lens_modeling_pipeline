@@ -1,0 +1,53 @@
+# campaign.yaml — one declaration for a modelling campaign on the HPC.
+# ─────────────────────────────────────────────────────────────────────────────
+# A starting point for a campaign of your own. The DR1 campaign itself is
+# hpc/campaign/dr1.yaml; read it and hpc/README.md first. Copy this to
+# hpc/campaign/<name>.yaml and edit. `hpc/sync push` sends it with the rest of hpc/;
+# every campaign verb (`hpc/sync status|plan|pilot|resubmit|report|act`) then runs
+# `python -m autofit.campaign` on the cluster against it.
+#
+# The manifest lists one object per line ("<sample> <dataset>" here); its 0-based line
+# number is the object's campaign index, the same in every stage. Each stage runs
+# hpc/batch_cpu/stage for every index, which calls scripts/<STAGE_SCRIPT> with
+# --sample=... --dataset=... <STAGE_ARGS> and records the task for the collector.
+#
+# The site and partitions below are RAL's; use your cluster's site file and partition
+# names. CPU work never goes on a GPU partition.
+# ─────────────────────────────────────────────────────────────────────────────
+
+campaign: my_sample
+# Must be the project's path on the cluster: $HPC_BASE/$PROJECT_NAME from hpc/sync.conf.
+project_root: /path/to/large/storage/your_username/euclid_strong_lens_modeling_pipeline
+manifest: hpc/campaign/my_sample_manifest.txt
+manifest_fields: [sample, dataset]
+chunk: 1000            # tasks per array; at most the site's MaxArraySize
+site: ral              # PyAutoNerves site file: partitions, limits, power and carbon constants
+scheduler: slurm
+status_root: output    # where fits write <output_path>.status.json
+log_dir: hpc/batch_cpu/output
+
+stages:
+  vis_lp:
+    script: hpc/batch_cpu/stage
+    env:
+      STAGE_SCRIPT: initial_lens_model.py
+      STAGE_ARGS: --stage=vis_lp --number_of_cores=4    # match cpus
+    resources: {cpus: 4, mem_mb: 12288, time: "18:00:00",
+                partition: ral, throttle: 100, nice: 1000}
+    retry: {timeout: {time: "p95+25%", max: 1}, oom: {mem: "peak*1.5", max: 1}}
+    evidence:
+      keys: {dataset_type: imaging, variant: mge, instrument: euclid}
+
+  vis_pix:
+    after: {vis_lp: aftercorr}   # index i starts when vis_lp index i has succeeded
+    script: hpc/batch_cpu/stage
+    env:
+      STAGE_SCRIPT: initial_lens_model.py
+      STAGE_ARGS: --stage=vis_pix --use_cpu --number_of_cores=8
+      BLAS_THREADS: 1                          # one thread per pool process
+      STAGE_SETUP: hpc/batch_cpu/vis_pix_seed.sh
+    resources: {cpus: 8, mem_mb: 16384, time: "24:00:00",
+                partition: ral, throttle: 60, nice: 1000}
+    retry: {timeout: {time: "p95+25%", max: 1}, oom: {mem: "peak*1.5", max: 1}}
+    evidence:
+      keys: {dataset_type: imaging, variant: delaunay, instrument: euclid}

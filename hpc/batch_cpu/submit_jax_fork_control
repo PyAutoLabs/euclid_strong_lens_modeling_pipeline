@@ -21,10 +21,11 @@
 #                   in a child of a JAX-free parent, then the pooled fit.
 #
 #   `results.json` and the per-leg `leg.log` under `$PROJECT_PATH/output_diag/` are
-#   the evidence. If every leg PASSes here, the process boundary in
-#   `submit_initial_lens_model_two_stage` is bookkeeping rather than necessity; if
-#   `control` or `control_real` HANGs, the boundary is load-bearing and the two-stage
-#   scripts are right to keep it.
+#   the evidence. If every leg PASSes here, the process boundary between the
+#   campaign's vis_lp and vis_pix stages (hpc/campaign/dr1.yaml; formerly
+#   `submit_initial_lens_model_two_stage`) is bookkeeping rather than necessity; if
+#   `control` or `control_real` HANGs, the boundary is load-bearing and the stages
+#   are right to keep it.
 #
 # THIS IS A DIAGNOSTIC, NOT A FIT
 #   It runs a real but tiny Nautilus fit and answers a design question. It is never

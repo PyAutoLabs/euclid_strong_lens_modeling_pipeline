@@ -282,6 +282,11 @@ def fit(
         new_path=project_root / "config",
         output_path=project_root / os.environ.get("PYAUTO_OUTPUT_DIR", "output"),
     )
+    if os.environ.get("PYAUTO_CONFIG_OVERLAY"):
+        conf.instance.push(
+            new_path=project_root / os.environ["PYAUTO_CONFIG_OVERLAY"],
+            output_path=project_root / os.environ.get("PYAUTO_OUTPUT_DIR", "output"),
+        )
 
     import autofit as af
     import autolens as al

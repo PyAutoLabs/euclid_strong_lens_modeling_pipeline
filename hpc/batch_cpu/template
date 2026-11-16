@@ -4,16 +4,11 @@
 # one Numba-only Python process (`--use_cpu`, no JAX).
 #
 # Copy it, rename it, and change the `sample`, `dataset` and the `python3` line
-# to whichever script you want to run. For fitting more than one lens, start
-# from `submit_initial_lens_model` (array job, same single-process shape) or,
-# better, from the two-stage scripts:
-#
-#   submit_initial_lens_model_two_stage  one submission, two processes
-#   submit_initial_lens_model_vis_lp     stage 1, JAX on CPU
-#   submit_initial_lens_model_vis_pix    stage 2, Numba CPU sparse, no JAX
-#
-# which give each stage the thread/process environment it actually wants. See
-# the header of `submit_initial_lens_model` for why one process cannot.
+# to whichever script you want to run. For fitting more than one lens, do not
+# copy this: run the campaign, `hpc/campaign/dr1.yaml` (see hpc/README.md). It
+# runs vis_lp, vis_pix and the SED chain as separate stages through
+# `hpc/batch_cpu/stage`, each with the thread/process environment it wants.
+# `submit_initial_lens_model` is the array form of this single-process route.
 
 #SBATCH -J euclid_cpu
 #SBATCH -n 1
