@@ -1,3 +1,5 @@
 # Cluster overlay over config/ (PYAUTO_CONFIG_OVERLAY=hpc/config): the project dir is on NFS with many writers, where Numba's disk cache is unreliable.
+hpc:
+  hpc_mode: true  # Same as config/. Repeated here because util.py pushes this overlay at import, above the library defaults (hpc_mode false), and autoarray reads hpc_mode at import to force the Agg backend.
 numba:
   cache: false

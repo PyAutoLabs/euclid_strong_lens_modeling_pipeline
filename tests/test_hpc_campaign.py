@@ -396,8 +396,15 @@ def test_sed_stage_copies_its_seed_then_runs(stage_project):
 
 
 def test_cluster_overlay_only_turns_off_the_numba_disk_cache():
+    # The overlay may repeat config/ values (hpc.hpc_mode is read at import, when the
+    # overlay sits above the library defaults) but changes only numba.cache.
     overlay = yaml.safe_load((ROOT / "hpc" / "config" / "general.yaml").read_text())
-    assert overlay == {"numba": {"cache": False}}
+    base = yaml.safe_load((ROOT / "config" / "general.yaml").read_text())
+    assert overlay["numba"] == {"cache": False}
+    for section, values in overlay.items():
+        for key, value in values.items():
+            if (section, key) != ("numba", "cache"):
+                assert base[section][key] == value, (section, key)
 
 
 def test_manifest_builder_lists_lenses_with_their_fits_sorted(tmp_path):

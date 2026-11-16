@@ -12,8 +12,10 @@ from pathlib import Path
 # own config push, so it also wins for every key read later. Unset, nothing changes.
 # At import the order is overlay, then the library defaults, then config/: each
 # library registers its defaults just under the top entry, so pushing config/ here
-# first would not help. No key read at import differs between config/ and the
-# library defaults today; inside fit() the scripts restore overlay > config/.
+# first would not help. Six keys are read at import (numba.nopython/cache/parallel,
+# hpc.hpc_mode, test.lh_timeout_seconds, the visualize backend); of those only
+# hpc.hpc_mode differs between config/ and the library defaults, so hpc/config
+# repeats it. Inside fit() the scripts restore overlay > config/.
 if os.environ.get("PYAUTO_CONFIG_OVERLAY"):
     from autonerves import conf as _overlay_conf
 
