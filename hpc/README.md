@@ -110,8 +110,12 @@ tail is a hang in one band's search, and longer walls only burned node-hours.
 
 Lens *i* of a stage waits only on lens *i* of the stage before (SLURM `aftercorr`),
 so the stages overlap. The old chain scripts recorded that `aftercorr` never fired on
-RAL's SLURM (22.05.9). Check it on the first pilot: a `vis_pix` task should leave
-`PENDING (Dependency)` soon after its `vis_lp` task completes.
+RAL's SLURM (22.05.9). A test on 2026-11-16 (SLURM 22.05.11) found that it fires within
+seconds. It still fires after the upstream task's record has been purged (MinJobAge,
+300 s), and a late fill submitted against a purged array runs too. A purged dependency
+counts as met even if the upstream task failed, so the seed guards are what stop a lens
+with no `vis_lp` result: `vis_pix` and `sed` refuse to start without exactly one
+`vis_lp` zip and record `missing_seed`.
 
 Each run also sets `PYAUTO_CONFIG_OVERLAY=hpc/config`, which layers `hpc/config/` over
 `config/`. Today it only turns off Numba's disk cache, which is unreliable on the NFS

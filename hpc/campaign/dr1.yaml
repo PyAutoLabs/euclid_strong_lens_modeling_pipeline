@@ -24,10 +24,13 @@
 # STAGE_ARGS is passed as written, so its --number_of_cores must match `cpus`.
 #
 # Chaining is per lens (`aftercorr`): lens i of vis_pix (and of sed) starts when lens i
-# of vis_lp has succeeded, not when the whole vis_lp array has. RAL warning: the old chain
-# driver found `aftercorr` never fired on RAL's slurmctld (22.05.9; completed task
-# records are purged after MinJobAge). The first 10-lens run must check that vis_pix
-# tasks leave PENDING(Dependency) when their vis_lp tasks finish.
+# of vis_lp has succeeded, not when the whole vis_lp array has. Tested on RAL
+# (slurmctld 22.05.11, 2026-11-16): aftercorr fires within seconds, and still fires
+# after the upstream task's record is purged (MinJobAge 300 s), as does a late fill
+# submitted against a purged array. The old chain driver's "never fires" (22.05.9) no
+# longer holds. Once purged, SLURM treats the dependency as met without knowing whether
+# the vis_lp task succeeded, so the seed guards (exactly one vis_lp zip, else
+# missing_seed) are what stop a lens whose vis_lp failed.
 #
 # Two hard rules: nothing is submitted without the human's yes, and CPU work never
 # goes on the `gpu` partition (not `gpu`, `ral,gpu` or `gpu,ral`). The campaign
