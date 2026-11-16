@@ -65,6 +65,10 @@ from the project root:
    hpc/sync status hpc/campaign/dr1.yaml
    ```
 
+   SED fits write to `output_sed/`, which `status` does not scan yet. For SED it
+   sees only the stage's own record and the scheduler state, so an SED failure shows
+   as a plain `failed` without the fit's own cause. Read the task's log for the cause.
+
 8. **Resubmit failures.** `resubmit` writes a proposal sized from the failed tasks'
    own measurements (a longer wall time for timeouts, more memory for out-of-memory).
    It submits nothing. Once the human approves it, `act resubmit` submits it:

@@ -41,6 +41,11 @@ chunk: 1000            # lenses per array; RAL's MaxArraySize is 1001
 site: ral              # PyAutoNerves site file: partitions, limits, power and carbon
 scheduler: slurm
 status_root: output    # where fits write <output_path>.status.json
+# Known gap: the sed stage writes into output_sed/ (PYAUTO_OUTPUT_DIR), so its fits'
+# own status records are not under status_root and `status` sees SED only through
+# the stage's shell record and sacct (generic failed/exception, no fit-side failure
+# class or timeout_pending). Fixing it needs a per-stage status_root in
+# autofit.campaign.
 log_dir: hpc/batch_cpu/output
 # Temp files and tool caches go here, not to the compute nodes' small local disk.
 cache_root: /mnt/ral/jnightin

@@ -10,6 +10,10 @@ from pathlib import Path
 # before autolens is imported, because some keys are fixed at import: autoarray reads
 # numba.cache when it is first imported. The stage scripts push it again after their
 # own config push, so it also wins for every key read later. Unset, nothing changes.
+# At import the order is overlay, then the library defaults, then config/: each
+# library registers its defaults just under the top entry, so pushing config/ here
+# first would not help. No key read at import differs between config/ and the
+# library defaults today; inside fit() the scripts restore overlay > config/.
 if os.environ.get("PYAUTO_CONFIG_OVERLAY"):
     from autonerves import conf as _overlay_conf
 
