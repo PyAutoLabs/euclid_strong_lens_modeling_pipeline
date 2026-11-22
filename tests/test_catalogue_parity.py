@@ -8,7 +8,7 @@ a product DR1 has no counterpart for (``astrometric_offsets.txt``). For each
 producer under ``catalogue/scripts/`` this module reconstructs the header
 ``af.AggregateCSV`` will write — from the producer's own ``add_label_column`` /
 ``add_variable`` calls and the real ``autofit`` ``Column`` class — and asserts
-it reproduces the stored header **exactly, order included**.
+it reproduces the stored header in order, with the current waveband QA flag.
 
 Why reconstruct rather than run the producers: each producer's column list is
 a literal inside ``main()``, and ``main()`` needs a populated ``output/`` tree
@@ -255,9 +255,21 @@ def test_catalogue_columns_reproduce_the_dr1_header(producer):
 
     assert specs, f"no AggregateCSV columns found in catalogue/scripts/{producer}.py"
 
+    assert header_from(specs) == expected_header_for(producer)
+
+
+def expected_header_for(producer):
     expected = (DR1_HEADERS / f"{producer}.txt").read_text().strip()
 
-    assert header_from(specs) == expected
+    if producer in ("magnitudes", "astrometric_offsets"):
+        fields = expected.split(",")
+        insert_at = fields.index(
+            "crval_ra_deg" if producer == "magnitudes" else "prior_edge_x"
+        ) + 1
+        fields.insert(insert_at, "capped")
+        expected = ",".join(fields)
+
+    return expected
 
 
 @pytest.mark.parametrize("producer", PRODUCERS)

@@ -277,7 +277,6 @@ def main(counts):
     output_path, inspect_path = catalogue_util.resolve_paths(args)
 
     import autofit as af
-    from autofit.aggregator.aggregator import Aggregator
     import autolens as al  # noqa: F401  required for unpickling result types
 
     sample_root = catalogue_util.sample_root_from(output_path, args.sample)
@@ -288,21 +287,26 @@ def main(counts):
     # Newest result per lens/band, scoped to ``--datasets_file`` when given.
     agg = catalogue_util.sample_aggregator(sample_root, args.datasets_file)
     agg_query = agg.query(agg.unique_tag == args.unique_tag)
+    waveband_caps = catalogue_util.WavebandCaps(
+        agg_query, sample_root, args.unique_tag, args.datasets_file
+    )
     agg_query = with_grid_offset(agg_query)
 
     agg_query = catalogue_util.available_results(
         agg_query,
         counts,
+        waveband_caps=waveband_caps,
         values=("wcs",),
     )
-    if not len(agg_query):
+    sentinel_rows = waveband_caps.sentinel_rows(agg_query, counts)
+    if not len(agg_query) and not sentinel_rows:
         print(f"no usable completed {args.unique_tag} results")
         catalogue_util.clear_csv_rows(inspect_path, "astrometric_offsets.csv")
         return
-    agg_csv = af.AggregateCSV(aggregator=agg_query, strict=False)
+    agg_csv = catalogue_util.WavebandCSV(agg_query, sentinel_rows)
 
     """
-    __Five Label Columns, Built After The Filter__
+    __Label Columns And QA Flags, Built After The Filter__
 
     The same three ``magnitudes.csv`` carries: ``lens_name`` (the dataset
     directory, which the per-lens split groups on), ``waveband``
@@ -336,6 +340,9 @@ def main(counts):
     agg_csv.add_label_column(name="crval_ra_deg", values=crval_ra_deg_list)
     agg_csv.add_label_column(name="prior_edge_y", values=prior_edge_y_list)
     agg_csv.add_label_column(name="prior_edge_x", values=prior_edge_x_list)
+    agg_csv.add_label_column(
+        name="capped", values=[waveband_caps.is_capped(result) for result in agg_query]
+    )
 
     """
     __Six Columns Per Offset__
@@ -391,7 +398,7 @@ def main(counts):
     out_csv = inspect_path / "astrometric_offsets.csv"
     catalogue_util.save_csv(agg_csv, out_csv)
     counts.built = len(lens_name_list)
-    print(f"wrote {out_csv} ({len(lens_name_list)} rows)")
+    print(f"wrote {out_csv} ({counts.built + len(sentinel_rows)} rows)")
 
     written = catalogue_util.write_per_tile_csv(
         master_csv=out_csv,
