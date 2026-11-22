@@ -140,3 +140,18 @@ def test_skip_pix_true_still_means_stage_vis_lp(monkeypatch, isolated_output):
             stage="bogus",
             skip_pix=True,
         )
+
+
+def test_vis_lp_builds_search_with_batch_of_50(monkeypatch, isolated_output):
+    import autofit as af
+
+    def effective_batch(search, **kwargs):
+        return search.n_batch
+
+    monkeypatch.setattr(af.Nautilus, "fit", effective_batch)
+    assert initial_lens_model.fit(
+        dataset_name=EXAMPLE_DATASET,
+        sample_name=EXAMPLE_SAMPLE,
+        stage="vis_lp",
+        use_cpu=True,
+    ) == 50
