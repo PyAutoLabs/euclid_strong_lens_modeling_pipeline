@@ -206,7 +206,7 @@ def fit(
         name="vis",
         **settings_search.search_dict,
         n_live=75,
-        batch_size=50,
+        n_batch=50,
         iterations_per_quick_update=iterations_per_quick_update,
     )
 
@@ -585,7 +585,7 @@ def fit_waveband(
             name=dataset_waveband,
             **settings_search.search_dict,
             n_live=75,
-            batch_size=50,
+            n_batch=50,
             iterations_per_quick_update=iterations_per_quick_update,
         )
 
