@@ -8,10 +8,7 @@ does not catch:
 
 (a) **Dropped magnitude rows.** ``band_inventory.csv`` (QA) says which SED bands
     completed for each lens; ``magnitudes.csv`` should hold one row per completed
-    band. A lens with fewer magnitude wavebands than completed bands lost a row
-    in the magnitude producer while QA still marks it complete (the
-    Tile102015606 case: VIS magnitude row missing, band_inventory fully
-    complete). Written to ``magnitude_rows_short.csv`` with the missing
+    band. A completed band missing its magnitude measurements is written to ``magnitude_rows_short.csv`` with the missing
     wavebands.
 
 (b) **Missing model.fits.** Every lens in ``lens_index.csv`` (or, if absent,
@@ -51,10 +48,17 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     csv.field_size_limit(sys.maxsize)
 
-    # (a) magnitude rows vs QA-completed bands
+    # (a) magnitude rows vs QA-completed bands. A capped fit may leave a QA
+    # row without measurements. Capped fits with actual measurements still count.
+    magnitude_prefixes = ("lens_flux", "lensed_source_flux", "source_flux", "magnification")
     mag_bands = defaultdict(set)
     with open(cat / "magnitudes.csv", newline="") as f:
         for row in csv.DictReader(f):
+            if row.get("capped") == "True" and not any(
+                value for name, value in row.items()
+                if name and name.startswith(magnitude_prefixes)
+            ):
+                continue
             mag_bands[row["lens_name"]].add(row["waveband"])
 
     inventory = []
@@ -66,13 +70,14 @@ def main():
         tile = row["tile_name"]
         completed = bands(row["completed_bands"])
         have = mag_bands.get(tile, set())
-        if len(have) < len(completed):
+        missing = completed - have
+        if missing:
             short.append(
                 {
                     "tile_name": tile,
                     "completed_band_count": len(completed),
                     "magnitude_band_count": len(have),
-                    "missing_magnitude_bands": ";".join(sorted(completed - have)),
+                    "missing_magnitude_bands": ";".join(sorted(missing)),
                     "qa_fully_complete": row.get("fully_complete", ""),
                 }
             )

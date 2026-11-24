@@ -67,9 +67,11 @@ script assumes all of it and explains only what is specific to fitting a second
 waveband.
 """
 
+import json
 import os
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -87,6 +89,74 @@ from scripts.initial_lens_model import fit
 GRID_OFFSET_PRIOR_ARCSEC = 0.5
 
 
+# Healthy two-parameter fits took about 1,600 calls. Leave room for slower
+# bands while protecting the rest of a tile's sequential SED chain.
+WAVEBAND_N_LIKE_MAX = 10_000
+WAVEBAND_TIMEOUT_S = 30 * 60
+
+
+def _fit_band_with_limits(dataset_name, band, model, analysis, settings, quick_update):
+    """Run one search and publish its cap status alongside its directory or zip."""
+    import autofit as af
+    from autofit.exc import SearchBudgetExceeded
+
+    search = af.Nautilus(
+        name=band,
+        **settings.search_dict,
+        n_live=75,
+        n_batch=50,
+        iterations_per_quick_update=quick_update,
+        f_live=0.01,
+        n_like_max=WAVEBAND_N_LIKE_MAX,
+        timeout=WAVEBAND_TIMEOUT_S,
+    )
+    try:
+        result = search.fit(model=model, analysis=analysis, **settings.fit_dict)
+    except SearchBudgetExceeded as error:
+        # A cap can fire before Nautilus has samples for a posterior.
+        reason = error.termination_reason
+        has_posterior = False
+    else:
+        samples = result.samples
+        if samples is None:
+            # A previously completed fit may only have its summary available.
+            # It supplies no new evidence to change an existing marker.
+            return
+        reason = samples.samples_info.get("termination_reason")
+        has_posterior = True
+
+    output = Path(search.paths.output_path)
+    marker = output.with_name(f"{output.name}.waveband_capped.json")
+    capped = reason in ("timeout", "n_like_max")
+    if not capped and not marker.exists():
+        return
+
+    # The fit may have been archived and its directory removed. A sidecar
+    # identifies that exact fit without shadowing its zip in the aggregator.
+    status = {
+        "dataset": dataset_name,
+        "band": band,
+        "capped": capped,
+        "reason": reason,
+        "has_posterior": has_posterior,
+        "timeout_s": WAVEBAND_TIMEOUT_S,
+        "n_like_max": WAVEBAND_N_LIKE_MAX,
+    }
+    payload = json.dumps(status, indent=2) + "\n"
+    if not marker.exists() or marker.read_text(encoding="utf-8") != payload:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        # A successful retry replaces the old flag so hpc/sync pull, which
+        # preserves files deleted on RAL, also clears the local QA status.
+        tmp = marker.parent / f".{marker.name}.{uuid4().hex}.tmp"
+        try:
+            tmp.write_text(payload, encoding="utf-8")
+            tmp.replace(marker)
+        finally:
+            tmp.unlink(missing_ok=True)
+    if capped:
+        print(f"CAPPED BAND: {dataset_name} {band} ({reason})", flush=True)
+
+
 def fit_waveband(
     dataset_name: str,
     unique_tag: str,
@@ -96,7 +166,6 @@ def fit_waveband(
     iterations_per_quick_update: int = 5000,
 ):
     import numpy as np
-    import json
     import autofit as af
     import autolens as al
     from astropy.wcs import WCS
@@ -572,22 +641,18 @@ def fit_waveband(
         """
         __Search__
 
-        Nautilus again, but a much smaller one than the VIS fit: ``n_live=75``
-        is ample for a two-parameter space, and ``n_like_max=50000`` stops a
-        band that refuses to converge from stalling the rest of the sample's SED
-        chain. ``iterations_per_quick_update`` sets how often the on-the-fly
-        figures are refreshed while it runs.
+        Each non-VIS band has a budget of 10,000 likelihood calls or 30 minutes.
+        Nautilus checks its time budget between batches. A capped fit is
+        recorded for catalogue QA and the loop advances to the next band.
         """
-        search = af.Nautilus(
-            name=dataset_waveband,
-            **settings_search.search_dict,
-            n_live=75,
-            n_batch=50,
-            iterations_per_quick_update=iterations_per_quick_update,
-            n_like_max=50000,
+        _fit_band_with_limits(
+            dataset_name=dataset_name,
+            band=dataset_waveband,
+            model=model,
+            analysis=analysis,
+            settings=settings_search,
+            quick_update=iterations_per_quick_update,
         )
-
-        search.fit(model=model, analysis=analysis, **settings_search.fit_dict)
 
 
 if __name__ == "__main__":

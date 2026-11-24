@@ -346,6 +346,15 @@ of every unzipped file.
   measurement**: the band's misregistration exceeds what the fit was allowed to
   model, so its offset is a lower bound on the truth and should be re-fitted
   under a wider prior rather than propagated.
+- **`capped` records a waveband search that reached its SED budget.**
+  Both waveband CSVs carry this QA column. `True` marks a capped result,
+  including a row with blank measurements when a cap leaves no usable posterior.
+  Older results without cap sidecars carry `False`. A usable earlier completion
+  keeps its own measurements and flag if a newer incomplete retry reaches its
+  cap. The build logs that retry and identifies the completion it kept.
+  Completed sampler metadata takes precedence over receipts left by a file
+  sync. When the samples CSV is disabled, the producer can record recovery
+  beside the result so later syncs also clear the catalogue flag.
 - **Master CSVs are split per lens.** `catalogue_util.write_per_tile_csv` drops
   each lens's rows into its own folder so a single lens folder is
   self-contained and can be shipped on its own.

@@ -75,11 +75,10 @@ from scripts.lens_model_waveband import GRID_OFFSET_PRIOR_ARCSEC  # noqa: E402
 
 # The ``ast`` reader below extends `test_catalogue_parity`'s, and shares its two
 # node helpers rather than growing a second copy of them.
-from test_catalogue_parity import _keyword, _literal  # noqa: E402
+from test_catalogue_parity import _keyword, _literal, expected_header_for  # noqa: E402
 
 
 CATALOGUE_SCRIPTS = PROJECT_ROOT / "catalogue" / "scripts"
-DR1_HEADERS = Path(__file__).parent / "data" / "dr1_headers"
 
 PRODUCERS = ["lens_mass", "magnitudes", "astrometric_offsets"]
 
@@ -235,7 +234,7 @@ def _assert_no_blank_cells(csv_path, producer):
         header = reader.fieldnames
         rows = list(reader)
 
-    expected_header = (DR1_HEADERS / f"{producer}.txt").read_text().strip()
+    expected_header = expected_header_for(producer)
 
     assert ",".join(header) == expected_header, (
         f"{producer}.csv must carry the DR1 header; a producer whose columns "

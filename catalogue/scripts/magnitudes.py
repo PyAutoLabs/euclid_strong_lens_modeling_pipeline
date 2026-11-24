@@ -17,7 +17,7 @@ with a row per ``(lens, waveband)`` carrying the Euclid latent flux catalogue:
 - ``lensed_source_flux``, ``source_flux``
 - ``magnification``
 
-plus the ``lens_name``, ``waveband`` and ``crval_ra_deg`` label columns.
+plus ``lens_name``, ``waveband``, ``crval_ra_deg`` and the ``capped`` QA flag.
 Each variable comes in four flavours: max-log-likelihood, median, ±1σ and ±3σ.
 
 All the flux quantities are µJy: they come from the ``*_mujy`` latents declared
@@ -118,7 +118,6 @@ def main(counts):
     output_path, inspect_path = catalogue_util.resolve_paths(args)
 
     import autofit as af
-    from autofit.aggregator.aggregator import Aggregator
     import autolens as al  # noqa: F401  required for unpickling result types
 
     sample_root = catalogue_util.sample_root_from(output_path, args.sample)
@@ -130,20 +129,25 @@ def main(counts):
     # scoped to ``--datasets_file`` when given.
     agg = catalogue_util.sample_aggregator(sample_root, args.datasets_file)
     agg_query = agg.query(agg.unique_tag == args.unique_tag)
+    waveband_caps = catalogue_util.WavebandCaps(
+        agg_query, sample_root, args.unique_tag, args.datasets_file
+    )
 
     agg_query = catalogue_util.available_results(
         agg_query,
         counts,
+        waveband_caps=waveband_caps,
         values=("wcs", "latent.latent_summary"),
     )
-    if not len(agg_query):
+    sentinel_rows = waveband_caps.sentinel_rows(agg_query, counts)
+    if not len(agg_query) and not sentinel_rows:
         print(f"no usable completed {args.unique_tag} results")
         catalogue_util.clear_csv_rows(inspect_path, "magnitudes.csv")
         return
-    agg_csv = af.AggregateCSV(aggregator=agg_query, strict=False)
+    agg_csv = catalogue_util.WavebandCSV(agg_query, sentinel_rows)
 
     """
-    __Three Label Columns__
+    __Label Columns And The Cap Flag__
 
     ``lens_name`` is the dataset directory name, as everywhere else, and is what
     the per-lens split groups on — here gathering the several band rows of one
@@ -174,6 +178,9 @@ def main(counts):
     agg_csv.add_label_column(name="lens_name", values=lens_name_list)
     agg_csv.add_label_column(name="waveband", values=waveband_list)
     agg_csv.add_label_column(name="crval_ra_deg", values=crval_ra_deg_list)
+    agg_csv.add_label_column(
+        name="capped", values=[waveband_caps.is_capped(result) for result in agg_query]
+    )
 
     """
     __Six Columns Per Variable__
@@ -275,7 +282,7 @@ def main(counts):
     out_csv = inspect_path / "magnitudes.csv"
     catalogue_util.save_csv(agg_csv, out_csv)
     counts.built = len(lens_name_list)
-    print(f"wrote {out_csv} ({len(lens_name_list)} rows)")
+    print(f"wrote {out_csv} ({counts.built + len(sentinel_rows)} rows)")
 
     written = catalogue_util.write_per_tile_csv(
         master_csv=out_csv, inspect_path=inspect_path, filename="magnitudes.csv"

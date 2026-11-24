@@ -19,6 +19,7 @@ old galaxy-attached-shear results and new ``MassField`` results coexist.
 
 import argparse
 import csv
+import json
 import os
 from pathlib import Path
 
@@ -273,6 +274,24 @@ def _lens_name_of(result):
         return None
 
 
+def _result_tail(result, sample_root):
+    try:
+        return result.directory.relative_to(sample_root).parts
+    except ValueError:
+        tail = result.directory.parts[-4:]
+        lens_name = _lens_name_of(result)
+        return (lens_name,) + tuple(tail[-3:]) if lens_name is not None else tail
+
+
+def _result_timestamp(result, sample_root, tail):
+    zip_path = Path(f"{Path(sample_root).joinpath(*tail)}.zip")
+    return (
+        zip_path.stat().st_mtime
+        if zip_path.exists()
+        else result.directory.stat().st_mtime
+    )
+
+
 def latest_result_per_lens_band(aggregator, sample_root: Path):
     """
     Keep only the newest completed result for each ``(lens, stage, band)``.
@@ -306,24 +325,11 @@ def latest_result_per_lens_band(aggregator, sample_root: Path):
 
     selected = {}
     for result in aggregator:
-        try:
-            tail = result.directory.relative_to(sample_root).parts
-        except ValueError:
-            # A temporary extraction, outside `sample_root` entirely.
-            tail = result.directory.parts[-4:]
-            lens_name = _lens_name_of(result)
-            if lens_name is not None:
-                tail = (lens_name,) + tuple(tail[-3:])
+        tail = _result_tail(result, sample_root)
         if len(tail) < 4:
             continue
-        lens_name, stage, band = tail[:3]
-        key = (lens_name, stage, band)
-        zip_path = Path(f"{Path(sample_root).joinpath(*tail)}.zip")
-        timestamp = (
-            zip_path.stat().st_mtime
-            if zip_path.exists()
-            else result.directory.stat().st_mtime
-        )
+        key = tail[:3]
+        timestamp = _result_timestamp(result, sample_root, tail)
         candidate = (timestamp, str(result.directory), result)
         if key not in selected or candidate[:2] > selected[key][:2]:
             selected[key] = candidate
@@ -389,6 +395,153 @@ def sample_aggregator(sample_root: Path, datasets_file=None):
             search_outputs=search_outputs, grid_search_outputs=grid_search_outputs
         )
     return latest_result_per_lens_band(agg, sample_root=sample_root)
+
+
+class WavebandCaps:
+    """Match cap sidecars to completed winners without requiring a posterior."""
+
+    def __init__(self, completed, sample_root, unique_tag, datasets_file):
+        self.sample_root = sample_root
+        self.newest_caps = {}
+        self.capped_attempts = set()
+        suffix = ".waveband_capped.json"
+        winners = {}
+        authoritative = set()
+        for result in completed:
+            lens, _, band, result_hash = tail = _result_tail(result, sample_root)
+            key = (lens, band)
+            winners[key] = (result, tail)
+            if band.lower() == "vis":
+                continue
+            info = result.value("samples_info", kind="json")
+            if info is None:
+                continue
+            authoritative.add(tail)
+            # Nautilus omits termination_reason when it converges. The metadata
+            # belongs to this completed result, even if a sync left an old cap
+            # sidecar for the same hash on disk.
+            reason = info.get("termination_reason")
+            if reason in ("timeout", "n_like_max"):
+                self.capped_attempts.add(tail)
+                self.newest_caps[key] = (
+                    _result_timestamp(result, sample_root, tail), result_hash, reason
+                )
+
+        # Search independently of the completed-only aggregator. A killed fit
+        # can be represented by only its sidecar, with no loadable SearchOutput.
+        for lens in dataset_names_from(sample_root, datasets_file):
+            stage_path = sample_root / lens / unique_tag
+            for marker in sorted(stage_path.glob(f"*/*{suffix}")):
+                band = marker.parent.name
+                result_hash = marker.name.removesuffix(suffix)
+                tail = (lens, unique_tag, band, result_hash)
+                if tail in authoritative:
+                    continue
+                key = (lens, band)
+                timestamp = marker.stat().st_mtime
+                winner = winners.get(key)
+                if winner is not None:
+                    result, winner_tail = winner
+                    if tail != winner_tail and timestamp < _result_timestamp(
+                        result, sample_root, winner_tail
+                    ):
+                        continue
+                status = json.loads(marker.read_text(encoding="utf-8"))
+                if not status.get("capped", True):
+                    continue
+                if (
+                    winner is not None
+                    and tail == winner_tail
+                    and status.get("has_posterior") is False
+                    and not missing_assets(result, values=("samples_summary",))
+                ):
+                    # An incomplete attempt's receipt may survive a sync that
+                    # brought in a usable completion for the same search hash.
+                    continue
+                self.capped_attempts.add(tail)
+                candidate = (timestamp, result_hash, status["reason"])
+                previous = self.newest_caps.get(key)
+                if previous is None or candidate[:2] > previous[:2]:
+                    self.newest_caps[key] = candidate
+
+    def is_capped(self, result):
+        return _result_tail(result, self.sample_root) in self.capped_attempts
+
+    def sentinel_rows(self, usable, counts):
+        usable_hashes = {
+            (lens, band): result_hash
+            for lens, _, band, result_hash in (
+                _result_tail(result, self.sample_root) for result in usable
+            )
+        }
+        rows = []
+        for (lens, band), (_, cap_hash, reason) in self.newest_caps.items():
+            usable_hash = usable_hashes.get((lens, band))
+            if usable_hash is None:
+                rows.append({
+                    "id": cap_hash,
+                    "lens_name": lens,
+                    "waveband": band,
+                    "capped": True,
+                })
+                detail = "; no usable posterior"
+            elif usable_hash != cap_hash:
+                detail = f"; retained completed result={usable_hash}"
+            else:
+                detail = ""
+            print(
+                f"WARNING {counts.stage}: lens={lens} band={band} "
+                f"result={cap_hash}: waveband_capped ({reason}){detail}"
+            )
+        return rows
+
+
+class WavebandCSV:
+    """Write posterior rows through AggregateCSV and append QA-only rows."""
+
+    def __init__(self, aggregator, sentinel_rows):
+        import autofit as af
+
+        self.aggregate = (
+            af.AggregateCSV(aggregator=aggregator, strict=False)
+            if len(aggregator)
+            else None
+        )
+        self.sentinel_rows = sentinel_rows
+        self.fields = ["id"]
+
+    def add_label_column(self, name, values):
+        if self.aggregate is None:
+            self.fields.append(name)
+        else:
+            self.aggregate.add_label_column(name=name, values=values)
+
+    def add_variable(self, argument, name, value_types):
+        from autofit.aggregator.summary.aggregate_csv.column import Column
+
+        if self.aggregate is None:
+            self.fields.extend(
+                Column(argument, name=name, value_types=value_types).fields()
+            )
+        else:
+            self.aggregate.add_variable(
+                argument=argument, name=name, value_types=value_types
+            )
+
+    def save(self, path):
+        if self.aggregate is not None:
+            self.aggregate.save(path=path)
+            if not self.sentinel_rows:
+                return
+            with path.open(newline="") as stream:
+                fields = next(csv.reader(stream))
+        else:
+            fields = self.fields
+            with path.open("w", newline="") as stream:
+                csv.writer(stream).writerow(fields)
+
+        with path.open("a", newline="") as stream:
+            csv.DictWriter(stream, fieldnames=fields).writerows(self.sentinel_rows)
 
 
 class BuildCounts:
@@ -471,13 +624,19 @@ def result_identity(result):
     )
 
 
-def available_results(aggregator, counts, **requirements):
+def available_results(aggregator, counts, *, waveband_caps=None, **requirements):
     """Filter only absent optional assets; labels must use these same survivors."""
     from autofit.aggregator.aggregator import Aggregator
 
     kept = []
     for result in aggregator:
-        missing = missing_assets(result, **requirements)
+        result_requirements = requirements
+        if waveband_caps is not None and waveband_caps.is_capped(result):
+            result_requirements = {
+                **requirements,
+                "values": (*requirements.get("values", ()), "samples_summary"),
+            }
+        missing = missing_assets(result, **result_requirements)
         if missing:
             counts.skip(result_identity(result), f"missing {', '.join(missing)}")
         else:
