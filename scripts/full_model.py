@@ -20,9 +20,10 @@ followed by one pixelized search (``vis_pix``) with full inline documentation. T
 script is that same idea generalised into five chained searches.
 
 This script accepts the shared pipeline arguments (``util.parse_fit_args``), but its
-``fit`` function uses only ``--dataset``, ``--sample`` and
-``--iterations_per_quick_update``. Every stage here runs on JAX and every stage is
-run, so ``--use_cpu``, ``--number_of_cores`` and ``--stage`` have no effect.
+``fit`` function uses only ``--dataset``, ``--sample``,
+``--iterations_per_quick_update`` and ``--setup`` (handed to every analysis; the
+default ``auto`` picks the designated setup per search for this machine). Every
+stage is run, so ``--number_of_cores`` and ``--stage`` have no effect.
 
 __SLaM (Source, Light and Mass)__
 
@@ -171,6 +172,7 @@ fits a Euclid VIS ``Imaging`` dataset of a strong lens where in the final model:
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -585,7 +587,16 @@ def fit(
     dataset_name: str,
     sample_name: str = None,
     iterations_per_quick_update: int = 5000,
+    setup: Optional[str] = None,
 ):
+    """
+    Run the five chained SLaM searches on one VIS dataset.
+
+    ``setup`` is the compute setup of every analysis (``--setup``: ``"auto"``,
+    ``"cpu"``, ``"gpu"`` or a setup_id; see ``util.analysis_setup_from``). Each
+    analysis resolves it for its own model when its fit starts. ``None`` (the
+    default from Python) passes no setup, and every search runs under JAX.
+    """
     from autolens import conf
 
     project_root = Path(__file__).parent.parent
@@ -607,11 +618,10 @@ def fit(
     the dataset contract it reads — including ``info.json``, which is where the mask
     radius comes from — is described in ``start_here.py``.
 
-    Every search in this script runs under JAX, so the dataset is fitted exactly as
-    it is loaded. The Numba sparse operator that ``scripts/initial_lens_model.py``
-    applies to its pixelized stage is the CPU route's tool, applied only under
-    ``--use_cpu``; under JAX the pixelized inversion uses JAX's own linear algebra
-    on the plain dataset.
+    The dataset is fitted as it is loaded. Any operator a search needs comes from its
+    analysis's resolved ``setup``: the Numba sparse operator for the CPU
+    pixelized setup (``numba_cpu_sparse_fp64``), none under JAX, where the
+    pixelized inversion uses JAX's own linear algebra on the plain dataset.
     """
     d = util.load_vis_dataset(dataset_name, sample_name=sample_name)
 
@@ -661,6 +671,7 @@ def fit(
         dataset=dataset,
         positions_likelihood_list=d.positions_likelihood_list,
         use_jax=True,
+        setup=util.analysis_setup_from(setup),
         title_prefix="VIS",
         psf_lowest_resolution=d.psf_lowest_resolution,
         psf_lowest_resolution_fwhm=d.psf_lowest_resolution_fwhm,
@@ -779,6 +790,7 @@ def fit(
             )
         ],
         use_jax=True,
+        setup=util.analysis_setup_from(setup),
         title_prefix="VIS",
         psf_lowest_resolution=d.psf_lowest_resolution,
         psf_lowest_resolution_fwhm=d.psf_lowest_resolution_fwhm,
@@ -855,6 +867,7 @@ def fit(
         dataset=dataset,
         adapt_images=adapt_images,
         use_jax=True,
+        setup=util.analysis_setup_from(setup),
         title_prefix="VIS",
         psf_lowest_resolution=d.psf_lowest_resolution,
         psf_lowest_resolution_fwhm=d.psf_lowest_resolution_fwhm,
@@ -891,6 +904,7 @@ def fit(
         dataset=dataset,
         adapt_images=adapt_images,
         use_jax=True,
+        setup=util.analysis_setup_from(setup),
         title_prefix="VIS",
         psf_lowest_resolution=d.psf_lowest_resolution,
         psf_lowest_resolution_fwhm=d.psf_lowest_resolution_fwhm,
@@ -937,6 +951,7 @@ def fit(
             )
         ],
         use_jax=True,
+        setup=util.analysis_setup_from(setup),
         title_prefix="VIS",
         psf_lowest_resolution=d.psf_lowest_resolution,
         psf_lowest_resolution_fwhm=d.psf_lowest_resolution_fwhm,
@@ -965,11 +980,12 @@ if __name__ == "__main__":
         dataset_name,
         iterations_per_quick_update,
         number_of_cores,
-        use_cpu,
+        setup,
         stage,
     ) = util.parse_fit_args()
     fit(
         dataset_name=dataset_name,
         sample_name=sample_name,
         iterations_per_quick_update=iterations_per_quick_update,
+        setup=setup,
     )

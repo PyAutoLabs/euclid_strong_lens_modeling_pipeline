@@ -149,9 +149,9 @@ def vis_lp_model_from(
     relative to the posterior width of the two sets, the labelling is undetermined
     rather than ordered, and the pair should be read unordered as before.
 
-    Enforcement differs by backend but has the same outcome. Under ``--use_cpu`` the
-    NumPy path raises ``af.exc.FitException`` from ``check_assertions`` and Nautilus
-    resamples. Under JAX nothing can raise inside a trace, so the assertions are
+    Enforcement differs by backend but has the same outcome. On a NumPy or Numba
+    likelihood (a setup whose backend is not ``jax``) the path raises
+    ``af.exc.FitException`` from ``check_assertions`` and Nautilus resamples. Under JAX nothing can raise inside a trace, so the assertions are
     evaluated as a traced boolean and a violating model is mapped to the resample
     figure of merit instead (PyAutoFit#1583).
 
@@ -215,8 +215,8 @@ def fit(
     dataset_name: str,
     sample_name: str = None,
     iterations_per_quick_update: int = 5000,
-    number_of_cores: int = 1,
-    use_cpu: bool = False,
+    number_of_cores="auto",
+    setup: Optional[str] = None,
     stage: str = "all",
     skip_pix: bool = None,
     seed: Optional[int] = None,
@@ -234,9 +234,20 @@ def fit(
     iterations_per_quick_update
         Sampler iterations between on-the-fly visualisation updates.
     number_of_cores
-        Number of CPU cores used by the ``vis_pix`` Nautilus search.
-    use_cpu
-        Disable JAX and use the CPU sparse operator for the pixelization.
+        Nautilus worker processes for both searches: ``"auto"`` (default) or an int.
+        PyAutoFit resolves ``"auto"`` when each fit starts — 1 for a JAX analysis
+        (``vis_lp`` on the designated setups), the cores this process may use for a
+        Numba one (``vis_pix`` on a CPU) — and a JAX analysis never forks, whatever
+        is asked. Each fit logs the outcome as its ``Parallel:`` line.
+    setup
+        The compute setup of both analyses: ``"auto"``, ``"cpu"``, ``"gpu"`` or a
+        setup_id (``--setup``; see ``util.analysis_setup_from``). Each analysis
+        resolves it for its own model when its fit starts and logs a ``Setup:``
+        line: on a CPU the MGE ``vis_lp`` gets ``jax_cpu_dense_fp64`` and the
+        pixelized ``vis_pix`` gets ``numba_cpu_sparse_fp64``, which attaches the
+        Numba sparse operator to the dataset. ``None`` (the default when ``fit`` is
+        called from Python) passes no setup: both analyses run under JAX with no
+        sparse operator, which is what ``sersic_lens_model_waveband.py`` relies on.
     stage
         Which of the two searches to run.
 
@@ -358,12 +369,15 @@ def fit(
     ``util.AnalysisImaging`` extends the built-in PyAutoLens analysis to compute
     latent variables (aperture fluxes, magnification) and output RGB visualisations.
 
-    ``use_jax`` follows ``--use_cpu``; see ``start_here.py``, "__JAX And GPUs__".
+    ``setup`` follows ``--setup``; see ``start_here.py``, "__JAX And GPUs__". With
+    no setup the analysis runs under JAX (``use_jax=True``); a resolved setup sets
+    the backend instead.
     """
     analysis = util.AnalysisImaging(
         dataset=d.dataset,
         positions_likelihood_list=d.positions_likelihood_list,
-        use_jax=not use_cpu,
+        use_jax=True,
+        setup=util.analysis_setup_from(setup),
         dataset_main_path=d.dataset_main_path,
         title_prefix="VIS",
         plot_rgb=True,
@@ -386,7 +400,7 @@ def fit(
     """
     search = af.Nautilus(
         name="vis_lp",
-        **settings_search.search_dict,
+        **{**settings_search.search_dict, "number_of_cores": number_of_cores},
         n_live=750,
         n_batch=50,
         iterations_per_quick_update=iterations_per_quick_update,
@@ -473,20 +487,19 @@ def fit(
     PSF-and-noise-map products the convolution needs, once, when the dataset is
     built, in a Numba implementation; each likelihood evaluation then reuses them
     instead of recomputing them. The operator is attached to the returned dataset
-    and picked up automatically by the fit, and it is applied only here, because
+    and picked up automatically by the fit, and it only matters here, because
     only a pixelized fit performs that inversion — ``vis_lp`` above runs on the
     plain ``d.dataset``.
 
-    It is applied only under ``--use_cpu``, the same switch that sets
-    ``use_jax=False`` on the analysis below. Under JAX — the GPU route — no sparse
-    operator is applied at all: the pixelized inversion uses JAX's own linear
-    algebra on the plain dataset, and applying the operator on top of that path
-    replaces the linear algebra JAX is fastest at with one it is not.
-
-    The operator is applied further down, after ``apply_over_sampling``: that call
-    rebuilds the dataset and does not carry the operator across, so applying it
-    here first silently dropped it and the fit fell back to the dense mapping
-    route (~5x slower per evaluation, identical likelihood).
+    The script no longer applies it by hand. The analysis below resolves its
+    ``setup`` when the fit starts, after ``apply_over_sampling`` has rebuilt the
+    dataset (a rebuild does not carry an operator across), and attaches the
+    operator the setup names: the Numba sparse operator for
+    ``numba_cpu_sparse_fp64``, the designated CPU setup for a pixelized source.
+    Under the JAX setups — the GPU route — no sparse operator is attached: the
+    pixelized inversion uses JAX's own linear algebra on the plain dataset, which is
+    the path JAX is fastest at. With no setup (``setup=None``) the analysis runs
+    under JAX with no operator, as before.
     """
 
     """
@@ -635,9 +648,6 @@ def fit(
         over_sample_size_pixelization=over_sample_size_pixelization,
     )
 
-    if use_cpu:
-        dataset = dataset.apply_sparse_operator_cpu()
-
     """
     __Analysis And Positions__
 
@@ -673,7 +683,8 @@ def fit(
                 factor=3.0, minimum_threshold=0.2
             )
         ],
-        use_jax=not use_cpu,
+        use_jax=True,
+        setup=util.analysis_setup_from(setup),
         dataset_main_path=d.dataset_main_path,
         title_prefix="VIS",
         plot_rgb=True,
@@ -761,15 +772,17 @@ def fit(
     inversions need in parallel stays manageable. ``n_like_max=100000`` caps a
     pathological fit at half the ``vis_lp`` ceiling, for the same reason.
 
-    ``number_of_cores`` is added to the search dict here and only here. ``vis_lp``
-    takes its parallelism from the batch of models it evaluates on the device,
-    whereas this search is the one that benefits from a multiprocessing pool —
-    which is why ``--use_cpu`` and ``--number_of_cores`` are usually passed
-    together, and why ``--stage`` exists.
+    ``number_of_cores`` is passed to both searches, but this is the one that uses
+    it. ``vis_lp`` takes its parallelism from the batch of models it evaluates on
+    the device: its analysis is JAX, so PyAutoFit resolves ``"auto"`` to 1 and
+    never forks it. This search, on a CPU, runs a Numba likelihood, so ``"auto"``
+    becomes a multiprocessing pool over the cores the process may use — which is
+    why ``--stage`` exists.
 
     On CPU the two searches are run as two separate processes: ``--stage vis_lp``
     first, with JAX on CPU, and then ``--stage vis_pix``, with the Numba sparse
-    operator and a multiprocessing pool of ``--number_of_cores``. The two stages run as separate Python processes. This is a conservative default: PyAutoFit documents an XLA deadlock for a forked worker whose likelihood touches JAX, and the DR1 science runs were submitted this way. A local control test (hpc/diagnostics/jax_fork_control.py) did not reproduce a hang for the CPU route, whose vis_pix likelihood is Numba; production sampler sizes and large pools are untested, so the boundary is kept until a cluster run passes. hpc/README.md has the measured table. The second process does not
+    operator and a multiprocessing pool of ``--number_of_cores``. Each process
+    resolves its own setup, so the Numba stage forks only in its own process. The two stages run as separate Python processes. This is a conservative default: PyAutoFit documents an XLA deadlock for a forked worker whose likelihood touches JAX, and the DR1 science runs were submitted this way. A local control test (hpc/diagnostics/jax_fork_control.py) did not reproduce a hang for the CPU route, whose vis_pix likelihood is Numba; production sampler sizes and large pools are untested, so the boundary is kept until a cluster run passes. hpc/README.md has the measured table. The second process does not
     re-fit ``vis_lp``: it loads the completed result the first one wrote, and
     fails immediately if that result is missing (see "__Stage: vis_pix Requires A
     Completed vis_lp__" above). ``hpc/README.md`` documents the submission
@@ -799,7 +812,7 @@ if __name__ == "__main__":
         dataset_name,
         iterations_per_quick_update,
         number_of_cores,
-        use_cpu,
+        setup,
         stage,
         seed,
     ) = util.parse_fit_args(with_seed=True)
@@ -808,7 +821,7 @@ if __name__ == "__main__":
         sample_name=sample_name,
         iterations_per_quick_update=iterations_per_quick_update,
         number_of_cores=number_of_cores,
-        use_cpu=use_cpu,
+        setup=setup,
         stage=stage,
         seed=seed,
     )

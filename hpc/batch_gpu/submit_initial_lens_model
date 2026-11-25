@@ -86,8 +86,14 @@ python3 -c 'import jax; b = jax.default_backend(); print(f"JAX backend: {b}"); r
 # HPC-specific value here is the absolute path to it. The repository root's
 # `start_here.py` is a thin shim over this same `fit()` and would work too, but
 # the submit scripts name the real pipeline so a reader knows what to open.
+#
+# `--setup=gpu` picks the designated A100 rules for each stage (JAX on the device;
+# the pixelized stage uses JAX's own linear algebra, no sparse operator), logged as
+# each fit's `Setup:` line. The JAX check above already guarantees a GPU, so this
+# is the same as the default `--setup=auto`, stated for the reader.
 # -------------------------------
-python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset
+python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \
+    --setup=gpu
 
 echo "Finished: $dataset"
 date

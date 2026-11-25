@@ -29,7 +29,8 @@
 #   MANIFEST         manifest file, one object per line, relative to the project root
 #                    (required); the 0-based line number is the campaign index
 #   STAGE_SCRIPT     the pipeline in scripts/ to run (default: <STAGE>.py)
-#   STAGE_ARGS       extra arguments for it (default: --use_cpu --number_of_cores=<cpus>)
+#   STAGE_ARGS       extra arguments for it (default: --setup=cpu --number_of_cores=auto;
+#                    auto resolves to the allocated CPUs for a Numba fit, 1 for JAX)
 #   MANIFEST_FIELDS  names of a line's whitespace-separated fields, passed as
 #                    --<name>=<value> (default: "sample dataset")
 #   CAMPAIGN_INDEX   set directly, or CAMPAIGN_OFFSET + SLURM_ARRAY_TASK_ID
@@ -95,7 +96,7 @@ MANIFEST_FIELDS="${MANIFEST_FIELDS:-sample dataset}"
 CAMPAIGN_INDEX="${CAMPAIGN_INDEX:-$(( ${CAMPAIGN_OFFSET:-0} + ${SLURM_ARRAY_TASK_ID:-0} ))}"
 THREADS="${SLURM_CPUS_PER_TASK:-1}"
 BLAS_THREADS="${BLAS_THREADS:-${THREADS}}"
-STAGE_ARGS="${STAGE_ARGS:---use_cpu --number_of_cores=${THREADS}}"
+STAGE_ARGS="${STAGE_ARGS:---setup=cpu --number_of_cores=auto}"
 STAGE_SETUP="${STAGE_SETUP:-}"
 
 for name in "${CAMPAIGN}" "${STAGE}"; do
@@ -195,6 +196,13 @@ fi
 
 # Force JAX onto the CPU and pin thread counts: BLAS_THREADS per process (the
 # allocated cores unless the stage sets it), NPROC to the allocated cores.
+#
+# These stay even though `--setup=cpu` now chooses the setup and its threads: the
+# setup's thread pinning (aa.Setup.apply_threads) honours NUMBA_NUM_THREADS, and the
+# pooled vis_pix stage needs BLAS_THREADS=1 set in the environment *before* Python
+# starts, so no worker inherits a live OpenMP pool across fork(). RAL logged
+# "fork() called from a process already using GNU OpenMP" (job 414150); the finding
+# is open, so the pins are kept until a cluster run shows they can go.
 export JAX_PLATFORM_NAME=cpu
 export JAX_PLATFORMS=cpu
 export OPENBLAS_NUM_THREADS=${BLAS_THREADS}

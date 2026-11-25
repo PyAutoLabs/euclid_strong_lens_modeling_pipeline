@@ -132,10 +132,15 @@ The arguments, all of which this file forwards unchanged:
   Omit it for a flat ``dataset/<name>/`` layout.
 - ``--iterations_per_quick_update`` (default: ``5000``) — sampler iterations
   between on-the-fly visualisation updates.
-- ``--number_of_cores`` (default: ``1``) — CPU cores for the non-JAX Nautilus
-  searches.
-- ``--use_cpu`` (default: off) — CPU mode: disables JAX and applies the CPU
-  sparse operator to the pixelized stage.
+- ``--setup`` (default: ``auto``) — the compute setup, the values
+  ``PYAUTO_SETUP`` accepts: ``auto`` chooses the designated setup for each
+  search on this machine; ``cpu`` / ``gpu`` choose it for that hardware class; a
+  setup_id such as ``numba_cpu_sparse_fp64`` is used as given by every analysis.
+  ``--use_cpu`` is still accepted as a deprecated spelling of ``--setup cpu``.
+- ``--number_of_cores`` (default: ``auto``) — Nautilus worker processes.
+  ``auto`` resolves when each fit starts: one process for a JAX analysis, the
+  cores this process may use for a Numba one. An int is honoured (a JAX analysis
+  still runs one process).
 - ``--stage`` (default: ``all``) — which of the two searches to run. ``all``
   runs ``vis_lp`` and then ``vis_pix`` in one process; ``vis_lp`` returns after
   the light-profile fit, skipping the pixelized source stage; ``vis_pix`` runs
@@ -468,18 +473,23 @@ space thoroughly and in parallel. ``vis_pix`` samples 300, with a smaller batch,
 because each of its evaluations costs far more. Both carry a maximum-likelihood
 cap so that a pathological lens cannot run forever.
 
-By default the likelihood is evaluated through **JAX**, which just-in-time
-compiles it and dispatches it to a GPU if one is available. That is where the
-50x comes from.
+How each likelihood is computed is its **compute setup** (backend, device,
+operator, precision), chosen per search by ``--setup``. The default, ``auto``,
+picks the designated setup for the search's likelihood on this machine when the
+fit starts, and logs it as the fit's ``Setup:`` line. With a GPU both searches run
+through **JAX**, which just-in-time compiles the likelihood and dispatches it to
+the device. That is where the 50x comes from.
 
-``--use_cpu`` turns JAX off and takes the CPU path. This is not simply "the same
-thing, slower": the pixelized stage applies a **CPU sparse operator**, a Numba
-precomputation of the PSF products the inversion needs, because that is the
-fastest way to do this linear algebra on a CPU. It is the CPU route's tool and is
-applied only under ``--use_cpu`` — the JAX path applies no sparse operator and
-fits the plain dataset. When you pass ``--use_cpu``, pass
-``--number_of_cores`` as well — that is the argument the ``vis_pix`` search uses
-to parallelise across CPU cores.
+On a CPU (no GPU, or ``--setup cpu``) the two searches get different setups.
+``vis_lp`` stays on JAX, on the CPU. ``vis_pix`` takes the Numba route
+(``numba_cpu_sparse_fp64``): this is not simply "the same thing, slower", because
+the pixelized stage attaches a **CPU sparse operator**, a Numba precomputation of
+the PSF products the inversion needs, which is the fastest way to do this linear
+algebra on a CPU. The JAX setups attach no sparse operator and fit the plain
+dataset. A Numba likelihood is parallelised by a Nautilus process pool, sized by
+``--number_of_cores`` (``auto``, the default, uses every core the process may
+use); a JAX one never forks. ``--use_cpu`` is the old spelling of
+``--setup cpu``.
 
 __Reading The Output__
 
@@ -670,7 +680,7 @@ if __name__ == "__main__":
         dataset_name,
         iterations_per_quick_update,
         number_of_cores,
-        use_cpu,
+        setup,
         stage,
     ) = util.parse_fit_args()
     fit(
@@ -678,6 +688,6 @@ if __name__ == "__main__":
         sample_name=sample_name,
         iterations_per_quick_update=iterations_per_quick_update,
         number_of_cores=number_of_cores,
-        use_cpu=use_cpu,
+        setup=setup,
         stage=stage,
     )

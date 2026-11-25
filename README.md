@@ -170,8 +170,8 @@ All fitting pipelines share one argument parser (`util.parse_fit_args`):
 | `--dataset` | *required* | Dataset subdirectory inside `dataset/<sample>/`. |
 | `--sample` | none | Sample subdirectory inside `dataset/`. Omit for a flat `dataset/<name>/` layout. |
 | `--iterations_per_quick_update` | `5000` | Sampler iterations between on-the-fly visualisation updates. |
-| `--number_of_cores` | `1` | CPU cores for the non-JAX Nautilus searches. |
-| `--use_cpu` | off | CPU mode: disables JAX and applies the CPU sparse operator to the pixelized stage. |
+| `--setup` | `auto` | Compute setup, the values `PYAUTO_SETUP` accepts: `auto` chooses the designated setup per search for this machine (on a CPU: JAX for `vis_lp`, the Numba sparse operator for `vis_pix`), `cpu` / `gpu` choose it for that hardware class, a setup_id such as `numba_cpu_sparse_fp64` is used as given. Each fit logs its `Setup:` line. `--use_cpu` is a deprecated alias of `--setup cpu`. |
+| `--number_of_cores` | `auto` | Nautilus worker processes. `auto` resolves when each fit starts: 1 for a JAX analysis, the cores the process may use for a Numba one. An int is honoured (a JAX analysis still runs one process). |
 | `--stage` | all | Which stage(s) to run: all, vis_lp (MGE fit only) or vis_pix (pixelized source only; requires a completed vis_lp result and stops with an error otherwise). --skip_pix is a deprecated alias of --stage vis_lp. |
 
 `mask_radius` is **not** an argument — it is always read from the dataset's `info.json`.

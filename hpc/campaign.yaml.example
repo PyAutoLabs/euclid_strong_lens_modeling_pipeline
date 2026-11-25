@@ -31,7 +31,7 @@ stages:
     script: hpc/batch_cpu/stage
     env:
       STAGE_SCRIPT: initial_lens_model.py
-      STAGE_ARGS: --stage=vis_lp --number_of_cores=4    # match cpus
+      STAGE_ARGS: --stage=vis_lp --setup=cpu --number_of_cores=auto
     resources: {cpus: 4, mem_mb: 12288, time: "18:00:00",
                 partition: ral, throttle: 100, nice: 1000}
     retry: {timeout: {time: "p95+25%", max: 1}, oom: {mem: "peak*1.5", max: 1}}
@@ -43,7 +43,7 @@ stages:
     script: hpc/batch_cpu/stage
     env:
       STAGE_SCRIPT: initial_lens_model.py
-      STAGE_ARGS: --stage=vis_pix --use_cpu --number_of_cores=8
+      STAGE_ARGS: --stage=vis_pix --setup=cpu --number_of_cores=auto
       BLAS_THREADS: 1                          # one thread per pool process
       STAGE_SETUP: hpc/batch_cpu/vis_pix_seed.sh
     resources: {cpus: 8, mem_mb: 16384, time: "24:00:00",

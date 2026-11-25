@@ -43,7 +43,13 @@ environment variables and the per-script tables are in
 [`scripts/README.md`](scripts/README.md), not duplicated here. What is not there:
 
 - `util.parse_fit_args()` returns a **6-tuple**: `(sample_name, dataset_name,
-  iterations_per_quick_update, number_of_cores, use_cpu, stage)`.
+  iterations_per_quick_update, number_of_cores, setup, stage)`. `setup` is
+  `"auto"` (default), `"cpu"`, `"gpu"` or a setup_id (`--setup`; `--use_cpu` is a
+  deprecated alias of `--setup cpu`); `number_of_cores` is `"auto"` (default) or
+  an int. The fit functions hand the setup to their analyses through
+  `util.analysis_setup_from`, which exports `PYAUTO_SETUP` for the `cpu`/`gpu`
+  intents; called from Python with `setup=None` they keep `use_jax=True` (the SED
+  chain relies on that).
 - The diagnostics take their own arguments. `scripts/tools/diagnose_latent.py`
   accepts `--dataset` / `--sample` / `--output_path` / `--unique_tag` /
   `--search` / `--result_hash`; `scripts/tools/diagnose_latent_vis_pix.py` is a
@@ -202,8 +208,9 @@ autofit.campaign`), the `batch_gpu/` / `batch_cpu/` SLURM scripts (with their
 `output/` and `error/` logs) and the `sync` script (`push | pull | sync | status`,
 the campaign verbs `plan | pilot | act | resubmit | report`, plus `submit`,
 `jobs`, `tail`, `logs` and more (`hpc/sync help`)). The campaign flow, route
-choice, the `--stage` argument and the full `hpc/sync` verb list are in
-`hpc/README.md`; the three cluster `config/general.yaml` keys below are also
+choice, the `--stage` and `--setup` arguments (the fit stages pass
+`--setup=cpu --number_of_cores=auto`; the SED stage takes no setup) and the full
+`hpc/sync` verb list are in `hpc/README.md`; the three cluster `config/general.yaml` keys below are also
 repeated there. Never submit to the cluster without the human's yes, and never
 put CPU work on the `gpu` partition.
 

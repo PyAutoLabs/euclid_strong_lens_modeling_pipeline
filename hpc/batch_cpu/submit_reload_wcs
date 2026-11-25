@@ -99,8 +99,9 @@ date
 # Reload
 #
 # Single-threaded throughout: nothing here is a search, so threads and pool
-# workers have nothing to do. JAX is pinned to the CPU backend and `--use_cpu`
-# selects the Numba route, matching the environment the results were fitted in.
+# workers have nothing to do. JAX is pinned to the CPU backend and `--setup=cpu`
+# selects the CPU setups (vis_pix on the Numba sparse route, as it was fitted).
+# `--number_of_cores=1` stays explicit: it is what guarantees no pool is forked.
 # -----------------------------------------------------------------------------
 echo ""
 echo "---- Reload: vis_lp and vis_pix in one process ----"
@@ -112,7 +113,7 @@ env JAX_PLATFORM_NAME=cpu \
     OPENBLAS_NUM_THREADS=1 \
     MKL_NUM_THREADS=1 \
     python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \
-        --stage=all --use_cpu --number_of_cores=1
+        --stage=all --setup=cpu --number_of_cores=1
 
 echo ""
 echo "Finished reload: $dataset"

@@ -110,14 +110,16 @@ def test_stage_resources_and_environment():
     for name, stage in stages.items():
         assert stage.script == "hpc/batch_cpu/stage"
         assert stage.env["PYAUTO_CONFIG_OVERLAY"] == "hpc/config"
-        cores = f"--number_of_cores={stage.resources.cpus}"
-        assert cores in stage.env["STAGE_ARGS"].split(), name
+        # auto resolves from SLURM_CPUS_PER_TASK (= cpus) when each fit starts.
+        assert "--number_of_cores=auto" in stage.env["STAGE_ARGS"].split(), name
+        assert "--use_cpu" not in stage.env["STAGE_ARGS"], name
         assert (ROOT / "scripts" / stage.env["STAGE_SCRIPT"]).is_file()
     assert stages["vis_pix"].env["BLAS_THREADS"] == "1"
-    assert "--use_cpu" in stages["vis_pix"].env["STAGE_ARGS"]
-    # vis_lp and the SED chain run JAX on the CPU backend: --use_cpu would turn it off.
-    assert "--use_cpu" not in stages["vis_lp"].env["STAGE_ARGS"]
-    assert "--use_cpu" not in stages["sed"].env["STAGE_ARGS"]
+    # The fit stages pin the CPU hardware class explicitly (safe against GPU-node
+    # placement); the SED chain takes no setup and keeps use_jax=True.
+    assert "--setup=cpu" in stages["vis_pix"].env["STAGE_ARGS"].split()
+    assert "--setup=cpu" in stages["vis_lp"].env["STAGE_ARGS"].split()
+    assert "--setup" not in stages["sed"].env["STAGE_ARGS"]
     assert stages["sed"].env["PYAUTO_OUTPUT_DIR"] == "output_sed"
     for name in ("vis_pix", "sed"):
         setup = ROOT / stages[name].env["STAGE_SETUP"]
@@ -147,7 +149,7 @@ def test_dry_run_renders_safe_batch_scripts(campaign):
     assert "#SBATCH --dependency=aftercorr:<vis_lp@0>" in vis_pix
     assert "#SBATCH --dependency=aftercorr:<vis_lp@0>" in sed
     assert "export BLAS_THREADS=1" in vis_pix
-    assert "export STAGE_ARGS='--stage=vis_lp --number_of_cores=4'" in vis_lp
+    assert "export STAGE_ARGS='--stage=vis_lp --setup=cpu --number_of_cores=auto'" in vis_lp
     assert "export PYAUTO_OUTPUT_DIR=output_sed" in sed
 
 
@@ -285,7 +287,7 @@ def test_stage_threads_default_to_the_allocated_cpus(stage_project):
 
     assert process.returncode == 0, process.stderr
     out = fake_output()
-    assert out["args"] == ["--sample=dr1_sep1_rest", "--dataset=lens_a", "--use_cpu", "--number_of_cores=8"]
+    assert out["args"] == ["--sample=dr1_sep1_rest", "--dataset=lens_a", "--setup=cpu", "--number_of_cores=auto"]
     assert out["env"] == {
         "OMP_NUM_THREADS": "8", "OPENBLAS_NUM_THREADS": "8", "MKL_NUM_THREADS": "8",
         "NUMBA_NUM_THREADS": "8", "NPROC": "8", "JAX_PLATFORMS": "cpu",
@@ -295,12 +297,12 @@ def test_stage_threads_default_to_the_allocated_cpus(stage_project):
 def test_stage_blas_threads_pins_blas_and_numba_but_not_nproc(stage_project):
     project, run, fake_output = stage_project
 
-    process = run(1, BLAS_THREADS="1", STAGE_ARGS="--stage=vis_pix --use_cpu --number_of_cores=8")
+    process = run(1, BLAS_THREADS="1", STAGE_ARGS="--stage=vis_pix --setup=cpu --number_of_cores=auto")
 
     assert process.returncode == 0, process.stderr
     out = fake_output()
     assert out["args"] == [
-        "--sample=dr1_sep1_rest", "--dataset=lens_b", "--stage=vis_pix", "--use_cpu", "--number_of_cores=8",
+        "--sample=dr1_sep1_rest", "--dataset=lens_b", "--stage=vis_pix", "--setup=cpu", "--number_of_cores=auto",
     ]
     env = out["env"]
     assert env["OMP_NUM_THREADS"] == env["OPENBLAS_NUM_THREADS"] == env["MKL_NUM_THREADS"] == "1"
@@ -402,12 +404,12 @@ def test_sed_stage_copies_its_seed_then_runs(stage_project):
 
     process = run(
         1, STAGE="sed", STAGE_SETUP="hpc/batch_cpu/sed_seed.sh",
-        PYAUTO_OUTPUT_DIR="output_sed", STAGE_ARGS="--number_of_cores=8",
+        PYAUTO_OUTPUT_DIR="output_sed", STAGE_ARGS="--number_of_cores=auto",
     )
 
     assert process.returncode == 0, process.stderr
     assert (project / "output_sed" / "dr1_sep1_rest" / "lens_b" / "initial_lens_model" / "vis_lp" / "abc123.zip").exists()
-    assert fake_output()["args"] == ["--sample=dr1_sep1_rest", "--dataset=lens_b", "--number_of_cores=8"]
+    assert fake_output()["args"] == ["--sample=dr1_sep1_rest", "--dataset=lens_b", "--number_of_cores=auto"]
 
 
 # ---------------------------------------------------------------------------

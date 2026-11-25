@@ -9,8 +9,10 @@ python scripts/initial_lens_model.py --sample=q1_walsmley --dataset=<name>
 ```
 
 All fitting pipelines share one argument parser (`util.parse_fit_args`) —
-`--dataset`, `--sample`, `--iterations_per_quick_update`, `--number_of_cores`,
-`--use_cpu`, `--stage`. See the repository `README.md` for what each does.
+`--dataset`, `--sample`, `--iterations_per_quick_update`, `--number_of_cores`
+(default `auto`), `--setup` (default `auto`; `--use_cpu` is a deprecated alias of
+`--setup cpu`), `--stage`. See the repository `README.md` for what each does. The
+SED chain (`sersic_lens_model_waveband.py`) passes no setup on and stays on JAX.
 
 # Fitting pipelines
 

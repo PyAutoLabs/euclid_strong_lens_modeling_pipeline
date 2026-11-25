@@ -57,9 +57,11 @@ folder. The multi-waveband follow-on is deliberately not run from here; use
 ``scripts/sersic_lens_model_waveband.py``, the SED chain driver, which runs the
 same two stages and then ``fit_waveband`` over every remaining band.
 
-Of the shared pipeline arguments, ``--number_of_cores`` and ``--use_cpu`` are
-forwarded to the upstream ``vis_lp`` fit; the Sersic search itself always runs on
-JAX. ``--stage`` is ignored: it is forced to ``"vis_lp"`` regardless, for the reason
+Of the shared pipeline arguments, ``--number_of_cores`` is forwarded to the
+upstream ``vis_lp`` fit and ``--setup`` to both analyses; the designated setups for
+the Sersic search (a light-profile fit, the ``mge`` rule) are JAX, and with no
+setup (``fit_sersic`` called from Python, as the SED chain does) it runs on JAX.
+``--stage`` is ignored: it is forced to ``"vis_lp"`` regardless, for the reason
 above.
 
 New to the pipeline? Read ``start_here.py`` in the repository root first: it covers
@@ -71,6 +73,7 @@ only what is specific to the Sersic fit.
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -83,6 +86,7 @@ def fit_sersic(
     vis_result,
     sample_name: str = None,
     iterations_per_quick_update: int = 5000,
+    setup: Optional[str] = None,
 ):
     from autolens import conf
 
@@ -260,12 +264,13 @@ def fit_sersic(
     than the ``vis_lp`` fit needs (``n_live=100`` against 750), and ``n_like_max``
     caps a runaway fit. ``batch_size`` controls how many models are evaluated
     simultaneously on the JAX backend (CPU by default on RAL, via the ``sed``
-    stage of ``hpc/campaign/dr1.yaml``; GPU optional); JAX is always on for
-    this search.
+    stage of ``hpc/campaign/dr1.yaml``; GPU optional). JAX is on for this search:
+    ``use_jax=True`` with no setup, and the designated setups for it are JAX.
     """
     analysis = util.AnalysisImaging(
         dataset=dataset,
         use_jax=True,
+        setup=util.analysis_setup_from(setup),
         title_prefix="VIS",
         dataset_main_path=d.dataset_main_path,
         psf_lowest_resolution=d.psf_lowest_resolution,
@@ -292,7 +297,7 @@ if __name__ == "__main__":
         dataset_name,
         iterations_per_quick_update,
         number_of_cores,
-        use_cpu,
+        setup,
         stage,
     ) = util.parse_fit_args()
 
@@ -304,7 +309,7 @@ if __name__ == "__main__":
         sample_name=sample_name,
         iterations_per_quick_update=iterations_per_quick_update,
         number_of_cores=number_of_cores,
-        use_cpu=use_cpu,
+        setup=setup,
         stage="vis_lp",
     )
 
@@ -313,6 +318,7 @@ if __name__ == "__main__":
         vis_result=vis_lp_result,
         sample_name=sample_name,
         iterations_per_quick_update=iterations_per_quick_update,
+        setup=setup,
     )
 
     # Multi-waveband follow-on intentionally disabled — this run extends vis_lp

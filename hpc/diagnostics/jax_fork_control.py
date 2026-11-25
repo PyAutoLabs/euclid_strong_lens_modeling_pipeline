@@ -25,8 +25,8 @@ exactly that, by running two legs and reporting PASS / HANG / ERROR for each:
                 ``vis_pix``-style ``use_jax=False`` pooled Nautilus fit.
   control_real  the same in one process, but driving the pipeline's own
                 ``scripts/initial_lens_model.py::fit`` — ``stage="vis_lp"``
-                with ``use_cpu=False``, then ``stage="vis_pix"`` with
-                ``use_cpu=True`` — so the measured path is the caller's real
+                with no setup (JAX), then ``stage="vis_pix"`` with
+                ``setup="cpu"`` (the Numba sparse route) — so the measured path is the caller's real
                 invocation and the pixelized stage consumes the actual
                 JAX-produced ``vis_lp`` result.
   subprocess    the pipeline's proposed fix: the JAX stage runs in a child
@@ -342,8 +342,8 @@ def pooled_pix_fit(
     imaging = d.dataset
     mask = imaging.mask
 
-    # scripts/initial_lens_model.py L436-440: --use_cpu selects the Numba CPU
-    # sparse operator rather than the JAX one.
+    # scripts/initial_lens_model.py: --setup cpu resolves the pixelized stage to
+    # numba_cpu_sparse_fp64, which attaches the Numba CPU sparse operator.
     imaging = imaging.apply_sparse_operator_cpu()
 
     adapt_data = np.asarray(imaging.signal_to_noise_map)
@@ -634,11 +634,11 @@ def leg_control_real(args, output_path: Path) -> dict:
     calls the real ``scripts/initial_lens_model.py::fit`` twice in one process,
     exactly as a single-process CPU run would:
 
-      1. ``fit(..., use_cpu=False, stage="vis_lp")`` — the real light-profile
+      1. ``fit(..., setup=None, stage="vis_lp")`` — the real light-profile
          search, under JAX, in this process. The sharpened probe is asserted
          afterwards: if no XLA backend was initialised, this leg would be
          forking from a clean process and would prove nothing.
-      2. ``fit(..., use_cpu=True, number_of_cores=cores, stage="vis_pix")`` —
+      2. ``fit(..., setup="cpu", number_of_cores=cores, stage="vis_pix")`` —
          the real pixelized search, which loads the JAX-produced ``vis_lp``
          result from disk via ``search.fit``'s completed-fit short circuit and
          forks its Numba likelihood pool out of this same, JAX-initialised
@@ -660,7 +660,7 @@ def leg_control_real(args, output_path: Path) -> dict:
     pipeline = _load_pipeline_script()
 
     print(
-        f"[control_real] stage 1: real fit(stage='vis_lp', use_cpu=False) under JAX",
+        f"[control_real] stage 1: real fit(stage='vis_lp', setup=None) under JAX",
         flush=True,
     )
     pipeline.fit(
@@ -668,7 +668,7 @@ def leg_control_real(args, output_path: Path) -> dict:
         sample_name=args.sample,
         iterations_per_quick_update=1000000,
         number_of_cores=1,
-        use_cpu=False,
+        setup=None,
         stage="vis_lp",
     )
 
@@ -688,7 +688,7 @@ def leg_control_real(args, output_path: Path) -> dict:
     (output_path / "fork_state.json").write_text(json.dumps(fork_state, indent=2))
 
     print(
-        f"[control_real] stage 2: real fit(stage='vis_pix', use_cpu=True, "
+        f"[control_real] stage 2: real fit(stage='vis_pix', setup='cpu', "
         f"number_of_cores={args.cores}) forking from this process",
         flush=True,
     )
@@ -697,7 +697,7 @@ def leg_control_real(args, output_path: Path) -> dict:
         sample_name=args.sample,
         iterations_per_quick_update=1000000,
         number_of_cores=args.cores,
-        use_cpu=True,
+        setup="cpu",
         stage="vis_pix",
     )
 

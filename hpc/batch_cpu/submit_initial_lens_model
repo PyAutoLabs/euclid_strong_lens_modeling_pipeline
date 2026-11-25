@@ -1,30 +1,29 @@
 #!/bin/bash -l
 #
-# Initial lens model on CPU: both stages, one submission, ONE Python process,
-# no JAX anywhere.
+# Initial lens model on CPU: both stages, one submission, two Python processes.
 #
 # WHAT THIS DOES
-#   Runs `vis_lp` and `vis_pix` back to back in a single `python3` call with
-#   `--use_cpu`, which disables JAX for the whole run and swaps in the Numba CPU
-#   sparse operator for the pixelized stage.
+#   Runs `--stage=vis_lp` and then `--stage=vis_pix` as two `python3` calls in
+#   one job, both with `--setup=cpu`: each analysis resolves the designated CPU
+#   setup for its own model (vis_lp: JAX on the CPU, `jax_cpu_dense_fp64`;
+#   vis_pix: the Numba sparse operator, `numba_cpu_sparse_fp64`) and logs it as
+#   its `Setup:` line.
+#
+#   It used to be one `python3` call with `--use_cpu`, which turned JAX off for
+#   both stages. `--setup=cpu` puts vis_lp on JAX, so the stages are now separate
+#   processes: the vis_pix Nautilus pool must not fork from an interpreter that
+#   has initialised JAX and its OpenMP pool (hpc/README.md, "Why two processes").
 #
 # WHEN TO USE IT
-#   When JAX is unavailable or unwanted on the cluster -- this is the one route
-#   that never imports a JAX backend -- or for a single quick fit where the
-#   simplicity of one job is worth more than the runtime.
+#   For a handful of lenses where one job per lens is simpler than a campaign.
 #
-# THE COST, AND WHY THE CAMPAIGN SPLITS THE STAGES
-#   One process means one environment, and the two stages want opposite ones.
-#   `vis_lp` is fastest with the allocation spent on BLAS/Numba *threads*;
-#   `vis_pix` is parallelised by a Nautilus process pool and wants those threads
-#   pinned to 1, or each of `--number_of_cores` workers spawns a full complement
-#   of threads and oversubscribes the node. The thread counts below serve
-#   `vis_lp`, so the `vis_pix` half of this job is oversubscribed by design.
-#
-#   The campaign, `hpc/campaign/dr1.yaml`, runs `vis_lp` and `vis_pix` as two
-#   stages, chained lens by lens, which lets each stage have the environment it
-#   wants and lets `vis_lp` use JAX on the CPU. Prefer it for anything beyond a
-#   handful of lenses (see hpc/README.md).
+# WHY THE CAMPAIGN IS STILL PREFERRED
+#   The two stages want different allocations: `vis_lp` runs one JAX process and
+#   spends the cores on threads; `vis_pix` runs a Nautilus pool of
+#   `--number_of_cores` workers with one thread each. Here both get the same
+#   SLURM allocation. The campaign, `hpc/campaign/dr1.yaml`, runs them as two
+#   stages, chained lens by lens, each sized for its own work. Prefer it for
+#   anything beyond a handful of lenses (see hpc/README.md).
 
 #SBATCH -J euclid_initial_lens_model_cpu
 #SBATCH -n 1
@@ -51,9 +50,8 @@
 # -----------------------------------------------------------------------------
 source $PROJECT_PATH/activate.sh
 
-# `--use_cpu` already keeps JAX out of the run; these are belt and braces, so
-# that an incidental JAX import somewhere in the stack cannot reach for a GPU
-# that was not allocated to this job.
+# `--setup=cpu` already picks the CPU rules; these make sure JAX itself never
+# reaches for a GPU that was not allocated to this job.
 export JAX_PLATFORM_NAME=cpu
 export JAX_PLATFORMS=cpu
 
@@ -61,8 +59,7 @@ export JAX_PLATFORMS=cpu
 # this each library spawns one thread per physical core, and array jobs sharing
 # a node oversubscribe it badly.
 #
-# This setting favours `vis_lp`; see "THE COST" in the header for what it means
-# for the `vis_pix` half of the run.
+# These serve `vis_lp`; the `vis_pix` call below pins them to 1 for itself.
 THREADS=$SLURM_CPUS_PER_TASK
 export OPENBLAS_NUM_THREADS=$THREADS
 export MKL_NUM_THREADS=$THREADS
@@ -101,15 +98,28 @@ echo "=========================================="
 echo "Array task : $INDEX / ${#datasets[@]}"
 echo "Sample     : $sample"
 echo "Dataset    : $dataset"
-echo "Stage      : vis_lp + vis_pix (Numba CPU, no JAX)"
+echo "Stage      : vis_lp (JAX CPU) then vis_pix (Numba CPU), --setup=cpu"
 echo "CPUs       : $THREADS"
 date
 
-# `--use_cpu` disables JAX and swaps in the Numba CPU sparse operator for the
-# pixelized stage; `--number_of_cores` parallelises the Nautilus sampler across
-# the CPUs allocated above.
+# vis_lp: JAX on the CPU, one process; `--number_of_cores=auto` resolves to 1 for
+# a JAX analysis, and the threads above serve its vectorised likelihood.
 python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \
-    --use_cpu --number_of_cores=$THREADS
+    --stage=vis_lp --setup=cpu --number_of_cores=auto || exit 1
+
+# vis_pix: the Numba sparse route in a fresh process, loading the vis_lp result
+# from disk. `--number_of_cores=auto` resolves to the allocated CPUs, one Nautilus
+# worker each, so every thread pool is pinned to 1 before Python starts. Keep these
+# pins: RAL logged "fork() called from a process already using GNU OpenMP" for a
+# pooled stage (job 414150), and the finding is open.
+env OPENBLAS_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1 \
+    VECLIB_MAXIMUM_THREADS=1 \
+    NUMEXPR_NUM_THREADS=1 \
+    NUMBA_NUM_THREADS=1 \
+    python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \
+        --stage=vis_pix --setup=cpu --number_of_cores=auto
 
 echo "Finished: $dataset"
 date
