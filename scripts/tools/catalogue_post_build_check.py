@@ -50,12 +50,18 @@ def main():
 
     # (a) magnitude rows vs QA-completed bands. A capped fit may leave a QA
     # row without measurements. Capped fits with actual measurements still count.
-    magnitude_prefixes = ("lens_flux", "lensed_source_flux", "source_flux", "magnification")
+    magnitude_prefixes = (
+        "lens_flux",
+        "lensed_source_flux",
+        "source_flux",
+        "magnification",
+    )
     mag_bands = defaultdict(set)
     with open(cat / "magnitudes.csv", newline="") as f:
         for row in csv.DictReader(f):
             if row.get("capped") == "True" and not any(
-                value for name, value in row.items()
+                value
+                for name, value in row.items()
                 if name and name.startswith(magnitude_prefixes)
             ):
                 continue
