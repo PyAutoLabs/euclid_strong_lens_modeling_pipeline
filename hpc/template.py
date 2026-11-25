@@ -13,7 +13,7 @@ then fill in the `Model, Analysis & Search` section of `fit()` using scripts fro
 `autolens_workspace/scripts/` as a reference. The batch templates and the campaign stage
 entry (`hpc/batch_cpu/stage`, `STAGE_SCRIPT` in a campaign.yaml) run `scripts/<name>.py`,
 so the copy belongs in `scripts/`. The HPC interface (`parse_fit_args`, `__main__`,
-`--use_cpu`, `--number_of_cores`) must be preserved — the batch scripts depend on it.
+`--setup`, `--number_of_cores`) must be preserved — the batch scripts depend on it.
 
 The Euclid pipeline's own stage scripts (`scripts/initial_lens_model.py`,
 `scripts/sersic_lens_model_waveband.py`) follow the same interface through
@@ -38,12 +38,22 @@ GPU batch scripts call:
 
 CPU batch scripts call:
 
-    python3 scripts/imaging.py --sample=<sample> --dataset=<dataset> --use_cpu --number_of_cores=$THREADS
+    python3 scripts/imaging.py --sample=<sample> --dataset=<dataset> --setup=cpu --number_of_cores=auto
 
-The `use_cpu` flag controls whether JAX is disabled for analysis objects
-(`use_jax=not use_cpu`) and whether CPU-specific optimisations are applied. The
-`number_of_cores` parameter controls Nautilus multicore parallelism on CPU runs; on GPU,
-Nautilus uses a single core and JAX handles parallelism.
+`--setup <auto|setup_id>`, default `auto`, is the compute setup handed to the analysis
+(`al.AnalysisImaging(..., setup=...)`): `auto` chooses the designated setup for the
+likelihood and the machine when the fit starts (backend, device, operator, precision),
+and a setup_id such as `numba_cpu_sparse_fp64` is used as given. It also accepts the
+device intents `cpu` and `gpu` — the values `PYAUTO_SETUP` takes — which choose the
+designated setup for that hardware class. It replaces `--use_cpu` and the hand-set
+`use_jax`.
+
+`--number_of_cores auto`, the default, is resolved by PyAutoFit when the fit starts: one
+process for a JAX analysis (JAX parallelises inside the likelihood and never forks), and
+the cores the job may use (`SLURM_CPUS_PER_TASK`) for a NumPy/Numba one. An int is
+honoured, except that a JAX analysis still runs one process.
+
+Each fit logs what it chose as its `Setup:` and `Parallel:` lines.
 """
 
 """
@@ -54,6 +64,7 @@ Standard library helpers plus the PyAuto* stack: `autofit` for the model and sea
 """
 import json
 import argparse
+import os
 from pathlib import Path
 
 import autofit as af
@@ -65,8 +76,8 @@ def fit(
     dataset_name: str,
     sample_name: str = None,
     iterations_per_quick_update: int = 5000,
-    number_of_cores: int = 1,
-    use_cpu: bool = False,
+    number_of_cores="auto",
+    setup: str = "auto",
 ):
     """
     Fit a lens model to a single dataset.
@@ -84,10 +95,10 @@ def fit(
     iterations_per_quick_update
         Nautilus iterations between on-the-fly visualisation updates.
     number_of_cores
-        Number of CPU cores for Nautilus (used on CPU runs only).
-    use_cpu
-        If True, disables JAX in analysis objects and enables CPU-specific
-        optimisations. Set automatically by CPU batch scripts via ``--use_cpu``.
+        Nautilus worker processes: ``"auto"`` (default) or an int.
+    setup
+        The compute setup: ``"auto"`` (default), ``"cpu"``, ``"gpu"`` or a setup_id.
+        Pass ``analysis_setup_from(setup)`` to the analysis.
     """
 
     """
@@ -170,11 +181,12 @@ def fit(
 
     1. **Model** — define the lens light, mass and source light with `af.Model` /
        `af.Collection`.
-    2. **Analysis** — create `al.AnalysisImaging(dataset=dataset, use_jax=not use_cpu)`
-       so JAX is enabled on GPU runs and disabled on CPU runs.
-    3. **Search** — create `af.Nautilus`. On CPU runs, thread `number_of_cores` into the
+    2. **Analysis** — create
+       `al.AnalysisImaging(dataset=dataset, setup=analysis_setup_from(setup))`; the
+       resolved setup chooses the backend and attaches any operator it names.
+    3. **Search** — create `af.Nautilus` with `number_of_cores` threaded into the
        search via `{**settings_search.search_dict, "number_of_cores": number_of_cores}`;
-       on GPU, `settings_search.search_dict` is sufficient.
+       PyAutoFit resolves `"auto"` per analysis.
     4. **Fit** — run `search.fit(model=model, analysis=analysis, **settings_search.fit_dict)`.
 
     Outputs land under `output/<path_prefix>/<name>/<unique_id>/`.
@@ -194,6 +206,47 @@ leave it unchanged.
 """
 
 
+SETUP_INTENTS = ("auto", "cpu", "gpu")
+
+
+def setup_arg(value):
+    """Validate ``--setup``: ``auto``, ``cpu``, ``gpu`` or a setup_id."""
+    text = str(value).strip().lower()
+    if text in SETUP_INTENTS:
+        return text
+    try:
+        al.Setup.from_setup_id(text)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"--setup {value!r} is not valid: {e}")
+    return text
+
+
+def number_of_cores_arg(value):
+    """Validate ``--number_of_cores``: ``auto`` or a whole number >= 1."""
+    text = str(value).strip().lower()
+    if text == "auto":
+        return "auto"
+    if text.isdigit() and int(text) >= 1:
+        return int(text)
+    raise argparse.ArgumentTypeError(
+        f"--number_of_cores {value!r} is not valid: use auto or a whole number >= 1"
+    )
+
+
+def analysis_setup_from(setup):
+    """
+    The analysis ``setup`` input for a ``--setup`` value.
+
+    The analyses take ``"auto"`` or a setup_id; the device intents ``cpu`` / ``gpu``
+    are read by the libraries from ``PYAUTO_SETUP``, so they are exported there and
+    ``"auto"`` is returned.
+    """
+    if setup in ("cpu", "gpu"):
+        os.environ["PYAUTO_SETUP"] = setup
+        return "auto"
+    return setup
+
+
 def parse_fit_args():
     """
     Parse command-line arguments shared by all pipeline scripts.
@@ -201,7 +254,7 @@ def parse_fit_args():
     Returns
     -------
     tuple
-        (sample_name, dataset_name, iterations_per_quick_update, number_of_cores, use_cpu)
+        (sample_name, dataset_name, iterations_per_quick_update, number_of_cores, setup)
     """
     parser = argparse.ArgumentParser(description="PyAutoLens HPC Pipeline")
 
@@ -227,16 +280,19 @@ def parse_fit_args():
     )
     parser.add_argument(
         "--number_of_cores",
-        metavar="int",
+        metavar="auto|int",
+        type=number_of_cores_arg,
         required=False,
-        default=1,
-        help="Number of CPU cores for non-JAX Nautilus searches.",
+        default="auto",
+        help="Nautilus worker processes: 'auto' (default) or an int.",
     )
     parser.add_argument(
-        "--use_cpu",
-        action="store_true",
-        default=False,
-        help="CPU mode: disables JAX and enables CPU-specific optimisations.",
+        "--setup",
+        metavar="auto|cpu|gpu|setup_id",
+        type=setup_arg,
+        required=False,
+        default="auto",
+        help="Compute setup of the analysis (the values PYAUTO_SETUP accepts).",
     )
 
     args = parser.parse_args()
@@ -245,13 +301,13 @@ def parse_fit_args():
         args.sample,
         args.dataset,
         int(args.iterations_per_quick_update),
-        int(args.number_of_cores),
-        args.use_cpu,
+        args.number_of_cores,
+        args.setup,
     )
 
 
 if __name__ == "__main__":
-    sample_name, dataset_name, iterations_per_quick_update, number_of_cores, use_cpu = (
+    sample_name, dataset_name, iterations_per_quick_update, number_of_cores, setup = (
         parse_fit_args()
     )
 
@@ -260,5 +316,5 @@ if __name__ == "__main__":
         sample_name=sample_name,
         iterations_per_quick_update=iterations_per_quick_update,
         number_of_cores=number_of_cores,
-        use_cpu=use_cpu,
+        setup=setup,
     )

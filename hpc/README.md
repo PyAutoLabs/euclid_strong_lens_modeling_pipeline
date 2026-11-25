@@ -97,8 +97,8 @@ themselves with `hpc/sync pull`.
 
 | Stage | Runs | Starts when | Resources | Before the fit |
 |---|---|---|---|---|
-| `vis_lp` | `scripts/initial_lens_model.py --stage=vis_lp`, JAX on the CPU | at once | 4 CPUs, 12 GB, 18 h, `ral`, up to 100 at a time | nothing |
-| `vis_pix` | `scripts/initial_lens_model.py --stage=vis_pix --use_cpu`, Numba sparse route, 8 pool processes, BLAS pinned to 1 thread | that lens's `vis_lp` has succeeded | 8 CPUs, 16 GB, 24 h, `ral`, up to 60 | checks there is exactly one `vis_lp` zip |
+| `vis_lp` | `scripts/initial_lens_model.py --stage=vis_lp --setup=cpu`, JAX on the CPU | at once | 4 CPUs, 12 GB, 18 h, `ral`, up to 100 at a time | nothing |
+| `vis_pix` | `scripts/initial_lens_model.py --stage=vis_pix --setup=cpu`, Numba sparse route, 8 pool processes (`--number_of_cores=auto`), BLAS pinned to 1 thread | that lens's `vis_lp` has succeeded | 8 CPUs, 16 GB, 24 h, `ral`, up to 60 | checks there is exactly one `vis_lp` zip |
 | `sed` | `scripts/sersic_lens_model_waveband.py` into `output_sed/`, JAX on the CPU | that lens's `vis_lp` has succeeded | 8 CPUs, 16 GB, 3 h, `ral`, up to 40 | copies the `vis_lp` zip into `output_sed/` |
 
 Each stage runs `hpc/batch_cpu/stage` once per lens. It reads the lens's manifest line,
@@ -134,8 +134,8 @@ The campaign is the route for the DR1 sample. The scripts in `batch_gpu/` and
 | Your situation | Route | Script | What one job does |
 |---|---|---|---|
 | A small subset of lenses (up to a few hundred) and a GPU node is available | **GPU** | `batch_gpu/submit_initial_lens_model` | Both stages, `vis_lp` then `vis_pix`, in one process under JAX. Measured on one A100 80GB PCIe with the committed config: 1 h 14 min to 1 h 44 min per lens across two runs on two different nodes (`vis_lp` 30-38 min, `vis_pix` 42-64 min). |
-| A cluster where JAX is unavailable or broken | **Numba only** | `batch_cpu/submit_initial_lens_model` | Both stages in one process with JAX disabled. The `vis_lp` stage is markedly slower this way. |
-| One lens, by hand | **Template** | `batch_cpu/template` | Both stages in one Numba-only process; copy it and edit the lens. |
+| A handful of lenses on CPU nodes, one job each | **CPU, one job** | `batch_cpu/submit_initial_lens_model` | Both stages with `--setup=cpu`, as two Python processes in one job: `vis_lp` on JAX-CPU (NumPy where JAX is not installed), then `vis_pix` on the Numba sparse route. Both get the same allocation, so prefer the campaign beyond a few lenses. |
+| One lens, by hand | **Template** | `batch_cpu/template` | The same two processes for one lens; copy it and edit the lens. |
 | The SED chain on a free GPU node, small sample | **SED chain, GPU** | `batch_gpu/submit_sersic_waveband` | The same chain as the `sed` stage, on a GPU. Both SED analyses are `use_jax=True`, so only the backend differs. |
 | Before building a manifest for new tiles | **Positions gate** | `batch_cpu/submit_positions_gate` | Runs `scripts/tools/positions_gate.py` per batch and writes `positions_meta.json` per tile. See [`../scripts/README.md`](../scripts/README.md). |
 | The fits are finished and you want the catalogue | **Catalogue build** | `batch_cpu/submit_build_inspection_bundle`, or `submit_catalogue_chunked.sh` for DR1 | No fitting: builds `inspect/<sample>/` beside the results. `hpc/sync submit cpu submit_build_inspection_bundle --export=ALL,SAMPLE=dr1_sep1`. |
@@ -150,10 +150,16 @@ The GPU route is the fastest per lens. The CPU route exists because a cluster wi
 hundreds of CPU cores and few GPUs fits a large sample faster in aggregate: the
 `vis_lp` MGE fit suits JAX on the CPU backend, while the pixelized `vis_pix` fit, with
 JAX switched off, is fastest with the Numba sparse operator and a forked process pool
-across many cores. That operator is the CPU route's tool and is applied only under
-`--use_cpu`; the GPU route fits the plain dataset with JAX's own linear algebra. Under
-JAX the `--number_of_cores` argument is ignored, because PyAutoFit routes a JAX
-likelihood to its serial path and lets JAX vectorise instead.
+across many cores. Neither is chosen by hand any more: each stage passes
+`--setup=cpu` (or the default `--setup=auto`, the same on a node with no GPU), and its
+analysis resolves the designated setup for its own model when the fit starts —
+`jax_cpu_dense_fp64` for `vis_lp`, `numba_cpu_sparse_fp64` (which attaches the sparse
+operator) for `vis_pix` — and logs it as the fit's `Setup:` line. The GPU route
+(`--setup=gpu` or `auto` on a GPU node) fits the plain dataset with JAX's own linear
+algebra. `--number_of_cores=auto` (the default) resolves to one process for a JAX
+likelihood, which never forks and lets JAX vectorise instead, and to the allocated
+CPUs for a Numba one; each fit logs the outcome as its `Parallel:` line.
+`--use_cpu` is a deprecated alias of `--setup=cpu`.
 
 The GPU timings come from the acceptance runs below, with the committed,
 laptop-friendly `config/`. The "around 10 minutes per lens" quoted in the
@@ -173,42 +179,48 @@ gap to the science figure is tracked as
   missing output directory and the `--stage vis_lp` command to run first, instead of
   silently starting `vis_lp` from scratch (which could also collide with a `vis_lp`
   job still running on the same lens).
-- `--stage all` runs both, which is what the GPU route and the Numba-only route use.
-  The campaign runs `vis_lp` and `vis_pix` as separate stages.
+- `--stage all` runs both, which is what the GPU route uses. On CPU the campaign and
+  the one-job scripts run `vis_lp` and `vis_pix` as separate processes.
 
 `--skip_pix` still works as a deprecated alias of `--stage vis_lp`.
 
 ## Why the CPU route uses two processes
 
-The two CPU stages want different environments. `vis_lp` under JAX wants the CPU
+Each stage resolves its own setup, so the Numba stage forks its pool only in its own
+process, never in one that has already initialised JAX. The two CPU stages also want
+different environments. `vis_lp` under JAX wants the CPU
 backend pinned (`JAX_PLATFORMS=cpu`, so it never grabs a GPU that was not allocated)
 and every linear-algebra library given the full core count, because its parallelism
 is threads. `vis_pix` wants every thread count pinned to `1`, because its parallelism
 is `--number_of_cores` pool processes and giving each worker a full set of BLAS
 threads oversubscribes the node. The campaign sets these per stage:
 `hpc/batch_cpu/stage` pins every thread count to the allocated CPUs, and the `vis_pix`
-stage sets `BLAS_THREADS=1` (which also caps Numba's own threads).
+stage sets `BLAS_THREADS=1` (which also caps Numba's own threads, and which the
+setup's own thread pinning honours). These pins stay, set before Python starts, while
+the RAL finding "fork() called from a process already using GNU OpenMP" (job 414150)
+is open.
 
 The SED chain has no such split, which is why the `sed` stage is a single process
 with a single environment. Both of its stages —
 `scripts/sersic_lens_model.py` and `scripts/lens_model_waveband.py` — build their
 analysis with `use_jax=True`, so the whole chain is one JAX likelihood with the CPU
 backend pinned, exactly like `vis_lp` above: no Numba stage, no pool, no fork boundary
-to preserve. It must therefore *not* be passed `--use_cpu`, which sets
-`use_jax = not use_cpu` and would swap both SED likelihoods to Numba.
+to preserve. `scripts/sersic_lens_model_waveband.py` therefore passes no setup on: a
+`--setup` (or the deprecated `--use_cpu`) given to the `sed` stage is ignored, and its
+fits keep `use_jax=True`.
 
 The stages also run in separate Python processes. This is a conservative default rather
 than a measured necessity. PyAutoFit documents that a forked worker whose *likelihood*
 touches JAX deadlocks in XLA compilation (`autofit/non_linear/search/nest/nautilus/search.py`),
 and the DR1 science runs were submitted as two jobs on that basis. The `vis_pix`
-likelihood under `--use_cpu` is Numba, not JAX, so the documented case does not apply
+likelihood under `--setup=cpu` is Numba, not JAX, so the documented case does not apply
 directly, and a control test did not reproduce a hang on either a laptop or a
 cluster node:
 
 | Leg (`hpc/diagnostics/jax_fork_control.py`) | Machine | Pool | Wall | Outcome |
 |---|---|---|---|---|
 | `control`: JAX likelihood evaluated in-process, then a `use_jax=False` pooled Nautilus | WSL2, 8 logical CPUs, CPU JAX | 4 | 265 s | PASS |
-| `control_real`: the script's own `fit(stage="vis_lp")` under JAX, then `fit(stage="vis_pix", use_cpu=True)` in the same process | same | 4 | 494 s | PASS |
+| `control_real`: the script's own `fit(stage="vis_lp")` under JAX, then `fit(stage="vis_pix", use_cpu=True)` (now `setup="cpu"`) in the same process | same | 4 | 494 s | PASS |
 | `subprocess`: JAX stage in a child of a JAX-free parent, then the pooled fit | same | 4 | 233 s | PASS |
 | `control` | RAL `euclid-ral-compute-1`, 16 cores | 16 | 216 s | PASS |
 | `control_real` | same | 16 | 378 s | PASS |
@@ -219,9 +231,9 @@ run could not exercise. What remains untested is production sampler size (`n_liv
 750 and 300, against 50 in the control) and multi-hour wall times: every leg above
 ran a small fit. Until a production-size run passes, keep the process boundary. It
 costs little with the campaign, which submits both stages at once and chains them
-lens by lens. The single-process route is filed as a
-follow-up rather than abandoned
-(`PyAutoMind/draft/feature/euclid/single_process_cpu_route_jax_vis_lp_numba_vis_pix.md`).
+lens by lens. The single-process route's draft was closed as superseded by
+`--setup` (likelihood-lifecycle 5H); a production-size RAL witness of one process is
+an optional follow-up that needs the human's go-ahead.
 `forkserver` and `spawn` are not an option: PyAutoFit pins the `fork` start method
 because `forkserver` corrupts model instances (PyAutoFit#1437).
 

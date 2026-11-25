@@ -75,13 +75,16 @@ def isolated_output(monkeypatch, tmp_path):
     )
 
 
-def test_stage_vis_pix_without_a_completed_vis_lp_fails_fast(isolated_output):
+def test_stage_vis_pix_without_a_completed_vis_lp_fails_fast(monkeypatch, isolated_output):
+    # setup="cpu" exports PYAUTO_SETUP; setenv first so monkeypatch restores it.
+    monkeypatch.setenv("PYAUTO_SETUP", "cpu")
+    monkeypatch.setenv("JAX_PLATFORMS", "cpu")
     with pytest.raises(RuntimeError) as exc_info:
         initial_lens_model.fit(
             dataset_name=EXAMPLE_DATASET,
             sample_name=EXAMPLE_SAMPLE,
             stage="vis_pix",
-            use_cpu=True,
+            setup="cpu",
         )
 
     message = str(exc_info.value)
@@ -149,9 +152,11 @@ def test_vis_lp_builds_search_with_batch_of_50(monkeypatch, isolated_output):
         return search.n_batch
 
     monkeypatch.setattr(af.Nautilus, "fit", effective_batch)
+    monkeypatch.setenv("PYAUTO_SETUP", "cpu")
+    monkeypatch.setenv("JAX_PLATFORMS", "cpu")
     assert initial_lens_model.fit(
         dataset_name=EXAMPLE_DATASET,
         sample_name=EXAMPLE_SAMPLE,
         stage="vis_lp",
-        use_cpu=True,
+        setup="cpu",
     ) == 50

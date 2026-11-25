@@ -21,7 +21,12 @@
 #
 # Each stage runs hpc/batch_cpu/stage for every index. The stage reads the manifest
 # line and calls scripts/<STAGE_SCRIPT> --sample=... --dataset=... <STAGE_ARGS>.
-# STAGE_ARGS is passed as written, so its --number_of_cores must match `cpus`.
+# STAGE_ARGS is passed as written. `--number_of_cores=auto` resolves when each fit
+# starts, from SLURM_CPUS_PER_TASK (= `cpus`): one process for a JAX analysis, a pool
+# of `cpus` workers for a Numba one. The fit stages pass `--setup=cpu` explicitly
+# rather than `auto`: on a CPU node the two are the same, and `cpu` keeps the CPU
+# rules (vis_lp jax_cpu_dense_fp64, vis_pix numba_cpu_sparse_fp64) even if a task
+# lands on a node with a GPU. The SED stage takes no --setup (hpc/README.md).
 #
 # Chaining is per lens (`aftercorr`): lens i of vis_pix (and of sed) starts when lens i
 # of vis_lp has succeeded, not when the whole vis_lp array has. Tested on RAL
@@ -71,7 +76,7 @@ stages:
     script: hpc/batch_cpu/stage
     env:
       STAGE_SCRIPT: initial_lens_model.py
-      STAGE_ARGS: --stage=vis_lp --number_of_cores=4
+      STAGE_ARGS: --stage=vis_lp --setup=cpu --number_of_cores=auto
       PYAUTO_HPC_BASE: /mnt/ral/jnightin/PyAuto
       PYAUTO_CONFIG_OVERLAY: hpc/config     # numba.cache: false (NFS, many writers)
     # 4,982 v2-grade lenses: elapsed p50 2.1 h, p99 5.4 h; MaxRSS max 4.1 GB.
@@ -86,7 +91,7 @@ stages:
     script: hpc/batch_cpu/stage
     env:
       STAGE_SCRIPT: initial_lens_model.py
-      STAGE_ARGS: --stage=vis_pix --use_cpu --number_of_cores=8 --iterations_per_quick_update=1000
+      STAGE_ARGS: --stage=vis_pix --setup=cpu --number_of_cores=auto --iterations_per_quick_update=1000
       BLAS_THREADS: 1                       # one thread per Nautilus worker process
       STAGE_SETUP: hpc/batch_cpu/vis_pix_seed.sh
       PYAUTO_HPC_BASE: /mnt/ral/jnightin/PyAuto
@@ -108,7 +113,7 @@ stages:
     script: hpc/batch_cpu/stage
     env:
       STAGE_SCRIPT: sersic_lens_model_waveband.py
-      STAGE_ARGS: --number_of_cores=8
+      STAGE_ARGS: --number_of_cores=auto
       PYAUTO_OUTPUT_DIR: output_sed
       STAGE_SETUP: hpc/batch_cpu/sed_seed.sh
       PYAUTO_HPC_BASE: /mnt/ral/jnightin/PyAuto

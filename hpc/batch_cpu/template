@@ -1,9 +1,10 @@
 #!/bin/bash -l
 #
-# Starting point for a one-off CPU job: a single lens, no array, both stages in
-# one Numba-only Python process (`--use_cpu`, no JAX).
+# Starting point for a one-off CPU job: a single lens, no array, the two stages
+# as two Python processes with `--setup=cpu` (vis_lp on JAX-CPU, then vis_pix on
+# the Numba sparse route, which must not fork from a JAX-initialised process).
 #
-# Copy it, rename it, and change the `sample`, `dataset` and the `python3` line
+# Copy it, rename it, and change the `sample`, `dataset` and the `python3` lines
 # to whichever script you want to run. For fitting more than one lens, do not
 # copy this: run the campaign, `hpc/campaign/dr1.yaml` (see hpc/README.md). It
 # runs vis_lp, vis_pix and the SED chain as separate stages through
@@ -34,9 +35,8 @@
 # -----------------------------------------------------------------------------
 source $PROJECT_PATH/activate.sh
 
-# `--use_cpu` already keeps JAX out of the run; these are belt and braces, so
-# that an incidental JAX import somewhere in the stack cannot reach for a GPU
-# that was not allocated to this job.
+# `--setup=cpu` already picks the CPU rules; these make sure JAX itself never
+# reaches for a GPU that was not allocated to this job.
 export JAX_PLATFORM_NAME=cpu
 export JAX_PLATFORMS=cpu
 
@@ -66,7 +66,18 @@ echo "CPUs    : $THREADS"
 date
 
 python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \
-    --use_cpu --number_of_cores=$THREADS
+    --stage=vis_lp --setup=cpu --number_of_cores=auto || exit 1
+
+# The pooled vis_pix stage: one thread per Nautilus worker, pinned before Python
+# starts (RAL OpenMP-fork finding, job 414150; see hpc/batch_cpu/stage).
+env OPENBLAS_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1 \
+    VECLIB_MAXIMUM_THREADS=1 \
+    NUMEXPR_NUM_THREADS=1 \
+    NUMBA_NUM_THREADS=1 \
+    python3 $PROJECT_PATH/scripts/initial_lens_model.py --sample=$sample --dataset=$dataset \
+        --stage=vis_pix --setup=cpu --number_of_cores=auto
 
 echo "Finished: $dataset"
 date

@@ -11,6 +11,7 @@ run no non-linear search, so the whole module is a few seconds. Fits, latent
 *values* and visualisation belong to the smoke suite, not here.
 """
 
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -116,12 +117,12 @@ def test_parse_fit_args_defaults(monkeypatch):
     result = util.parse_fit_args()
 
     assert len(result) == 6
-    sample, dataset, iterations, cores, use_cpu, stage = result
+    sample, dataset, iterations, cores, setup, stage = result
     assert sample is None
     assert dataset == "abc"
     assert iterations == 5000
-    assert cores == 1
-    assert use_cpu is False
+    assert cores == "auto"
+    assert setup == "auto"
     assert stage == "all"
 
 
@@ -135,18 +136,140 @@ def test_parse_fit_args_all_flags(monkeypatch):
             "--sample=xyz",
             "--iterations_per_quick_update=250",
             "--number_of_cores=8",
-            "--use_cpu",
+            "--setup=cpu",
             "--stage=vis_pix",
         ],
     )
 
-    sample, dataset, iterations, cores, use_cpu, stage = util.parse_fit_args()
+    sample, dataset, iterations, cores, setup, stage = util.parse_fit_args()
 
     assert (sample, dataset) == ("xyz", "abc")
     assert (iterations, cores) == (250, 8)
     assert isinstance(iterations, int) and isinstance(cores, int)
-    assert use_cpu is True
+    assert setup == "cpu"
     assert stage == "vis_pix"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("auto", "auto"),
+        ("cpu", "cpu"),
+        ("gpu", "gpu"),
+        ("CPU", "cpu"),
+        ("numba_cpu_sparse_fp64", "numba_cpu_sparse_fp64"),
+        ("jax_gpu_dense_fp64", "jax_gpu_dense_fp64"),
+        ("jax_gpu_sparse_fp64_wtilde", "jax_gpu_sparse_fp64_wtilde"),
+    ],
+)
+def test_parse_fit_args_setup_accepts_intents_and_setup_ids(monkeypatch, value, expected):
+    monkeypatch.setattr(sys, "argv", ["prog", "--dataset=abc", f"--setup={value}"])
+
+    assert util.parse_fit_args()[4] == expected
+
+
+@pytest.mark.parametrize("value", ["fast", "numba_tpu_sparse_fp64", "jax_cpu", ""])
+def test_parse_fit_args_rejects_an_invalid_setup(monkeypatch, capsys, value):
+    monkeypatch.setattr(sys, "argv", ["prog", "--dataset=abc", f"--setup={value}"])
+
+    with pytest.raises(SystemExit):
+        util.parse_fit_args()
+    assert "--setup" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value, expected", [("auto", "auto"), ("AUTO", "auto"), ("1", 1), ("16", 16)])
+def test_parse_fit_args_number_of_cores_accepts_auto_or_an_int(monkeypatch, value, expected):
+    monkeypatch.setattr(sys, "argv", ["prog", "--dataset=abc", f"--number_of_cores={value}"])
+
+    assert util.parse_fit_args()[3] == expected
+
+
+@pytest.mark.parametrize("value", ["0", "-2", "two", "1.5"])
+def test_parse_fit_args_rejects_invalid_number_of_cores(monkeypatch, value):
+    monkeypatch.setattr(sys, "argv", ["prog", "--dataset=abc", f"--number_of_cores={value}"])
+
+    with pytest.raises(SystemExit):
+        util.parse_fit_args()
+
+
+def test_parse_fit_args_use_cpu_is_a_deprecated_alias(monkeypatch, capsys):
+    """
+    ``--use_cpu`` still resolves, to ``setup == "cpu"``, and says so once on stderr.
+    The tuple stays six elements long.
+    """
+    monkeypatch.setattr(sys, "argv", ["prog", "--dataset=abc", "--use_cpu"])
+
+    result = util.parse_fit_args()
+
+    assert len(result) == 6
+    assert result[4] == "cpu"
+    err = capsys.readouterr().err
+    assert err.count("--use_cpu is deprecated; use --setup cpu") == 1
+
+
+def test_parse_fit_args_use_cpu_with_setup_cpu_is_allowed(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["prog", "--dataset=abc", "--use_cpu", "--setup=cpu"])
+
+    assert util.parse_fit_args()[4] == "cpu"
+
+
+@pytest.mark.parametrize("setup", ["auto", "gpu", "numba_cpu_sparse_fp64"])
+def test_parse_fit_args_use_cpu_conflicts_with_other_setups(monkeypatch, setup):
+    monkeypatch.setattr(sys, "argv", ["prog", "--dataset=abc", "--use_cpu", f"--setup={setup}"])
+
+    with pytest.raises(SystemExit):
+        util.parse_fit_args()
+
+
+# ---------------------------------------------------------------------------
+# analysis_setup_from — the --setup value handed to the analyses
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def clean_setup_env(monkeypatch):
+    """
+    Start with ``PYAUTO_SETUP`` unset and ``JAX_PLATFORMS=cpu``, restored afterwards,
+    so the exports ``analysis_setup_from`` makes never leak into other tests.
+    """
+    monkeypatch.setenv("PYAUTO_SETUP", "auto")
+    monkeypatch.delenv("PYAUTO_SETUP")
+    monkeypatch.setenv("JAX_PLATFORMS", "cpu")
+    return monkeypatch
+
+
+def test_analysis_setup_from_none_and_auto_leave_the_environment_alone(clean_setup_env):
+    assert util.analysis_setup_from(None) is None
+    assert util.analysis_setup_from("auto") == "auto"
+    assert "PYAUTO_SETUP" not in os.environ
+
+
+@pytest.mark.parametrize("intent", ["cpu", "gpu"])
+def test_analysis_setup_from_exports_a_device_intent(clean_setup_env, intent):
+    """
+    The analyses take no device intent, so ``cpu`` / ``gpu`` go to ``PYAUTO_SETUP``
+    (read by ``aa.Setup.auto`` when the fit starts) and the analysis gets ``"auto"``.
+    """
+    assert util.analysis_setup_from(intent) == "auto"
+    assert os.environ["PYAUTO_SETUP"] == intent
+
+
+def test_analysis_setup_from_passes_a_setup_id_through(clean_setup_env):
+    assert util.analysis_setup_from("numba_cpu_sparse_fp64") == "numba_cpu_sparse_fp64"
+    assert "PYAUTO_SETUP" not in os.environ
+
+
+def test_analysis_setup_from_never_overwrites_jax_platforms(clean_setup_env):
+    clean_setup_env.setenv("JAX_PLATFORMS", "cuda")
+
+    util.analysis_setup_from("cpu")
+
+    assert os.environ["JAX_PLATFORMS"] == "cuda"
+
+
+def test_analysis_setup_from_rejects_an_invalid_setup(clean_setup_env):
+    with pytest.raises(Exception):
+        util.analysis_setup_from("fast")
 
 
 @pytest.mark.parametrize("stage", ["all", "vis_lp", "vis_pix"])
@@ -208,7 +331,7 @@ def test_parse_fit_args_with_seed_defaults_to_none(monkeypatch):
     result = util.parse_fit_args(with_seed=True)
 
     assert len(result) == 7
-    assert result[:6] == (None, "abc", 5000, 1, False, "all")
+    assert result[:6] == (None, "abc", 5000, "auto", "auto", "all")
     assert result[-1] is None
 
 

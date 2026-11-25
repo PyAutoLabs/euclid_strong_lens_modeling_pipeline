@@ -1687,6 +1687,122 @@ def load_vis_dataset(
 # CLI argument parsing
 # ---------------------------------------------------------------------------
 
+SETUP_INTENTS = ("auto", "cpu", "gpu")
+
+
+def setup_arg(value: str) -> str:
+    """
+    Validate a ``--setup`` value: ``auto``, ``cpu``, ``gpu`` or a setup_id.
+
+    These are the values ``PYAUTO_SETUP`` accepts (``autonerves.environment
+    .parse_setup_intent``). A setup_id
+    (``<backend>_<device>_<operator>_<precision>[_<transformer>]``, e.g.
+    ``numba_cpu_sparse_fp64``) is checked with ``aa.Setup.from_setup_id``.
+
+    Returns the value lower-cased and stripped.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        If the value is none of these, so ``argparse`` reports it as a usage error.
+    """
+    import argparse
+
+    text = str(value).strip().lower()
+    if text in SETUP_INTENTS:
+        return text
+    try:
+        al.Setup.from_setup_id(text)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(
+            f"--setup {value!r} is not valid: use auto, cpu, gpu or a setup_id "
+            f"such as numba_cpu_sparse_fp64 ({e})"
+        )
+    return text
+
+
+def number_of_cores_arg(value: str):
+    """
+    Validate a ``--number_of_cores`` value: ``auto`` or a whole number >= 1.
+
+    ``auto`` is passed to the searches as the string ``"auto"``: PyAutoFit resolves it
+    when the fit starts, to 1 for a JAX analysis and to the cores this process may
+    use (``SLURM_CPUS_PER_TASK``, then CPU affinity) otherwise.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        For anything else.
+    """
+    import argparse
+
+    text = str(value).strip().lower()
+    if text == "auto":
+        return "auto"
+    try:
+        cores = int(text)
+    except ValueError:
+        cores = 0
+    if cores < 1:
+        raise argparse.ArgumentTypeError(
+            f"--number_of_cores {value!r} is not valid: use auto or a whole number >= 1"
+        )
+    return cores
+
+
+def analysis_setup_from(setup: Optional[str]) -> Optional[str]:
+    """
+    The ``setup`` value to hand an analysis for a ``--setup`` value.
+
+    The analyses (``al.AnalysisImaging(setup=...)``) accept ``None``, ``"auto"`` or a
+    setup_id, but not the device intents ``cpu`` and ``gpu``, which the libraries read
+    from the ``PYAUTO_SETUP`` environment variable instead. So:
+
+    - ``None`` -> ``None``: no setup, the analysis keeps the ``use_jax`` it is given
+      (the scripts' programmatic default, which the SED stage relies on).
+    - ``"auto"`` -> ``"auto"``; ``PYAUTO_SETUP`` is left alone, so a value the user
+      exported still steers ``aa.Setup.auto``.
+    - ``"cpu"`` / ``"gpu"`` -> ``"auto"``, after exporting ``PYAUTO_SETUP=<intent>``.
+      ``aa.Setup.auto`` reads it when the fit starts and picks the rule for that
+      hardware class (CPU: ``jax_cpu_dense_fp64`` for the MGE ``vis_lp``,
+      ``numba_cpu_sparse_fp64`` for the pixelized ``vis_pix``).
+    - a setup_id -> the setup_id, used as given by every analysis the script builds.
+
+    A CPU request (``cpu``, or a setup_id whose device is ``cpu``) also pins JAX to the
+    CPU when ``JAX_PLATFORMS`` is unset. ``autonerves`` does that itself for
+    ``PYAUTO_SETUP=cpu``, but only when the variable is set before the libraries are
+    imported, and this module imports them before any argument is parsed. JAX only
+    reads its platform when it first touches a device, so ``jax.config.update`` here
+    still takes effect; a ``JAX_PLATFORMS`` the user (or a batch script) set is never
+    overwritten.
+    """
+    if setup is None:
+        return None
+
+    text = setup_arg(setup)
+
+    if text == "auto":
+        return "auto"
+
+    if text in ("cpu", "gpu"):
+        os.environ["PYAUTO_SETUP"] = text
+        device = text
+        analysis_setup = "auto"
+    else:
+        device = al.Setup.from_setup_id(text).device
+        analysis_setup = text
+
+    if device == "cpu" and not os.environ.get("JAX_PLATFORMS"):
+        os.environ["JAX_PLATFORMS"] = "cpu"
+        try:
+            import jax
+
+            jax.config.update("jax_platforms", "cpu")
+        except Exception:
+            pass
+
+    return analysis_setup
+
 
 def parse_fit_args(with_seed: bool = False):
     """
@@ -1703,8 +1819,18 @@ def parse_fit_args(with_seed: bool = False):
     Returns
     -------
     (sample_name, dataset_name, iterations_per_quick_update, number_of_cores,
-     use_cpu, stage) or, when ``with_seed=True``, that tuple with ``seed``
+     setup, stage) or, when ``with_seed=True``, that tuple with ``seed``
     appended
+        ``number_of_cores`` is ``"auto"`` (the default) or an ``int``.
+
+        ``setup`` is ``"auto"`` (the default), ``"cpu"``, ``"gpu"`` or a setup_id
+        (the values ``PYAUTO_SETUP`` accepts). The fit functions turn it into the
+        analyses' ``setup`` input with ``analysis_setup_from``.
+
+        ``--use_cpu`` is still accepted as a deprecated alias for ``--setup cpu``:
+        it emits a deprecation line on stderr and resolves to ``"cpu"``, so the
+        tuple length is unchanged.
+
         ``stage`` is one of ``"all"``, ``"vis_lp"`` or ``"vis_pix"``, and
         selects which of the two searches in ``scripts/initial_lens_model.py``
         the run performs. ``mask_radius`` is always read from the dataset's
@@ -1744,16 +1870,34 @@ def parse_fit_args(with_seed: bool = False):
     )
     parser.add_argument(
         "--number_of_cores",
-        metavar="int",
+        metavar="auto|int",
+        type=number_of_cores_arg,
         required=False,
-        default=1,
-        help="Number of CPU cores for non-JAX Nautilus searches (e.g. vis_pix).",
+        default="auto",
+        help=(
+            "Nautilus worker processes: 'auto' (default) resolves when the fit "
+            "starts, to 1 for a JAX analysis and to the cores this process may use "
+            "otherwise; an int is honoured (a JAX analysis still runs one process)."
+        ),
+    )
+    parser.add_argument(
+        "--setup",
+        metavar="auto|cpu|gpu|setup_id",
+        type=setup_arg,
+        required=False,
+        default=None,
+        help=(
+            "Compute setup of the analyses, the values PYAUTO_SETUP accepts: "
+            "'auto' (default) chooses the designated setup per stage for this "
+            "machine; 'cpu' / 'gpu' choose it for that hardware class; a setup_id "
+            "such as numba_cpu_sparse_fp64 is used as given by every analysis."
+        ),
     )
     parser.add_argument(
         "--use_cpu",
         action="store_true",
         default=False,
-        help="CPU mode: disables JAX and applies the sparse operator for vis_pix.",
+        help="Deprecated alias for --setup cpu.",
     )
     parser.add_argument(
         "--stage",
@@ -1805,12 +1949,26 @@ def parse_fit_args(with_seed: bool = False):
     if stage is None:
         stage = "all"
 
+    setup = args.setup
+
+    if args.use_cpu:
+        if setup is not None and setup != "cpu":
+            parser.error(
+                f"--use_cpu is the deprecated spelling of --setup cpu and "
+                f"cannot be combined with --setup {setup}."
+            )
+        print("--use_cpu is deprecated; use --setup cpu", file=sys.stderr)
+        setup = "cpu"
+
+    if setup is None:
+        setup = "auto"
+
     parsed = (
         args.sample,
         args.dataset,
         int(args.iterations_per_quick_update),
-        int(args.number_of_cores),
-        args.use_cpu,
+        args.number_of_cores,
+        setup,
         stage,
     )
 

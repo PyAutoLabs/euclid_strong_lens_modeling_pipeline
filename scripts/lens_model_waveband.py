@@ -71,6 +71,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -164,6 +165,7 @@ def fit_waveband(
     use_sersic_over_sampling: bool = False,
     sample_name: str = None,
     iterations_per_quick_update: int = 5000,
+    setup: Optional[str] = None,
 ):
     import numpy as np
     import autofit as af
@@ -564,6 +566,7 @@ def fit_waveband(
         analysis = util.AnalysisImaging(
             dataset=dataset,
             use_jax=True,
+            setup=util.analysis_setup_from(setup),
             title_prefix=dataset_waveband.upper(),
             dataset_main_path=dataset_main_path,
             skip_rgb_plot=True,
@@ -661,7 +664,7 @@ if __name__ == "__main__":
         dataset_name,
         iterations_per_quick_update,
         number_of_cores,
-        use_cpu,
+        setup,
         stage,
     ) = util.parse_fit_args()
 
@@ -688,7 +691,7 @@ if __name__ == "__main__":
         sample_name=sample_name,
         iterations_per_quick_update=iterations_per_quick_update,
         number_of_cores=number_of_cores,
-        use_cpu=use_cpu,
+        setup=setup,
         stage="vis_lp",
     )
 
@@ -698,4 +701,5 @@ if __name__ == "__main__":
         vis_result=vis_lp_result,
         sample_name=sample_name,
         iterations_per_quick_update=iterations_per_quick_update,
+        setup=setup,
     )

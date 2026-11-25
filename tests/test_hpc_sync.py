@@ -327,7 +327,7 @@ def test_stage_runs_the_manifest_line_and_removes_its_record_on_success(stage_pr
 
     assert process.returncode == 0, process.stderr
     args = (tmp_path / "args.txt").read_text()
-    assert args == "--sample=imaging --dataset=lens_b --use_cpu --number_of_cores=4"
+    assert args == "--sample=imaging --dataset=lens_b --setup=cpu --number_of_cores=auto"
     assert not _record(project, 1).exists()
 
 
@@ -404,7 +404,7 @@ def test_stage_reads_a_windows_manifest(stage_project):
 
     assert process.returncode == 0, process.stderr
     args = (tmp_path / "args.txt").read_text()
-    assert args == "--sample=imaging --dataset=lens_b --use_cpu --number_of_cores=4"
+    assert args == "--sample=imaging --dataset=lens_b --setup=cpu --number_of_cores=auto"
 
 
 def test_help_has_no_results_library_verbs(tmp_path):

@@ -45,10 +45,14 @@ if __name__ == "__main__":
         dataset_name,
         iterations_per_quick_update,
         number_of_cores,
-        use_cpu,
+        _setup,
         stage,
     ) = util.parse_fit_args()
 
+    # `--setup` is deliberately not passed on: the SED chain keeps its fits on JAX
+    # with no compute setup (`setup=None`), as hpc/README.md ("Why two processes")
+    # requires, so a `--setup` or `--use_cpu` given here is ignored.
+    #
     # `stage="vis_lp"` is forced: the Sersic source prior is seeded from
     # `galaxies.source.bulge`, which the `vis_pix` stage replaces with a
     # pixelization.
@@ -57,7 +61,6 @@ if __name__ == "__main__":
         sample_name=sample_name,
         iterations_per_quick_update=iterations_per_quick_update,
         number_of_cores=number_of_cores,
-        use_cpu=use_cpu,
         stage="vis_lp",
     )
 

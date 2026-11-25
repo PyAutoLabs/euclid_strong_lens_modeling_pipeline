@@ -310,7 +310,7 @@ def test_the_swapped_labelling_violates_the_assertion(model):
 
 def test_check_assertions_raises_on_the_swapped_labelling(model):
     """
-    The exception form, which is what the NumPy path (``--use_cpu``) uses: Nautilus
+    The exception form, which is what a non-JAX likelihood (a NumPy or Numba setup) uses: Nautilus
     catches ``FitException`` and resamples.
 
     ``check_assertions`` is called on the ``Basis`` the assertion is attached to, not on

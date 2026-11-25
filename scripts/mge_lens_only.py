@@ -65,6 +65,7 @@ of it.
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -76,6 +77,7 @@ def fit(
     dataset_name: str,
     sample_name: str = None,
     iterations_per_quick_update: int = 50000,
+    setup: Optional[str] = None,
 ):
     from autolens import conf
 
@@ -143,7 +145,8 @@ def fit(
 
     The pipeline's ``AnalysisImaging``, which adds the RGB visualisation and the
     Euclid latent catalogue on top of the library analysis, and runs the
-    likelihood through JAX.
+    likelihood through JAX (``use_jax=True`` with no setup; ``--setup`` otherwise,
+    whose designated setups for an MGE fit are JAX too).
 
     No ``positions_likelihood_list`` is passed, unlike the full pipelines. That
     likelihood penalty exists to reject mass models that fail to trace the
@@ -153,6 +156,7 @@ def fit(
     analysis = util.AnalysisImaging(
         dataset=d.dataset,
         use_jax=True,
+        setup=util.analysis_setup_from(setup),
         title_prefix="VIS",
         dataset_main_path=d.dataset_main_path,
         psf_lowest_resolution=d.psf_lowest_resolution,
@@ -231,6 +235,7 @@ def fit_waveband(
     vis_result,
     sample_name: str = None,
     iterations_per_quick_update: int = 50000,
+    setup: Optional[str] = None,
 ):
     """
     Subtract the lens light from every non-VIS band of the cut-out.
@@ -521,6 +526,7 @@ def fit_waveband(
         analysis = util.AnalysisImaging(
             dataset=dataset,
             use_jax=True,
+            setup=util.analysis_setup_from(setup),
             title_prefix=dataset_waveband.upper(),
             dataset_main_path=dataset_main_path,
             skip_rgb_plot=True,
@@ -598,7 +604,7 @@ if __name__ == "__main__":
         dataset_name,
         iterations_per_quick_update,
         number_of_cores,
-        use_cpu,
+        setup,
         stage,
     ) = util.parse_fit_args()
 
@@ -609,17 +615,19 @@ if __name__ == "__main__":
     in the order they have to run.
 
     The shared argument parser is used so that one command line works across all
-    the pipelines, but this script only acts on ``--sample``, ``--dataset`` and
-    ``--iterations_per_quick_update``. ``--number_of_cores``, ``--use_cpu`` and
-    ``--stage`` are accepted and ignored: there is no pixelized stage to skip
-    and no CPU-parallel search to size, because every search here runs under
-    JAX on a model with a handful of parameters. ``mask_radius`` is not an
+    the pipelines, but this script only acts on ``--sample``, ``--dataset``,
+    ``--iterations_per_quick_update`` and ``--setup`` (handed to every analysis;
+    the default ``auto`` picks the designated setup, JAX for these MGE fits).
+    ``--number_of_cores`` and ``--stage`` are accepted and ignored: there is no
+    pixelized stage to skip and no CPU-parallel search to size, because every
+    search here is a light-profile fit with a handful of parameters. ``mask_radius`` is not an
     argument at all — it comes from the dataset's ``info.json``.
     """
     vis_result = fit(
         dataset_name=dataset_name,
         sample_name=sample_name,
         iterations_per_quick_update=iterations_per_quick_update,
+        setup=setup,
     )
 
     fit_waveband(
@@ -627,4 +635,5 @@ if __name__ == "__main__":
         vis_result=vis_result,
         sample_name=sample_name,
         iterations_per_quick_update=iterations_per_quick_update,
+        setup=setup,
     )
