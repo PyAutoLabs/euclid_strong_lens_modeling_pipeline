@@ -82,9 +82,11 @@ non-linear search — and a few seconds end to end.
   below).
 - `test_latent_run_level.py` (`slow`, its own CI job) — two real-mode fits
   proving the pipeline still **writes** its per-fit files, which the fast suite
-  cannot: it calls `LatentEuclid.variables` and `wcs_dict_from` directly, ungated
-  paths, while every write is gated by `autonerves.test_mode.skip_fit_output()`
-  / `skip_latents()` and nothing forces them on under test mode. It draws with
+  cannot: it calls `LatentEuclid.variables` and `wcs_dict_from` directly, while
+  the real write paths differ under test mode. `autonerves.test_mode.skip_latents()`
+  is true in every test mode, so no `latent_summary.json` is written, and
+  `save_results` writes `wcs.json` / `coolest.json` from a bypassed or reduced
+  fit rather than a real one. It draws with
   `af.Drawer` on models anchored to the truth with one free parameter (over a
   free model a Drawer draws junk) — a light-profile source (10 draws) and the
   `vis_pix` pixelized source (3 draws; `tests/pixelized_model.py`) — and asserts
@@ -97,8 +99,11 @@ non-linear search — and a few seconds end to end.
   writes — is there for both legs with the full mass model and the pixelized
   source named under `meta.skipped_profiles` (its values are the fast
   `test_coolest_output.py`'s).
-  Test-mode smokes (`smoke_tests.txt`) cannot cover any of this: `skip_fit_output`
-  gates the whole of `save_results`.
+  Test-mode smokes (`smoke_tests.txt`) cannot cover this. `save_results` runs
+  at the end of every fit, test mode included, so a smoke does write
+  `wcs.json` and `coolest.json`, but from a bypassed fit and with no latents.
+  `skip_fit_output` (set by `config/build/profile_smoke.yaml`) gates the pre- and
+  post-fit output around `save_results`, not `save_results` itself.
 
 ### Smoke tests
 

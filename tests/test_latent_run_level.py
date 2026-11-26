@@ -549,8 +549,8 @@ def test_a_real_mode_fit_writes_its_coolest_template(run_level, leg):
     ``util.AnalysisImaging.save_results`` writes ``files/coolest.json`` beside
     ``files/wcs.json``, for a light-profile *and* a pixelized source: the
     run-level proof that the COOLEST export runs at the end of a real fit and
-    its template survives the zip, which no test-mode smoke can show
-    (``skip_fit_output`` gates the whole of ``save_results``).
+    its template survives the zip, which no test-mode smoke can show (a smoke
+    writes the template too, but from a bypassed fit, not a real one).
 
     The values are checked in ``test_coolest_output.py``; this asserts the
     template is written, is a MAP template of this pipeline, carries the full
